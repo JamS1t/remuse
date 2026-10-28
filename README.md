@@ -44,7 +44,7 @@ The 15 emails split as 4 replace, 4 refund, 3 lost (refund and apologize), 2 dec
 |---|---|---|
 | Record | Muse Voice Transcribe | Voice to timestamped text |
 | Understand | Muse Spark | Key frames + event log + transcript to a Task Spec |
-| Build | Muse Code | Decision rules and data extraction as real functions |
+| Build | Muse Spark | Writes the decision rules and data extraction as real functions (Muse Code has no API) |
 | Run | SAM 3.1 + Muse Spark | Find elements on screen when DOM selectors fail |
 
 See [docs/log.md](docs/log.md) for what was tried and what happened.
