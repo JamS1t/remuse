@@ -1,5 +1,5 @@
 // Day-1 risk tests against the Meta Model API. Run from the repo root:
-//   MODEL_API_KEY=... node scripts/risk-tests.mjs
+//   node --env-file=.env scripts/risk-tests.mjs   (.env holds MODEL_API_KEY=...)
 // Prints a verdict per risk and the token usage of every call. Docs: https://dev.meta.ai/docs/models
 import { readFileSync } from "node:fs";
 

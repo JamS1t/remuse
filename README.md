@@ -14,7 +14,7 @@ Built for the Meta developer hackathon, Indie Developer track. All code in this 
 | Chrome extension recorder | Not started |
 | Backend (Node + SQLite) | Not started |
 | Playwright runner | Not started |
-| `scripts/risk-tests.mjs`: day-1 Meta API checks | Written, needs `MODEL_API_KEY` |
+| `scripts/risk-tests.mjs`: day-1 Meta API checks | Run, all pass (see log) |
 
 ## Mock apps
 
