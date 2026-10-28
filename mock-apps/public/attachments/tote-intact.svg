@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="400" height="300" viewBox="0 0 400 300">
+  <rect width="400" height="300" fill="#8fa3b0"/>
+  <path d="M160 90 q40 -70 80 0" fill="none" stroke="#e9dfc9" stroke-width="10"/>
+  <path d="M120 90 h160 l15 180 h-190 z" fill="#efe6d2" stroke="#cbbd9c" stroke-width="2"/>
+  <path d="M145 120 h110" stroke="#cbbd9c" stroke-width="2"/>
+  <text x="200" y="190" text-anchor="middle" font-family="Georgia, serif" font-size="22" fill="#6d5d3d">kalye</text>
+</svg>
