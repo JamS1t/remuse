@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { toast } from "sonner";
-import { CalendarClock, Check, CircleAlert, Code2, Ellipsis, Hand, LoaderCircle, Mic, RotateCcw, Trash2 } from "lucide-react";
+import { CalendarClock, Check, ChevronRight, CircleAlert, Code2, Ellipsis, Hand, LoaderCircle, Mic, RotateCcw, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
@@ -284,7 +284,7 @@ function RecordingSummary({ id }: { id: string }) {
           {s.turns.map((v, i) => <li key={i} className="flex gap-3 px-5 py-3"><Mic className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" /><Said>{v.text}</Said></li>)}
         </ul>
       ) : <p className="text-muted-foreground">No voice in this recording.</p>}
-      <a href={`#/session/${id}`} className="inline-block text-[13px] text-muted-foreground">See every click with screenshots →</a>
+      <a href={`#/session/${id}`} className="inline-flex items-center gap-1 text-[13px] text-muted-foreground">See every click with screenshots<ChevronRight className="size-3.5" /></a>
     </div>
   );
 }

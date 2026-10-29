@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { Activity, Globe, ListChecks } from "lucide-react";
+import { Activity, ChevronLeft, Globe, ListChecks } from "lucide-react";
 import { DemoMenu, Lockup, Orb, SignIn } from "@/components/bits";
 import { useApi } from "@/lib/api";
 import { cn } from "@/lib/utils";
@@ -48,7 +48,7 @@ export function Shell({ at, children }: { at: string; children: ReactNode }) {
 export function PageHead({ title, sub, actions, back }: { title: ReactNode; sub?: ReactNode; actions?: ReactNode; back?: { href: string; label: string } }) {
   return (
     <header className="mb-8">
-      {back ? <a href={back.href} className="text-[13px] text-muted-foreground no-underline hover:text-foreground">← {back.label}</a> : null}
+      {back ? <a href={back.href} className="inline-flex items-center gap-1 text-[13px] text-muted-foreground no-underline hover:text-foreground"><ChevronLeft className="size-3.5" />{back.label}</a> : null}
       <div className={cn("flex flex-wrap items-start justify-between gap-x-6 gap-y-3", back && "mt-3")}>
         <div className="min-w-0 max-w-[70ch]">
           <h1 className="text-[24px] leading-tight font-medium tracking-[-0.02em]">{title}</h1>

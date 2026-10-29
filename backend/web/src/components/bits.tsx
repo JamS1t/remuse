@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from "react";
 import { toast } from "sonner";
-import { Check, ChevronDown, CircleDashed, Hand, KeyRound, LoaderCircle, MessageCircleQuestion, Minus, X } from "lucide-react";
+import { Check, ChevronDown, ChevronLeft, CircleDashed, Hand, KeyRound, LoaderCircle, MessageCircleQuestion, Minus, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
@@ -100,7 +100,7 @@ export function Page({ children }: { children: ReactNode }) {
 }
 
 export function Crumb({ href, children }: { href: string; children: ReactNode }) {
-  return <a href={href} className="text-[13px] text-muted-foreground no-underline hover:text-foreground">← {children}</a>;
+  return <a href={href} className="inline-flex items-center gap-1 text-[13px] text-muted-foreground no-underline hover:text-foreground"><ChevronLeft className="size-3.5" />{children}</a>;
 }
 
 export function Section({ title, aside, children, className }: { title: ReactNode; aside?: ReactNode; children: ReactNode; className?: string }) {
