@@ -11,7 +11,7 @@ export type LogLine = { at: number; msg: string; level: "info" | "ok" | "warn" |
 export type Item = {
   url: string; label: string;
   status: "waiting" | "running" | "approval" | "asking" | "done" | "skipped" | "failed";
-  vars: Record<string, unknown>; outcome?: string; because?: string; expected?: string; log: LogLine[];
+  vars: Record<string, unknown>; outcome?: string; because?: string; expected?: string; decidedBy?: "rules" | "you" | "learned"; log: LogLine[];
 };
 export type Pending =
   | { kind: "approval"; item: number; step: string; target?: string; outcome?: string; because?: string; shot: string; healed?: string }
@@ -41,12 +41,13 @@ export class Runner {
   dir: string;
   page!: Page;
   stopped = false;
+  baseRules: Spec["rules"]; // decide() indexes these; learned rules are added to the spec, not here
   private resolve: ((a: Answer) => void) | null = null;
   private shots = 0;
   onChange: (run: Run, spec: Spec) => void;
 
   constructor(run: Run, spec: Spec, code: string, dir: string, onChange: (run: Run, spec: Spec) => void) {
-    this.run = run; this.spec = structuredClone(spec); this.rules = load(code); this.dir = dir; this.onChange = onChange;
+    this.run = run; this.spec = structuredClone(spec); this.baseRules = structuredClone(spec.rules); this.rules = load(code); this.dir = dir; this.onChange = onChange;
     mkdirSync(dir, { recursive: true });
   }
 
@@ -65,6 +66,10 @@ export class Runner {
     writeFileSync(join(this.dir, file), buf);
     this.run.shot = file;
     return { file, buf };
+  }
+
+  private heal(h: Run["heals"][number]) {
+    if (!this.run.heals.some((x) => x.step === h.step && x.to === h.to)) this.run.heals.push(h);
   }
 
   answer(a: Answer) {
@@ -112,7 +117,9 @@ export class Runner {
   }
   private scoreRun() {
     const scored = this.run.items.filter((i) => i.expected && i.outcome);
-    if (scored.length) this.run.score = { matched: scored.filter((i) => i.outcome === i.expected).length, total: scored.length };
+    // "ask" means the rules should not decide alone: asking you, or reusing your answer, is right.
+    const right = (i: Item) => i.status === "done" && (i.expected === "ask" ? i.decidedBy !== "rules" : i.outcome === i.expected);
+    if (scored.length) this.run.score = { matched: scored.filter(right).length, total: scored.length };
   }
 
   private async runItem() {
@@ -139,10 +146,10 @@ export class Runner {
       it.status = "running";
       if (!a.outcome || !this.spec.outcomes[a.outcome]) { it.status = "skipped"; this.log("Skipped, as you asked.", "info"); return; }
       it.outcome = a.outcome; reply = a.reply || undefined;
-      it.because = `You told me${a.note ? `: ${a.note}` : ""}`;
+      it.because = `You told me${a.note ? `: ${a.note}` : ""}`; it.decidedBy = "you";
     } else if (learned) {
       it.outcome = learned.outcome; reply = learned.reply;
-      it.because = `You showed me what to do with "${rt}" earlier in this run${learned.note ? `: ${learned.note}` : ""}`;
+      it.decidedBy = "learned"; it.because = `You showed me what to do with "${rt}" earlier in this run${learned.note ? `: ${learned.note}` : ""}`;
     } else if (rt && this.spec.scopeTypes?.length && !this.spec.scopeTypes.includes(rt)) {
       const { file } = await this.shot();
       this.log(`This is a "${rt}" request. My rules don't cover it, so I'm asking.`, "warn", file);
@@ -152,7 +159,7 @@ export class Runner {
       it.status = "running";
       if (!a.outcome || !this.spec.outcomes[a.outcome]) { it.status = "skipped"; this.log("Skipped, as you asked.", "info"); return; }
       it.outcome = a.outcome; reply = a.reply || undefined;
-      it.because = `You told me${a.note ? `: ${a.note}` : ""}`;
+      it.because = `You told me${a.note ? `: ${a.note}` : ""}`; it.decidedBy = "you";
       if (a.learn !== false) {
         this.run.learned.push({ requestType: rt, outcome: a.outcome, note: a.note, reply: a.reply || undefined });
         this.spec.rules.unshift({ if: `request_type is ${rt}`, then: a.outcome, said: a.note, learned: true });
@@ -162,8 +169,8 @@ export class Runner {
     } else {
       const d = this.rules.decide(it.vars);
       it.outcome = d.outcome;
-      const rule = this.spec.rules[d.rule];
-      it.because = rule ? `${rule.if}${rule.said ? ` ("${rule.said}")` : ""}` : "rule " + d.rule;
+      const rule = this.baseRules[d.rule];
+      it.decidedBy = "rules"; it.because = rule ? `${rule.if}${rule.said ? ` ("${rule.said}")` : ""}` : "rule " + d.rule;
     }
     this.log(`Decision: ${it.outcome}, because ${it.because}`, "ok");
 
@@ -242,7 +249,9 @@ export class Runner {
     const kind = t.role === "textbox" ? "text box" : t.role === "link" ? "link" : "button";
     const { buf, file } = await this.shot();
     this.log(`Couldn't find the ${kind} "${t.name}" on the page. Looking at the screen instead (Muse Spark + SAM 3.1).`, "warn", file);
-    const box = await ground(buf, `the ${kind} used to: ${step.describe}. It used to be labeled "${t.name}"; if the page was redesigned the label may be different, so pick the ${kind} that does the same job`);
+    const box = await ground(buf, `the ${kind} used to: ${step.describe}. It used to be labeled "${t.name}"; if the page was redesigned the label may be different, so pick the ${kind} that does the same job`)
+      // Second look with a looser description: any field/button a person would use for this.
+      ?? await ground(buf, `the ${kind} a person would ${step.do === "fill" ? "type into" : "click"} to: ${step.describe}. Ignore the old label; any ${kind} that fits the purpose counts`);
     if (!box) throw new Error(`can't find "${t.name}" on the page, even by looking`);
     // SAM 3.1 gives tight boxes for every element of this kind; snap to the one under Muse Spark's box.
     const cx = (box.x_min + box.x_max) / 2, cy = (box.y_min + box.y_max) / 2;
@@ -270,7 +279,7 @@ export class Runner {
     const stable = healedName.split(/[(\d₱$]/)[0].trim();
     raw.target = stable && stable !== healedName ? { role: found.role, name: stable, fuzzy: true } : { role: found.role, name: healedName };
     raw.healed = `was "${t.name}"`;
-    this.run.heals.push({ step: step.describe, from: t.name ?? "", to: healedName });
+    this.heal({ step: step.describe, from: t.name ?? "", to: healedName });
     this.log(`Found it: the ${found.role} "${healedName}". Updated the spec so the next ${this.spec.inputs.itemName ?? "item"} uses it directly.`, "ok");
     return (await loc.count()) === 1 ? { loc, healedName } : { point, healedName };
   }
@@ -287,6 +296,18 @@ export class Runner {
       read(pageText);
       if (textVars.every((v) => it.vars[v.name] !== null) || Date.now() > deadline) break;
       await this.page.waitForTimeout(300);
+    }
+    // Code found nothing: the page wording probably changed. Muse Spark reads those values instead.
+    const lost = textVars.filter((v) => it.vars[v.name] === null);
+    if (lost.length) {
+      const r = await askJson<Record<string, unknown>>([text(`Read these values from the page text below. They may be under different labels than before. Reply with only JSON {"<name>": value or null}, using the same format as the example.\n\n${JSON.stringify(Object.fromEntries(lost.map((v) => [v.name, { what: v.description, example: v.demoValue }])), null, 2)}\n\nPage text:\n${pageText.slice(0, 6000)}`)], "read");
+      for (const v of lost) {
+        const val = r[v.name];
+        if (val === null || val === undefined || val === "") continue;
+        it.vars[v.name] = val;
+        this.heal({ step: `read ${v.name}`, from: "code extractor", to: "Muse Spark reading the page" });
+        this.log(`My code couldn't find ${v.name} (the page wording changed). Muse Spark read it: ${JSON.stringify(val)}`, "warn");
+      }
     }
     for (const v of textVars) this.log(`${v.name} = ${JSON.stringify(it.vars[v.name])}`, it.vars[v.name] === null ? "warn" : "info");
     const looks = vars.filter((x) => x.kind === "vision" || x.kind === "judge");
@@ -335,11 +356,18 @@ export class Runner {
     const gated = step.irreversible || (step.do === "click" && IRREVERSIBLE.test(step.target?.name ?? ""));
     if (domOk && !gated) { this.log(`✓ ${step.describe}`, "ok"); return; }
 
-    const { buf, file } = await this.shot();
-    const r = await askJson<{ ok: boolean; why: string }>([
-      text(`A browser robot just did this step: "${step.describe}". It expected: "${e.looks ?? "the step to have worked"}". Look at the screen now. Did the step work? Reply with only JSON: {"ok": true|false, "why": "one short sentence"}`),
-      png(buf),
-    ], "check");
+    let r: { ok: boolean; why: string } = { ok: false, why: "" }, file = "";
+    for (let look = 0; look < 2 && !r.ok; look++) {
+      // Server actions re-render after the click returns; give the page a moment before judging it.
+      await this.page.waitForLoadState("networkidle").catch(() => {});
+      await this.page.waitForTimeout(look ? 1500 : 600);
+      const shot = await this.shot();
+      file = shot.file;
+      r = await askJson<{ ok: boolean; why: string }>([
+        text(`A browser robot just did this step: "${step.describe}". It expected: "${e.looks ?? "the step to have worked"}". Look at the screen now. Did the step work? Reply with only JSON: {"ok": true|false, "why": "one short sentence"}`),
+        png(shot.buf),
+      ], "check");
+    }
     if (r.ok) { this.log(`✓ ${step.describe} (checked on screen: ${r.why})`, "ok", file); return; }
     this.log(`✗ ${step.describe}: ${domOk ? r.why : why}`, "error", file);
     throw new Error(`step didn't work: ${step.describe}`);

@@ -90,7 +90,7 @@ const KIND = { text: "read by code", vision: "looked at (photo)", judge: "judged
 
 function stepsHtml(steps) {
   return `<ol class="steps">${steps.map((s) => `<li>${esc(s.describe)}
-    ${s.target?.name ? ` <span class="chip">${esc(s.target.role || "")} “${esc(s.target.name)}”</span>` : ""}
+    ${s.target?.name && s.do !== "open_item" ? ` <span class="chip">${esc(s.target.role || "")} “${esc(s.target.name)}”</span>` : ""}
     ${s.do === "fill" && s.value ? ` <span class="chip">types ${esc(s.value)}</span>` : ""}
     ${s.vars ? s.vars.map((v) => `<span class="chip">${esc(v)}</span>`).join("") : ""}
     ${s.irreversible ? ` <span class="chip gate">waits for your OK</span>` : ""}
@@ -177,7 +177,7 @@ async function runView(id) {
   const r = await api(`/runs/${id}`);
   const live = !["done", "failed", "stopped"].includes(r.status);
   const shot = (f) => f ? `<img data-zoom src="/api/runs/${id}/files/${f}" alt="screen">` : "";
-  const sel = selected ?? r.current;
+  const sel = selected ?? Math.min(r.current, r.items.length - 1);
   const it = r.items[sel];
   const done = r.items.filter((i) => ["done", "skipped", "failed"].includes(i.status)).length;
   const p = r.pending;
@@ -210,7 +210,7 @@ async function runView(id) {
       ${pendingHtml}
       <div class="run">
         <div class="card" style="padding:0"><ul class="items">${r.items.map((i, n) => `<li data-i="${n}" class="${n === sel ? "sel" : ""}"><span>${ICON[i.status] || ""}</span>
-          <div><div class="lbl">${esc(i.label)}</div><div class="out">${esc(i.outcome || i.status)}${i.expected && i.outcome ? (i.outcome === i.expected ? " ✓" : ` ✗ expected ${esc(i.expected)}`) : ""}</div></div></li>`).join("")}</ul></div>
+          <div><div class="lbl">${esc(i.label)}</div><div class="out">${esc(i.outcome || i.status)}${i.decidedBy && i.decidedBy !== "rules" ? ` · ${i.decidedBy === "you" ? "you decided" : "learned from you"}` : ""}${i.expected && i.outcome ? ((i.expected === "ask" ? i.decidedBy !== "rules" : i.outcome === i.expected) ? " ✓" : ` ✗ expected ${esc(i.expected)}`) : ""}</div></div></li>`).join("")}</ul></div>
         <div>
           ${r.heals.length || r.learned.length ? `<div class="card">${r.heals.map((h) => `<div><span class="chip heal">layout changed</span> “${esc(h.from)}” is now “${esc(h.to)}”</div>`).join("")}
             ${r.learned.map((l) => `<div><span class="chip learn">learned</span> ${esc(l.requestType)} → ${esc(l.outcome)}${l.note ? `: ${esc(l.note)}` : ""}</div>`).join("")}</div>` : ""}

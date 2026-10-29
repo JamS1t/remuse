@@ -37,3 +37,14 @@
 - Next.js client navigation doesn't reload the content script; it polls `location.href` every 250 ms.
 - `npm run test:recorder` passes: 19 events for the hero case, before/after frames correct (checked by eye: Replace button, then the "Replacement sent" banner), transcript exact.
 - Chrome stable no longer loads unpacked extensions from the command line, so the test uses Playwright's Chromium (`channel: "chromium"`). Loading by hand in normal Chrome still works.
+
+## Thu Oct 29 (cont.): whole pipeline, first full runs
+
+- **Understand** (`backend/src/understand.ts`): one Muse Spark call with the event log, ~25 key frames and the transcript in time order. About 70 s and 40k tokens for the demo. First attempt left out the "go back to the order page" step and put "wrong item" in scope; two prompt rules fixed both (outcomes must navigate to the page they act on; scope is only what the person's rules cover, and asking is cheap).
+- **Build** (`backend/src/build.ts`): Muse Spark writes extractors, computed values and `decide()` as one JS object, plus its own rule tests. We run it in `node:vm` and check it against the demo (same values read, same decision) and the tests. 15/15 and 16/16 checks on the first try in two builds; one repair round with the failures is wired in.
+- **Run** (`backend/src/runner.ts`): Playwright, one browser, items one by one. Role + name first, then the recorded selector only if it still names the same thing, then Muse Spark grounding + SAM 3.1. Irreversible clicks (flagged by the spec and by a hard-coded word list, so the gate never depends on the model alone) wait for approval with the element outlined on a screenshot. Muse Spark looks at the screen after every irreversible step.
+- Results on the 15 seeded emails (auto-approve, a script answering the questions):
+  - Original layout: every email right. Mark (wrong item) was asked about; the answer was learned and Trisha (wrong item) was handled without asking.
+  - Redesigned store layout: 14/15. Buttons and fields healed ("Replace" → "Ship a new one", "Replacement reason" → "Internal note", "Refund" → "Issue refund (₱…)"). The code extractors broke on the new labels ("Ordered on", "Courier ref"), so Muse Spark now reads values when code finds nothing. The miss: grounding said "not found" once for the note field; a second, looser look was added.
+- Fixed along the way: values read before a client-side page finished rendering (now re-read for up to 4 s, then ask rather than guess); the on-screen check judging a server action before it re-rendered (wait for network idle, look twice); learned rules shifting rule numbers in the explanation.
+- About 3 Muse Spark calls per email on the original layout (judge + photo, two screen checks), ~6 on the redesign. A 15-email run is ~43 calls, ~95 s of model time.
