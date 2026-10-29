@@ -10,6 +10,8 @@ export type Step = {
   // upload only: which file to send from one of the person's allowed folders.
   file?: { folder: string | null; pick?: "next" | "newest" | "dated"; ext?: string[] }; // report only: what to tell the person, with {{variables}}
   url?: string; target?: Target; value?: string; key?: string; vars?: string[];
+  // Which browser tab this step happens in, by a name for what the tab is for ("inbox", "sheet"). Unset = the current tab.
+  tab?: string;
   describe: string; expect?: { urlIncludes?: string; textIncludes?: string; looks?: string };
   irreversible?: boolean; fromEvent?: number | null; healed?: string;
   // The page's own WebMCP tool for this action: used when the page offers it, else the robot clicks.
@@ -76,6 +78,7 @@ const SCHEMA = `{
       "resultEvent": <compare only: event # of the click that opened one result in the demo>,
       "max": <compare only: how many results to compare, default 5>,
       "said": "compare only: the person's own words for what makes one result better",
+      "tab": "only when the task uses more than one tab: a short name for what this tab is for, e.g. \"inbox\", \"sheet\", \"store\"",
       "describe": "short plain sentence",
       "expect": { "urlIncludes": "optional, may use {{var}}", "textIncludes": "optional, may use {{var}}", "looks": "what the screen should show after this step" },
       "irreversible": false,
@@ -114,6 +117,7 @@ Rules for the spec:
 - Uploading: an "upload" line means the person chose a file to upload. Keep the click that opened the file picker if there was one, then add {"do": "upload", "target": <the file input from the upload line>, "file": {...}}. "folder" is the allowed folder (listed below) whose files look like the one chosen; null if none fits (the person will pick one). "pick": "next" = the oldest file not uploaded yet, for a posting queue (the default); "newest" = whatever arrived most recently ("the latest file"); "dated" = the file whose name carries today's date and a time not later than now ("the one labelled for today"). After an upload step, {{file_name}} is the file's name and {{file_caption}} the text of a .txt file with the same name (null if none): use it for a caption or description box. Posting, sharing or publishing is irreversible.
 - Downloads: if the person downloaded something they want kept, set "saveDownloads" to the allowed folder they meant; otherwise null.
 - Schedule: if the person said how often ("every hour", "every morning at 9"), fill "schedule". Don't invent one.
+- Tabs: event lines carry tab=T1, T2... when the person worked in more than one browser tab. Then give EVERY step (main and outcome steps) a "tab": a short name for what that tab is for ("inbox", "sheet", "store", "x", "tiktok"), the same name each time the person returned to that tab. The robot keeps every tab open and switches between them, so a tab is found as it was left: don't repeat a "goto" when the person just switched back. The first step in a new tab is normally a "goto" to the page it showed first. If a click made the site open a new tab, give the following steps a new tab name and no "goto"; the robot follows the tab the site opened. Values read in any tab can be used in any other tab with {{variables}}, e.g. read an order number in "inbox" and type it in "store". If the person did the same thing on several sites (posting to several networks, checking several stores), keep one tab per site and keep the irreversible steps (post, pay, send) last, after everything is prepared in every tab.
 - WebMCP: "tools" lines list actions a page offers to agents directly. When a step does what one of those tools does (e.g. the Refund button and a refund_order tool), keep the step as recorded and add "tool" with the tool name and its args, using {{variables}}. The robot calls the tool when the page offers it and clicks otherwise.
 
 Reply with ONLY the JSON object, in this shape:
@@ -121,13 +125,14 @@ ${SCHEMA}`;
 
 type Session = { id: string; title?: string; events: any[]; turns: { startMs: number; endMs: number; text: string }[] };
 
-function eventLine(e: any, i: number) {
+function eventLine(e: any, i: number, tabs: Map<unknown, string>) {
+  const tab = tabs.size > 1 && tabs.has(e.tab) ? ` tab=${tabs.get(e.tab)}` : "";
   const t = e.target ? ` target={role:${JSON.stringify(e.target.role)}, name:${JSON.stringify(e.target.label)}, selector:${JSON.stringify(e.target.selector)}}` : "";
   const v = e.value !== undefined ? ` value=${JSON.stringify(e.value)}` : "";
   const k = e.key ? ` key=${e.key}` : "";
-  if (e.kind === "upload") return `#${i} t=${(e.t / 1000).toFixed(1)}s upload url=${e.url}${t} files=${JSON.stringify((e.files ?? []).map((x: any) => x.name))}`;
-  if (e.kind === "tools") return `#${i} tools url=${e.url} offered: ${(e.tools ?? []).map((x: any) => `${x.name}(${Object.keys(x.inputSchema?.properties ?? {}).join(", ")}): ${x.description ?? ""}`).join("; ")}`;
-  return `#${i} t=${(e.t / 1000).toFixed(1)}s ${e.kind} url=${e.url}${t}${v}${k}`;
+  if (e.kind === "upload") return `#${i} t=${(e.t / 1000).toFixed(1)}s upload${tab} url=${e.url}${t} files=${JSON.stringify((e.files ?? []).map((x: any) => x.name))}`;
+  if (e.kind === "tools") return `#${i} tools${tab} url=${e.url} offered: ${(e.tools ?? []).map((x: any) => `${x.name}(${Object.keys(x.inputSchema?.properties ?? {}).join(", ")}): ${x.description ?? ""}`).join("; ")}`;
+  return `#${i} t=${(e.t / 1000).toFixed(1)}s ${e.kind}${tab} url=${e.url}${t}${v}${k}`;
 }
 
 export type FolderHint = { name: string; files: string[] };
@@ -137,12 +142,15 @@ export function buildPrompt(s: Session, dir: string, folders: FolderHint[] = [])
     ...s.events.map((e, i) => ({ t: e.t, i, e })),
     ...s.turns.map((v) => ({ t: v.startMs, v })),
   ].sort((a, b) => a.t - b.t);
+  // Browser tabs as T1, T2... in the order the person first used them.
+  const tabs = new Map<unknown, string>();
+  for (const e of s.events) if (e.tab != null && !tabs.has(e.tab)) tabs.set(e.tab, `T${tabs.size + 1}`);
   let images = 0;
   let lastAction = -Infinity;
   for (const it of items) {
     if ("v" in it && it.v) { parts.push(text(`[voice ${(it.v.startMs / 1000).toFixed(1)}-${(it.v.endMs / 1000).toFixed(1)}s] "${it.v.text}"`)); continue; }
     const { e, i } = it as { e: any; i: number };
-    parts.push(text(eventLine(e, i)));
+    parts.push(text(eventLine(e, i, tabs)));
     const isAction = e.kind === "click" || e.kind === "key";
     // Frames: before+after each action, and pages reached without one (typed URLs). Max 50 images per request.
     const frames: [string, string][] = [];

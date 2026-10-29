@@ -84,6 +84,10 @@ export class Runner {
   rules: Rules;
   dir: string;
   page!: Page;
+  ctx!: BrowserContext;
+  // Tabs by the name the spec gives them.
+  tabs = new Map<string, Page>();
+  tabName = "";
   stopped = false;
   // Variables from the previous run of this task, by item label, for {{prev_<name>}} ("change since last time").
   prev: Record<string, Record<string, unknown>> = {};
@@ -136,6 +140,7 @@ export class Runner {
     const headless = process.env.HEADLESS === "1" || !this.run.visible;
     const browser = await openBrowser(headless);
     try {
+      this.ctx = browser;
       this.page = browser.pages()[0] ?? (await browser.newPage());
       const keep = findFolder(this.spec.saveDownloads ?? null);
       // Downloads in flight: an item (and the run) waits for them before the browser closes.
@@ -206,7 +211,7 @@ export class Runner {
     // A "once" task is the same single item every time even if its name changed; other items match by label only.
     const before = this.prev[it.label] ?? (this.spec.inputs.source === "once" && labels.length === 1 ? this.prev[labels[0]] : undefined);
     for (const v of this.spec.variables) it.vars[`prev_${v.name}`] = before?.[v.name] ?? null;
-    for (const step of this.spec.steps) if (!(await this.step(step))) return;
+    for (const [i, step] of this.spec.steps.entries()) if (!(await this.step(step, this.spec.steps[i + 1]?.tab))) return;
     for (const v of this.spec.variables.filter((x) => x.kind === "computed" && !x.candidate)) {
       it.vars[v.name] = this.rules.compute[v.name]?.(it.vars);
       this.log(`${v.name} = ${JSON.stringify(it.vars[v.name])} (computed)`, "info");
@@ -294,15 +299,38 @@ export class Runner {
     this.log(`Uploaded ${name} from ${folder.name}${it.vars.file_caption ? " (with its caption)" : ""}`, "ok", file);
   }
 
+  /** Switch to the tab a step names. A new name takes the starting tab first, then a tab the site opened
+   *  by itself (a link that opens in a new tab), else a fresh tab. Tabs stay as they were left. */
+  private async useTab(name: string, opensItself: boolean) {
+    if (name === this.tabName && !this.page.isClosed()) return;
+    let p = this.tabs.get(name);
+    if (!p || p.isClosed()) {
+      const claimed = new Set([...this.tabs.values()]);
+      const unclaimed = () => this.ctx.pages().filter((x) => !x.isClosed() && !claimed.has(x));
+      if (!this.tabs.size && !this.page.isClosed()) p = this.page;
+      else {
+        // The site's new tab can show up a moment after the click that opened it.
+        if (!unclaimed().length && opensItself) await this.ctx.waitForEvent("page", { timeout: 5000 }).catch(() => {});
+        p = unclaimed().at(-1) ?? (await this.ctx.newPage());
+        if (p.url() === "about:blank" && opensItself) await p.waitForURL((u) => u.href !== "about:blank", { timeout: 15_000 }).catch(() => {});
+      }
+      this.tabs.set(name, p);
+      await p.waitForLoadState("domcontentloaded").catch(() => {});
+    }
+    this.page = p; this.tabName = name;
+    await p.bringToFront().catch(() => {});
+    this.log(`In the ${name} tab`, "info");
+  }
+
   private hasTool(name: string) {
     return this.page.evaluate((n) => !!(window as any).__showrunTools?.has(n), name).catch(() => false);
   }
 
   /** Run one step. If it gets stuck (sign-in wall, captcha, popup), hand the browser to the person:
    *  they fix it and press Try again, or skip the item. Returns false when the item was skipped. */
-  private async step(s: Step): Promise<boolean> {
+  private async step(s: Step, nextTab?: string): Promise<boolean> {
     for (;;) {
-      try { await this.exec(s); return true; }
+      try { await this.exec(s, nextTab); return true; }
       catch (e) {
         if (e instanceof Skip) { this.item.status = "skipped"; this.log(e.message, "info"); return false; }
         // A hidden run has no window to hand over: the item fails and says why instead of waiting forever.
@@ -367,15 +395,28 @@ export class Runner {
     this.log(`Best: ${best.title} (score ${+best.score!.toFixed(3)}, ${ok.length} of ${it.candidates.length} qualify)`, "ok");
   }
 
-  private async exec(raw: Step) {
+  private async exec(raw: Step, nextTab?: string) {
     const it = this.item;
     const v = it.vars;
     const step: Step = { ...raw, url: render(raw.url, v), value: render(raw.value, v),
       target: raw.target && { ...raw.target, name: render(raw.target.name, v) },
       expect: raw.expect && { ...raw.expect, urlIncludes: render(raw.expect.urlIncludes, v), textIncludes: render(raw.expect.textIncludes, v) } };
     if (this.stopped) throw new Error("run stopped");
+    // A new tab whose first step isn't a "goto" is one the site opened (the previous click did it).
+    if (raw.tab) await this.useTab(raw.tab, raw.do !== "goto");
 
-    if (step.do === "open_item") await this.page.goto(it.url);
+    if (step.do === "open_item") {
+      // In the demo the item opened in its own tab (the next step is in another tab): open it there.
+      if (nextTab && raw.tab && nextTab !== raw.tab) {
+        const p = this.tabs.get(nextTab);
+        const into = p && !p.isClosed() ? p : await this.ctx.newPage();
+        this.tabs.set(nextTab, into);
+        await into.goto(it.url);
+        this.log(`Opened ${this.spec.inputs.itemName ?? "the item"} in the ${nextTab} tab`, "info");
+        return;
+      }
+      await this.page.goto(it.url);
+    }
     else if (step.do === "goto") await this.page.goto(step.url!);
     else if (step.do === "extract") return this.extract(step.vars ?? []);
     else if (step.do === "compare") return this.compare(step);

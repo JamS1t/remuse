@@ -42,6 +42,7 @@ Built for the Meta developer hackathon, Indie Developer track. All code in this 
    - **Approvals:** it stops for your OK before paying, checking out, sending and similar steps.
    - **Questions:** it asks when an item is outside your rules or a value can't be read. Your answer is remembered and saved into the next spec version.
    - **Your turn:** if a sign-in page, a captcha or a popup gets in the way, it hands the browser to you, then tries again.
+   - **Tabs:** a task can span several tabs (an inbox and a sheet, a store and a tracker, one tab per site you post to). Each step knows its tab; the Agent keeps every tab open as it was left, follows tabs a site opens by itself, and carries values read in one tab into the others.
    - **Files:** it uploads from folders you allowed (the next file in line, the newest, or the one labelled with today's date and time), with the caption from a `.txt` file of the same name, never posting a file twice; downloads go into a folder you choose.
 
 ## Install (Windows)
@@ -98,6 +99,8 @@ The 15 emails split as follows; `npm run check` confirms the seed matches the ru
 | `cd backend && node test/logins.check.ts` | A shared login reaches a real site from the Agent's browser; expired cookies are dropped |
 | `cd backend && node test/folders.check.ts` | Which file an upload picks (next, newest, dated), captions, and that files never leave their folder |
 | `cd backend && node test/files.e2e.ts` | A posting task uploads the next file with its caption, saves its download, never reposts, skips when nothing is new |
+| `cd backend && node test/tabs.e2e.ts` | A task across three tabs: reads values in a tab the site opened, types them into another tab, returns to the first tab as it was left |
+| `cd backend && node test/tabs-learn.e2e.ts <narration.wav>` | Records a three-tab demo through the extension, Muse Spark learns which step happens in which tab, and the run copies new data across tabs |
 | `cd backend && node test/webmcp.check.ts` | A page's WebMCP tool is seen and called by the Agent's browser |
 | `cd mock-apps && npm run check` | The seed data agrees with the spoken rules |
 | `node --env-file=.env scripts/risk-tests.mjs` | The day-1 Meta API checks |

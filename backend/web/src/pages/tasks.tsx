@@ -203,7 +203,7 @@ function WhatItDoes({ spec: row }: { spec: SpecRow }) {
         {s.steps.map((st, i) => (
           <li key={st.id ?? i} className="flex gap-3 px-5 py-3">
             <span className="w-5 shrink-0 pt-px text-right font-mono text-[12px] text-muted-foreground">{i + 1}</span>
-            <span>{st.describe}</span>
+            <span>{st.describe}{st.tab && st.tab !== s.steps[i - 1]?.tab ? <span className="text-muted-foreground"> · in the {st.tab} tab</span> : null}</span>
           </li>
         ))}
         {outcomes.length ? (

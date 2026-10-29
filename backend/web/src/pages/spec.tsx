@@ -29,6 +29,7 @@ function Steps({ steps }: { steps: Step[] }) {
         <Line key={s.id ?? i} n={i + 1} changed={!!s.healed}>
           <p>{s.describe}</p>
           <p className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[12.5px] text-muted-foreground">
+            {s.tab ? <span>in the <span className="font-medium text-foreground">{s.tab}</span> tab</span> : null}
             {s.target?.name && s.do !== "open_item" ? <span>{s.target.role} <span className="font-medium text-foreground">“{s.target.name}”</span></span> : null}
             {s.do === "fill" && s.value ? <span>types <span className="font-mono text-foreground">{s.value}</span></span> : null}
             {s.do === "compare" ? <span className="font-medium text-foreground">Opens the top {s.max ?? 5} results and keeps the best</span> : null}
