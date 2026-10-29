@@ -17,7 +17,7 @@ export function Shell({ at, children }: { at: string; children: ReactNode }) {
     <div className="min-h-screen md:grid md:grid-cols-[232px_minmax(0,1fr)]">
       <aside className="sticky top-0 z-20 flex flex-col border-b bg-background/40 backdrop-blur-xl md:h-screen md:border-r md:border-b-0">
         <div className="flex h-14 items-center px-5">
-          <a href="#/" className="text-foreground no-underline"><Lockup className="h-[19px]" /></a>
+          <a href="#/" className="text-foreground no-underline"><Lockup className="h-6" /></a>
         </div>
         <nav className="flex gap-1 overflow-x-auto px-3 pb-2 md:flex-col md:pb-0" aria-label="Main">
           {NAV.map(({ href, label, icon: Icon, match }) => {

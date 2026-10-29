@@ -100,7 +100,7 @@ export function Remote() {
   return (
     <div className="flex min-h-screen flex-col">
       <header className="flex h-11 items-center gap-2 px-4">
-        <Lockup className="h-[17px]" />
+        <Lockup className="h-[21px]" />
         <button type="button" onClick={() => open("#/")} className="ml-auto inline-flex items-center gap-1 text-[12.5px] text-muted-foreground hover:text-foreground">
           Full view <ExternalLink className="size-3.5" />
         </button>

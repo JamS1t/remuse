@@ -8,7 +8,7 @@
 
 ## 2. Clear space
 Keep a clear zone of **½ × the symbol diameter (D)** on all sides of any lockup, and ¼ D around the symbol alone. The space scales with the logo.
-Inside the horizontal lockup: symbol diameter = 1.42 × x-height, centred on the x-height band; gap = 0.36 D. In the stacked lockup: D = 2.1 × x-height, gap = 0.55 × x-height. Don't change these.
+Inside the horizontal lockup: symbol diameter = 1.8 × x-height, centred on the x-height band; gap = 0.5 D (so the mark leads and the name reads as a separate word; regenerate with `node scripts/brand-lockups.mjs`). In the stacked lockup: D = 2.1 × x-height, gap = 0.55 × x-height. Don't change these.
 
 ## 3. Minimum sizes
 | Version | Screen | Print |
