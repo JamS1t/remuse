@@ -17,7 +17,7 @@ type Task = {
   learnStage?: "listening" | "understanding" | "building" | "ready" | "failed" | null; learnError?: string | null;
   rules: { if: string; then: string; said?: string }[]; guessed: string[]; steps: number; compares: boolean; checks: { passed: number; total: number };
 };
-type Rec = { recording: boolean; rec?: { audioError?: string } };
+type Rec = { recording: boolean; rec?: { audioError?: string }; waitingForMic?: boolean };
 type Schedule = { id: number; specId: number; time: string; days: string };
 
 const AGENT = location.origin;
@@ -53,7 +53,8 @@ export function Remote() {
   const { busy, run: act } = useAction();
 
   const refresh = () => (inPanel ? ext<Rec>("status").then(setRec, () => setRec(null)) : Promise.resolve());
-  useEffect(() => { refresh(); }, []);
+  // Recording can start from elsewhere (after the mic tab), so keep the state fresh.
+  useEffect(() => { refresh(); const t = setInterval(refresh, 1500); return () => clearInterval(t); }, []);
   useEffect(() => {
     if (!rec?.recording) return;
     const t = setInterval(() => setSince((s) => s + 1), 1000);
@@ -65,8 +66,16 @@ export function Remote() {
   const live = run && isLive(run.status) ? run : null;
   const state: OrbState = rec?.recording ? "watching" : live?.pending ? "waiting" : learning ? "thinking" : live ? "working" : fresh?.learnStage === "ready" ? "done" : "idle";
 
-  const start = () => act("start", async () => { await ext("start"); setSince(0); await refresh(); });
-  const stop = () => act("stop", async () => { await ext("stop"); await refresh(); reloadTasks(); });
+  const start = () => act("start", async () => {
+    const r = await ext<{ needsMic?: boolean }>("start");
+    if (r?.needsMic) toast("Allow the microphone in the tab that just opened. I will start recording right after.");
+    setSince(0); await refresh();
+  });
+  // The recording ends even if something fails on the way out, so always show the real state after.
+  const stop = () => act("stop", async () => {
+    try { const r = await ext<{ error?: string | null }>("stop"); if (r?.error) toast.error(r.error); }
+    finally { await refresh(); reloadTasks(); }
+  });
   const answer = (body: object) => act("answer", async () => { await api(`/runs/${live!.id}/answer`, "POST", body); reloadRun(); });
   const dismiss = (id: string) => { markSeen(id); setTick((n) => n + 1); };
 
@@ -77,6 +86,7 @@ export function Remote() {
     : state === "thinking" ? { hi: learning!.title || "New task", big: "Thinking…", sub: STAGE[learning!.learnStage!] }
     : state === "working" ? { hi: live!.items[live!.current] ? "Working on" : "Starting", big: `${done} of ${live!.items.length} done`, sub: live!.items[live!.current]?.label }
     : state === "done" ? { hi: "Learned", big: fresh!.title || "Your task" }
+    : rec?.waitingForMic ? { hi: "One thing first", big: "Allow the microphone", sub: "In the tab that opened. I start recording right after." }
     : { hi: "Hi, I'm Remuse", big: "Show me a task once. I'll do it again." };
 
   return (

@@ -50,8 +50,24 @@ async function ensureOffscreen() {
   await chrome.offscreen.createDocument({ url: "offscreen.html", reasons: ["USER_MEDIA"], justification: "Record the user's narration of the task" });
 }
 
+// The offscreen recorder can't show Chrome's microphone prompt. Ask once in a normal tab before the first
+// recording; when it's allowed, come back to the page you were on and start by itself.
+async function micAllowed() {
+  await ensureOffscreen();
+  const a = await chrome.runtime.sendMessage({ target: "offscreen", type: "mic" }).catch(() => null);
+  return a?.state === "granted";
+}
+let pendingStart = null; // { title, tabId } while the mic tab is open
+
 async function start(title) {
   if (await current()) throw new Error("already recording");
+  if (!(await micAllowed())) {
+    const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+    pendingStart = { title, tabId: tab?.id };
+    await chrome.storage.session.set({ pendingStart });
+    await chrome.tabs.create({ url: "mic.html" });
+    return { needsMic: true };
+  }
   const t0 = Date.now();
   const { id } = await api("/sessions", "POST", { title, startedAt: t0 });
   const r = { id, t0, audioOffsetMs: null, audioError: null };
@@ -87,8 +103,10 @@ async function stop() {
   }
   await sleep(1000); // last "after" shots
   // The Agent learns the task on its own from here: names it, writes the spec, builds and tests it.
-  await api(`/sessions/${r.id}/finish`, "POST", { endedAt: Date.now(), audioOffsetMs: r.audioOffsetMs });
-  const result = { id: r.id, learning: true, error: r.audioError ?? null };
+  // The recording is over either way; a failure here is reported, not left as a stuck "recording".
+  let finishError = null;
+  await api(`/sessions/${r.id}/finish`, "POST", { endedAt: Date.now(), audioOffsetMs: r.audioOffsetMs }).catch((e) => { finishError = e.message; });
+  const result = { id: r.id, learning: !finishError, error: finishError ?? r.audioError ?? null };
   await chrome.storage.local.set({ last: result });
   return result;
 }
@@ -154,8 +172,20 @@ globalThis.showrun = { start, stop, status, connect, disconnect };
 
 chrome.runtime.onMessage.addListener((msg, sender, reply) => {
   if (msg.type === "event") { onEvent(msg.ev, sender).catch((e) => console.warn("event dropped:", e.message)); return; }
+  if (msg.type === "micGranted") {
+    // Back to the page the person was on, then start the recording they asked for.
+    (async () => {
+      const p = pendingStart ?? (await chrome.storage.session.get("pendingStart")).pendingStart;
+      pendingStart = null; await chrome.storage.session.remove("pendingStart");
+      if (sender.tab?.id) chrome.tabs.remove(sender.tab.id).catch(() => {});
+      if (!p) return;
+      if (p.tabId) await chrome.tabs.update(p.tabId, { active: true }).catch(() => {});
+      await start(p.title).catch((e) => console.warn("couldn't start after the mic was allowed:", e.message));
+    })();
+    return;
+  }
   const fn = {
-    start: () => start(msg.title), stop, status,
+    start: () => start(msg.title), stop, status: async () => ({ ...(await status()), waitingForMic: !!(pendingStart ?? (await chrome.storage.session.get("pendingStart")).pendingStart) }),
     sites: async () => ({ sites: await sites() }),
     connect: async () => connect(msg.site ?? (await currentTab()).site),
     disconnect: () => disconnect(msg.site),

@@ -23,7 +23,15 @@ mkdirSync(DATA, { recursive: true });
 // Vite's dev server (5173) proxies to us during UI work.
 const ALLOWED_ORIGINS = new Set([`http://127.0.0.1:${PORT}`, `http://localhost:${PORT}`, "http://localhost:5173", "http://127.0.0.1:5173"]);
 
+// One Agent at a time. A second one would fight the first over the database and the browser profile,
+// so it leaves before touching either.
+if (await fetch(`http://127.0.0.1:${PORT}/api/sessions`, { signal: AbortSignal.timeout(1500) }).then((r) => r.ok, () => false)) {
+  console.log(`Remuse Agent is already running on port ${PORT}.`);
+  process.exit(0);
+}
+
 const db = new DatabaseSync(join(DATA, "showrun.db"));
+db.exec("PRAGMA busy_timeout = 5000; PRAGMA journal_mode = WAL;");
 db.exec(`
   CREATE TABLE IF NOT EXISTS sessions (
     id TEXT PRIMARY KEY, title TEXT, started_at INTEGER NOT NULL, ended_at INTEGER,

@@ -5,7 +5,9 @@ let rec, stream, chunks, sessionId;
 
 chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
   if (msg.target !== "offscreen") return;
-  (msg.type === "start" ? start(msg.sessionId) : stop()).then(reply, (e) => reply({ error: `${e.name}: ${e.message}` }));
+  const job = msg.type === "mic" ? navigator.permissions.query({ name: "microphone" }).then((p) => ({ state: p.state }))
+    : msg.type === "start" ? start(msg.sessionId) : stop();
+  job.then(reply, (e) => reply({ error: `${e.name}: ${e.message}` }));
   return true;
 });
 
