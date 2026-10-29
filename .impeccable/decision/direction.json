@@ -1,0 +1,122 @@
+{
+  "title": "Choose the visual world for Showrun",
+  "question": "The roll assigned Run of Show. Keep it, take an alternate, or re-roll. Layout, navigation and controls stay standard shadcn app UI in every option; the world only sets type, palette, density and one signature move.",
+  "options": [
+    {
+      "id": "assigned",
+      "label": "Run of Show",
+      "kicker": "THE ROLL",
+      "lineage": "TV broadcast rundown sheets and colored script revisions",
+      "thesis": "Every run is a live rundown: items in order, timed, and nothing irreversible goes to air without your cue.",
+      "palette": ["#FBFBF9", "#17181B", "#D7372B", "#DCE7F7", "#F7DEE3", "#F6EFC4"],
+      "materials": ["rundown table with timecode column", "revision-colored spec versions", "tally red only for live"],
+      "viewport": "Left: the run's rundown table (no., item, outcome, time drawn to scale), the live row lit by a tally-red time marker; right: the step's before/after screenshots and the STANDBY cue card when approval is needed.",
+      "risk": "Broadcast language can tip into theme if words like ON AIR leak into labels; labels stay plain English.",
+      "raised": [
+        { "from": "Labanotation score", "raise": "Step durations are drawn to exact scale in the time column, so slow steps and model calls are visible at a glance." },
+        { "from": "Vertical video feed", "raise": "A pending approval owns the whole work area with the evidence large; A approves, R rejects, the next item is already loaded." },
+        { "from": "Emission-line rail", "raise": "Status is carried by glyph shape and a word, never by hue alone." },
+        { "from": "Crouwel grid specimen", "raise": "One strict 4px grid and one column system across all four pages; nothing sits off it." }
+      ]
+    },
+    {
+      "id": "model-pick",
+      "label": "Stamped and Received",
+      "kicker": "IMPECCABLE’S PICK",
+      "lineage": "Philippine office rubber stamps: RECEIVED, APPROVED, with date and initials",
+      "thesis": "Your approval is a stamp: dated, initialed, permanent on the item it cleared.",
+      "palette": ["#F7F6F2", "#1D1E22", "#5B3FA8", "#C2362F"],
+      "materials": ["stamp-pad violet ink for approvals", "office bond paper ground", "date-stamp numerals"],
+      "viewport": "Run table on the left; each approved item carries a small violet date-stamp mark with time; the pending card asks for your stamp.",
+      "risk": "Highest local resonance, but a stamp texture done badly reads as kitsch on a working screen."
+    },
+    {
+      "id": "challenger-monochrome-product",
+      "label": "Claim and Proof",
+      "verdict": "competitive",
+      "lineage": "monochrome software product UI (Linear, Vercel)",
+      "thesis": "Near-black on near-white, one accent, and every outcome sits next to the screenshot that proves it.",
+      "palette": ["#FAFAFA", "#0A0A0A", "#71717A", "#2B59FF"],
+      "materials": ["fine neutral scale", "hairline borders", "screenshots as the main content"],
+      "viewport": "Item list, then a detail pane where each decision is paired with its before/after frames.",
+      "case": "Clearest product read of all; loses on identity, since it looks like every well-made dev tool.",
+      "risk": "Polished but generic; judges may not remember it."
+    },
+    {
+      "id": "challenger-gate-board",
+      "label": "Gate Board",
+      "verdict": "competitive",
+      "lineage": "airport departure boards and boarding passes",
+      "thesis": "The run is a live board: items rerank in place and a changed row stays lit until you have seen it.",
+      "palette": ["#0F1115", "#F4F4F2", "#9AA0A6", "#FFB020"],
+      "materials": ["tabular figures", "fixed column grid", "one alert color for changes"],
+      "viewport": "A dark board of run items with status and time columns; heals and learned answers hold amber until acknowledged.",
+      "case": "Strong on live state; dark board fights the light mock apps beside it in the video.",
+      "risk": "Can read as a travel-app costume if the board styling goes past type and color."
+    },
+    {
+      "id": "challenger-emission-rail",
+      "label": "Emission-Line Rail",
+      "verdict": "declined",
+      "lineage": "spectrogram plates",
+      "thesis": "State as line height and dash on a charcoal continuum.",
+      "palette": ["#2A2B2E", "#E9E4DA", "#F2C94C"],
+      "materials": ["hairlines", "charcoal bands"],
+      "viewport": "One off-centre rail with every destination as a tick.",
+      "case": "An ops person does not recognize a spectrogram; state encoding is too abstract for approvals.",
+      "kept": "Status never relies on hue alone.",
+      "risk": "Unreadable for a non-technical user."
+    },
+    {
+      "id": "challenger-labanotation",
+      "label": "Labanotation Score",
+      "verdict": "declined",
+      "lineage": "dance notation",
+      "thesis": "Action blocks whose length is exact duration.",
+      "palette": ["#FFFFFF", "#111111", "#BDBDBD"],
+      "materials": ["shaded blocks", "center staff"],
+      "viewport": "A vertical score of steps read upward.",
+      "case": "Nobody in the audience reads dance notation.",
+      "kept": "Durations drawn to exact scale.",
+      "risk": "Pure costume on a working screen."
+    },
+    {
+      "id": "challenger-vertical-feed",
+      "label": "Vertical Feed",
+      "verdict": "declined",
+      "lineage": "short-video feed",
+      "thesis": "One item owns the screen, next one a flick away.",
+      "palette": ["#000000", "#FFFFFF"],
+      "materials": ["full-bleed media", "right glyph rail"],
+      "viewport": "One screenshot full-bleed with glyph actions.",
+      "case": "Hides the run overview an ops person needs.",
+      "kept": "The pending approval owns the work area, next item preloaded.",
+      "risk": "Loses the list."
+    },
+    {
+      "id": "challenger-crouwel",
+      "label": "Crouwel Grid",
+      "verdict": "declined",
+      "lineage": "Wim Crouwel grid specimens",
+      "thesis": "Letterforms built cell by cell on a visible grid.",
+      "palette": ["#FFFFFF", "#1A1A1A", "#2F6BFF"],
+      "materials": ["visible construction grid"],
+      "viewport": "A grid poster with monumental type.",
+      "case": "A poster, not a tool; no fit for approvals.",
+      "kept": "One strict grid everywhere.",
+      "risk": "Poster costume."
+    }
+  ],
+  "reroll": { "registers": ["safer", "bolder"] },
+  "buildPath": { "value": "code" },
+  "canon": true,
+  "canonCard": {
+    "label": "The category standard",
+    "thesis": "A clean automation dashboard: sidebar, tables, a detail drawer, executed impeccably.",
+    "palette": ["#FFFFFF", "#111113", "#5E6AD2"],
+    "materials": ["shadcn defaults", "neutral grays", "one indigo accent"],
+    "viewport": "Sidebar nav, runs table, detail pane.",
+    "risk": "Indistinguishable from the competition by design."
+  },
+  "steer": true
+}

@@ -1,0 +1,89 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+@import "@fontsource-variable/geist";
+@import "@fontsource-variable/geist-mono";
+@import "@fontsource/courier-prime/400.css";
+
+@custom-variant dark (&:is(.dark *));
+
+/* Light only: it sits beside the light mock apps in a daytime office. */
+@theme inline {
+  --font-sans: "Geist Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-heading: var(--font-sans);
+  --font-mono: "Geist Mono Variable", ui-monospace, monospace;
+  --font-script: "Courier Prime", "Courier New", monospace;
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--foreground);
+  --color-popover: var(--card);
+  --color-popover-foreground: var(--foreground);
+  --color-primary: var(--foreground);
+  --color-primary-foreground: var(--background);
+  --color-secondary: var(--muted);
+  --color-secondary-foreground: var(--foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--muted);
+  --color-accent-foreground: var(--foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-tally: var(--tally);
+  --color-ok: var(--ok);
+  --color-warn: var(--warn);
+  --color-rule: var(--rule);
+
+  --radius-sm: 3px;
+  --radius-md: 5px;
+  --radius-lg: 7px;
+  --radius-xl: 10px;
+}
+
+:root {
+  --background: #fbfbf9;
+  --foreground: #17181b;
+  --card: #ffffff;
+  --muted: #f2f1ec;
+  --muted-foreground: #5f5e58;
+  --border: #e4e2dc;
+  --rule: #efede8;
+  --input: #d9d6cf;
+  --ring: #17181b;
+  --destructive: #b4231a;
+  --tally: #d7372b;
+  --ok: #1d7038;
+  --warn: #8a5300;
+  --radius: 7px;
+
+  /* Script revision colors, one per Task Spec version. */
+  --rev-1: #ffffff;
+  --rev-2: #dce7f7;
+  --rev-3: #f7dee3;
+  --rev-4: #f6efc4;
+  --rev-5: #ddefd9;
+  --rev-6: #f1ddb0;
+}
+
+@layer base {
+  * { @apply border-border outline-ring/50; }
+  html { -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; scrollbar-color: #cfccc4 transparent; }
+  body { @apply bg-background text-foreground font-sans; font-size: 14px; line-height: 1.5; font-feature-settings: "ss01", "cv11"; }
+  ::selection { background: var(--rev-4); color: var(--foreground); }
+  input, textarea { caret-color: var(--foreground); }
+  a { text-underline-offset: 3px; text-decoration-thickness: 1px; }
+  :focus-visible { outline: 2px solid var(--foreground); outline-offset: 2px; }
+  table { font-variant-numeric: tabular-nums; }
+  h1, h2, h3 { text-wrap: balance; letter-spacing: -0.012em; }
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-thumb { background: #d6d3cb; border-radius: 8px; border: 3px solid var(--background); }
+  ::-webkit-scrollbar-track { background: transparent; }
+}
+
+/* The live item's time bar grows in tally red. */
+@keyframes live-grow { from { opacity: .55; } to { opacity: 1; } }
+.live-bar { animation: live-grow 900ms cubic-bezier(.16, 1, .3, 1) infinite alternate; }
+@media (prefers-reduced-motion: reduce) { .live-bar { animation: none; } }

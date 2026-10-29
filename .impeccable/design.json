@@ -1,0 +1,472 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-10-29T05:29:39.345Z",
+  "title": "Design System: Showrun",
+  "extensions": {
+    "colorMeta": {
+      "paper-ground": {
+        "role": "neutral",
+        "displayName": "Paper Ground",
+        "tonalRamp": [
+          "oklch(15% 0.003 100)",
+          "oklch(27% 0.003 100)",
+          "oklch(39% 0.003 100)",
+          "oklch(51% 0.003 100)",
+          "oklch(63% 0.003 100)",
+          "oklch(75% 0.003 100)",
+          "oklch(85% 0.003 100)",
+          "oklch(95% 0.003 100)"
+        ]
+      },
+      "sheet-white": {
+        "role": "neutral",
+        "displayName": "Sheet White",
+        "tonalRamp": [
+          "oklch(15% 0 0)",
+          "oklch(27% 0 0)",
+          "oklch(39% 0 0)",
+          "oklch(51% 0 0)",
+          "oklch(63% 0 0)",
+          "oklch(75% 0 0)",
+          "oklch(85% 0 0)",
+          "oklch(95% 0 0)"
+        ]
+      },
+      "ink": {
+        "role": "primary",
+        "displayName": "Ink",
+        "tonalRamp": [
+          "oklch(15% 0.006 270)",
+          "oklch(27% 0.006 270)",
+          "oklch(39% 0.006 270)",
+          "oklch(51% 0.006 270)",
+          "oklch(63% 0.006 270)",
+          "oklch(75% 0.006 270)",
+          "oklch(85% 0.006 270)",
+          "oklch(95% 0.006 270)"
+        ]
+      },
+      "quiet-ink": {
+        "role": "neutral",
+        "displayName": "Quiet Ink",
+        "tonalRamp": [
+          "oklch(15% 0.008 95)",
+          "oklch(27% 0.008 95)",
+          "oklch(39% 0.008 95)",
+          "oklch(51% 0.008 95)",
+          "oklch(63% 0.008 95)",
+          "oklch(75% 0.008 95)",
+          "oklch(85% 0.008 95)",
+          "oklch(95% 0.008 95)"
+        ]
+      },
+      "wash": {
+        "role": "neutral",
+        "displayName": "Wash",
+        "tonalRamp": [
+          "oklch(15% 0.007 95)",
+          "oklch(27% 0.007 95)",
+          "oklch(39% 0.007 95)",
+          "oklch(51% 0.007 95)",
+          "oklch(63% 0.007 95)",
+          "oklch(75% 0.007 95)",
+          "oklch(85% 0.007 95)",
+          "oklch(95% 0.007 95)"
+        ]
+      },
+      "hairline": {
+        "role": "neutral",
+        "displayName": "Hairline",
+        "tonalRamp": [
+          "oklch(15% 0.008 90)",
+          "oklch(27% 0.008 90)",
+          "oklch(39% 0.008 90)",
+          "oklch(51% 0.008 90)",
+          "oklch(63% 0.008 90)",
+          "oklch(75% 0.008 90)",
+          "oklch(85% 0.008 90)",
+          "oklch(95% 0.008 90)"
+        ]
+      },
+      "row-rule": {
+        "role": "neutral",
+        "displayName": "Row Rule",
+        "tonalRamp": [
+          "oklch(15% 0.006 90)",
+          "oklch(27% 0.006 90)",
+          "oklch(39% 0.006 90)",
+          "oklch(51% 0.006 90)",
+          "oklch(63% 0.006 90)",
+          "oklch(75% 0.006 90)",
+          "oklch(85% 0.006 90)",
+          "oklch(95% 0.006 90)"
+        ]
+      },
+      "field-stroke": {
+        "role": "neutral",
+        "displayName": "Field Stroke",
+        "tonalRamp": [
+          "oklch(15% 0.01 85)",
+          "oklch(27% 0.01 85)",
+          "oklch(39% 0.01 85)",
+          "oklch(51% 0.01 85)",
+          "oklch(63% 0.01 85)",
+          "oklch(75% 0.01 85)",
+          "oklch(85% 0.01 85)",
+          "oklch(95% 0.01 85)"
+        ]
+      },
+      "tally-red": {
+        "role": "secondary",
+        "displayName": "Tally Red",
+        "tonalRamp": [
+          "oklch(15% 0.19 29)",
+          "oklch(27% 0.19 29)",
+          "oklch(39% 0.19 29)",
+          "oklch(51% 0.19 29)",
+          "oklch(63% 0.19 29)",
+          "oklch(75% 0.19 29)",
+          "oklch(85% 0.19 29)",
+          "oklch(95% 0.19 29)"
+        ]
+      },
+      "fault-red": {
+        "role": "neutral",
+        "displayName": "Fault Red",
+        "tonalRamp": [
+          "oklch(15% 0.17 28)",
+          "oklch(27% 0.17 28)",
+          "oklch(39% 0.17 28)",
+          "oklch(51% 0.17 28)",
+          "oklch(63% 0.17 28)",
+          "oklch(75% 0.17 28)",
+          "oklch(85% 0.17 28)",
+          "oklch(95% 0.17 28)"
+        ]
+      },
+      "pass-green": {
+        "role": "neutral",
+        "displayName": "Pass Green",
+        "tonalRamp": [
+          "oklch(15% 0.11 150)",
+          "oklch(27% 0.11 150)",
+          "oklch(39% 0.11 150)",
+          "oklch(51% 0.11 150)",
+          "oklch(63% 0.11 150)",
+          "oklch(75% 0.11 150)",
+          "oklch(85% 0.11 150)",
+          "oklch(95% 0.11 150)"
+        ]
+      },
+      "caution-amber": {
+        "role": "neutral",
+        "displayName": "Caution Amber",
+        "tonalRamp": [
+          "oklch(15% 0.11 65)",
+          "oklch(27% 0.11 65)",
+          "oklch(39% 0.11 65)",
+          "oklch(51% 0.11 65)",
+          "oklch(63% 0.11 65)",
+          "oklch(75% 0.11 65)",
+          "oklch(85% 0.11 65)",
+          "oklch(95% 0.11 65)"
+        ]
+      },
+      "rev-white": {
+        "role": "tertiary",
+        "displayName": "Revision White",
+        "tonalRamp": [
+          "oklch(15% 0 0)",
+          "oklch(27% 0 0)",
+          "oklch(39% 0 0)",
+          "oklch(51% 0 0)",
+          "oklch(63% 0 0)",
+          "oklch(75% 0 0)",
+          "oklch(85% 0 0)",
+          "oklch(95% 0 0)"
+        ]
+      },
+      "rev-blue": {
+        "role": "tertiary",
+        "displayName": "Revision Blue",
+        "tonalRamp": [
+          "oklch(15% 0.03 260)",
+          "oklch(27% 0.03 260)",
+          "oklch(39% 0.03 260)",
+          "oklch(51% 0.03 260)",
+          "oklch(63% 0.03 260)",
+          "oklch(75% 0.03 260)",
+          "oklch(85% 0.03 260)",
+          "oklch(95% 0.03 260)"
+        ]
+      },
+      "rev-pink": {
+        "role": "tertiary",
+        "displayName": "Revision Pink",
+        "tonalRamp": [
+          "oklch(15% 0.03 5)",
+          "oklch(27% 0.03 5)",
+          "oklch(39% 0.03 5)",
+          "oklch(51% 0.03 5)",
+          "oklch(63% 0.03 5)",
+          "oklch(75% 0.03 5)",
+          "oklch(85% 0.03 5)",
+          "oklch(95% 0.03 5)"
+        ]
+      },
+      "rev-yellow": {
+        "role": "tertiary",
+        "displayName": "Revision Yellow",
+        "tonalRamp": [
+          "oklch(15% 0.06 100)",
+          "oklch(27% 0.06 100)",
+          "oklch(39% 0.06 100)",
+          "oklch(51% 0.06 100)",
+          "oklch(63% 0.06 100)",
+          "oklch(75% 0.06 100)",
+          "oklch(85% 0.06 100)",
+          "oklch(95% 0.06 100)"
+        ]
+      },
+      "rev-green": {
+        "role": "tertiary",
+        "displayName": "Revision Green",
+        "tonalRamp": [
+          "oklch(15% 0.035 140)",
+          "oklch(27% 0.035 140)",
+          "oklch(39% 0.035 140)",
+          "oklch(51% 0.035 140)",
+          "oklch(63% 0.035 140)",
+          "oklch(75% 0.035 140)",
+          "oklch(85% 0.035 140)",
+          "oklch(95% 0.035 140)"
+        ]
+      },
+      "rev-goldenrod": {
+        "role": "tertiary",
+        "displayName": "Revision Goldenrod",
+        "tonalRamp": [
+          "oklch(15% 0.065 85)",
+          "oklch(27% 0.065 85)",
+          "oklch(39% 0.065 85)",
+          "oklch(51% 0.065 85)",
+          "oklch(63% 0.065 85)",
+          "oklch(75% 0.065 85)",
+          "oklch(85% 0.065 85)",
+          "oklch(95% 0.065 85)"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "display": {
+        "displayName": "Display",
+        "purpose": "Page titles: Recordings, Runs, the run date, the spec goal."
+      },
+      "headline": {
+        "displayName": "Headline",
+        "purpose": "Section titles, selected item name, outcome names, wordmark."
+      },
+      "title": {
+        "displayName": "Title",
+        "purpose": "Sub-sections inside a column and cue-card form labels."
+      },
+      "body": {
+        "displayName": "Body",
+        "purpose": "All running text; prose capped at 68-72ch."
+      },
+      "label": {
+        "displayName": "Label",
+        "purpose": "Metadata lines, captions, column headers in Quiet Ink."
+      },
+      "mono": {
+        "displayName": "Mono",
+        "purpose": "Timecodes, line numbers, counts, versions, variable names, dates."
+      },
+      "mono-figure": {
+        "displayName": "Mono Figure",
+        "purpose": "The run score."
+      },
+      "script": {
+        "displayName": "Script",
+        "purpose": "The user's own spoken words only, set like script dialogue."
+      }
+    },
+    "shadows": [
+      {
+        "name": "cue-lift",
+        "value": "0 6px 24px -12px rgba(23,24,27,.35)",
+        "purpose": "Only the pending approval/question card, with an 80% ink border."
+      }
+    ],
+    "motion": [
+      {
+        "name": "live-breathe",
+        "value": "900ms cubic-bezier(.16,1,.3,1) infinite alternate",
+        "purpose": "Live rundown bar opacity .55 to 1; off under reduced motion."
+      },
+      {
+        "name": "cue-enter",
+        "value": "300ms ease-out",
+        "purpose": "Cue card fades in and slides from the top."
+      },
+      {
+        "name": "status-spin",
+        "value": "1.6s linear infinite",
+        "purpose": "Running/Starting loader glyph."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "sm",
+        "value": "640px"
+      },
+      {
+        "name": "split",
+        "value": "900px"
+      },
+      {
+        "name": "lg",
+        "value": "1024px"
+      },
+      {
+        "name": "wide",
+        "value": "1280px"
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "Ink-filled main action, one per action zone.",
+      "html": "<button class=\"ds-btn-primary\">Run on the list</button>",
+      "css": ".ds-btn-primary{height:32px;padding:0 10px;border:1px solid transparent;border-radius:7px;background:#17181b;color:#fbfbf9;font:500 14px/1 'Geist Variable',system-ui,sans-serif;transition:background .15s,transform .1s;cursor:pointer}.ds-btn-primary:hover{background:rgba(23,24,27,.8)}.ds-btn-primary:focus-visible{outline:none;box-shadow:0 0 0 3px rgba(23,24,27,.5)}.ds-btn-primary:active{transform:translateY(1px)}"
+    },
+    {
+      "name": "Outline Button",
+      "kind": "button",
+      "refersTo": "button-outline",
+      "description": "Secondary or repeat action: Build again, Stop, Approve all remaining.",
+      "html": "<button class=\"ds-btn-outline\">Build again</button>",
+      "css": ".ds-btn-outline{height:32px;padding:0 10px;border:1px solid #e4e2dc;border-radius:7px;background:#fbfbf9;color:#17181b;font:500 14px/1 'Geist Variable',system-ui,sans-serif;transition:background .15s;cursor:pointer}.ds-btn-outline:hover{background:#f2f1ec}.ds-btn-outline:focus-visible{outline:none;border-color:#17181b;box-shadow:0 0 0 3px rgba(23,24,27,.5)}.ds-btn-outline:active{transform:translateY(1px)}"
+    },
+    {
+      "name": "Ghost Button",
+      "kind": "button",
+      "refersTo": "button-ghost",
+      "description": "Dismissive actions such as Skip this one, with a key cue.",
+      "html": "<button class=\"ds-btn-ghost\">Skip this one <kbd class=\"ds-kbd\">R</kbd></button>",
+      "css": ".ds-btn-ghost{display:inline-flex;align-items:center;gap:6px;height:36px;padding:0 10px;border:0;border-radius:7px;background:transparent;color:#17181b;font:500 14px/1 'Geist Variable',system-ui,sans-serif;cursor:pointer;transition:background .15s}.ds-btn-ghost:hover{background:#f2f1ec}.ds-btn-ghost:focus-visible{outline:none;box-shadow:0 0 0 3px rgba(23,24,27,.5)}.ds-kbd{display:inline-flex;align-items:center;justify-content:center;height:20px;min-width:20px;padding:0 4px;border-radius:3px;background:#f2f1ec;color:#5f5e58;font:500 12px/1 'Geist Variable',system-ui,sans-serif}"
+    },
+    {
+      "name": "Input",
+      "kind": "input",
+      "refersTo": "input",
+      "description": "Field-stroke input; ink border and ring on focus.",
+      "html": "<input class=\"ds-input\" type=\"number\" placeholder=\"All\">",
+      "css": ".ds-input{height:32px;width:96px;padding:4px 10px;border:1px solid #d9d6cf;border-radius:7px;background:#fff;color:#17181b;font:400 14px/1.5 'Geist Mono Variable',ui-monospace,monospace;transition:border-color .15s}.ds-input::placeholder{color:#5f5e58}.ds-input:focus-visible{outline:none;border-color:#17181b;box-shadow:0 0 0 3px rgba(23,24,27,.5)}"
+    },
+    {
+      "name": "Top Navigation",
+      "kind": "nav",
+      "refersTo": "nav-link",
+      "description": "Sticky 48px bar: mark, wordmark, two links; current link on Wash.",
+      "html": "<nav class=\"ds-nav\"><span class=\"ds-brand\"><svg width=\"18\" height=\"18\" viewBox=\"0 0 18 18\" aria-hidden=\"true\"><rect x=\".75\" y=\".75\" width=\"16.5\" height=\"16.5\" rx=\"4\" fill=\"#17181b\"/><path d=\"M7 5.2v7.6l6-3.8z\" fill=\"#d7372b\"/></svg>Showrun</span><a href=\"#\" class=\"ds-nav-link\">Recordings</a><a href=\"#\" class=\"ds-nav-link\" aria-current=\"page\">Runs</a></nav>",
+      "css": ".ds-nav{display:flex;align-items:center;gap:12px;height:48px;padding:0 20px;border-bottom:1px solid #e4e2dc;background:rgba(251,251,249,.95)}.ds-brand{display:flex;align-items:center;gap:8px;margin-right:8px;font:600 15px/1 'Geist Variable',system-ui,sans-serif;letter-spacing:-.02em;color:#17181b}.ds-nav-link{padding:6px 10px;border-radius:5px;color:#5f5e58;font:500 13px/1 'Geist Variable',system-ui,sans-serif;text-decoration:none;transition:color .15s}.ds-nav-link:hover{color:#17181b}.ds-nav-link[aria-current=page]{background:#f2f1ec;color:#17181b}.ds-nav-link:focus-visible{outline:2px solid #17181b;outline-offset:2px}"
+    },
+    {
+      "name": "Status",
+      "kind": "chip",
+      "refersTo": "status",
+      "description": "Glyph plus word; never hue alone.",
+      "html": "<span class=\"ds-status ds-ok\"><svg width=\"14\" height=\"14\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2.25\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M20 6 9 17l-5-5\"/></svg>Done</span><span class=\"ds-status ds-live\"><svg width=\"14\" height=\"14\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2.25\" stroke-linecap=\"round\"><path d=\"M21 12a9 9 0 1 1-6.219-8.56\"/></svg>Running</span>",
+      "css": ".ds-status{display:inline-flex;align-items:center;gap:6px;margin-right:12px;font:500 13px/1 'Geist Variable',system-ui,sans-serif;white-space:nowrap}.ds-ok{color:#1d7038}.ds-live{color:#d7372b}.ds-live svg{animation:ds-spin 1.6s linear infinite}@keyframes ds-spin{to{transform:rotate(360deg)}}@media (prefers-reduced-motion:reduce){.ds-live svg{animation:none}}"
+    },
+    {
+      "name": "Rundown Row",
+      "kind": "custom",
+      "refersTo": "rundown-row",
+      "description": "Number, item and outcome, time bar on the shared scale; live bar in tally.",
+      "html": "<div class=\"ds-rundown\"><button class=\"ds-row\"><span class=\"ds-no\">4</span><span><b>Liza Ramos Package never arrived</b> <span class=\"ds-date\">2026-10-25</span><br><span class=\"ds-sub\">Lost Refund</span></span><span><span class=\"ds-bar\" style=\"width:48%\"></span><span class=\"ds-tc\">16.2s</span></span></button><button class=\"ds-row ds-sel\"><span class=\"ds-no\">5</span><span><b>Mark dela Cruz Wrong item</b><br><span class=\"ds-sub ds-livetxt\">Running</span></span><span><span class=\"ds-bar ds-livebar\" style=\"width:42%\"></span><span class=\"ds-tc ds-livetxt\">14.0s</span></span></button></div>",
+      "css": ".ds-rundown{width:420px;border:1px solid #e4e2dc;border-radius:7px;background:#fff;overflow:hidden;font:400 14px/1.4 'Geist Variable',system-ui,sans-serif;color:#17181b}.ds-row{display:grid;grid-template-columns:32px 1fr 104px;gap:8px;width:100%;padding:10px 12px;border:0;border-bottom:1px solid #efede8;background:none;text-align:left;font:inherit;color:inherit;cursor:pointer;transition:background .15s}.ds-row:last-child{border-bottom:0}.ds-row:hover{background:rgba(242,241,236,.6)}.ds-row:focus-visible{outline:2px solid #17181b;outline-offset:-2px}.ds-sel{background:#f2f1ec}.ds-no{text-align:right;font:400 12px 'Geist Mono Variable',ui-monospace,monospace;color:#5f5e58}.ds-row b{font-weight:500}.ds-date{font:400 13px 'Geist Mono Variable',ui-monospace,monospace;color:#5f5e58}.ds-tc{display:block;margin-top:4px;font:400 11.5px 'Geist Mono Variable',ui-monospace,monospace;color:#5f5e58}.ds-sub{font-size:12.5px;color:#5f5e58}.ds-bar{display:block;height:6px;margin-top:4px;background:rgba(23,24,27,.75)}.ds-livebar{background:#d7372b;animation:ds-breathe 900ms cubic-bezier(.16,1,.3,1) infinite alternate}.ds-livetxt{color:#d7372b}@keyframes ds-breathe{from{opacity:.55}to{opacity:1}}@media (prefers-reduced-motion:reduce){.ds-livebar{animation:none}}"
+    },
+    {
+      "name": "Cue Card",
+      "kind": "card",
+      "refersTo": "cue-card-head",
+      "description": "Pending approval: ink head, the one lift, keyboard-cued actions.",
+      "html": "<section class=\"ds-cue\"><header class=\"ds-cue-head\"><span>Waiting for your OK</span><span class=\"ds-cue-item\">Item 5</span></header><div class=\"ds-cue-body\"><p class=\"ds-cue-lead\">About to <b>click Ship a new one</b></p><p>Decision: <b>Replace</b>, because the order arrived damaged.</p><div class=\"ds-cue-actions\"><button class=\"ds-cue-ok\">Approve <kbd>A</kbd></button><button class=\"ds-cue-all\">Approve all remaining</button></div></div></section>",
+      "css": ".ds-cue{max-width:480px;border:1px solid rgba(23,24,27,.8);border-radius:7px;background:#fff;overflow:hidden;box-shadow:0 6px 24px -12px rgba(23,24,27,.35);font:400 14px/1.5 'Geist Variable',system-ui,sans-serif;color:#17181b}.ds-cue-head{display:flex;justify-content:space-between;padding:10px 16px;background:#17181b;color:#fbfbf9;font-weight:600}.ds-cue-item{font:400 12px 'Geist Mono Variable',ui-monospace,monospace;opacity:.7}.ds-cue-body{padding:16px}.ds-cue-body p{margin:0 0 6px}.ds-cue-lead{font-size:16px}.ds-cue-body b{font-weight:600}.ds-cue-actions{display:flex;gap:8px;margin-top:16px}.ds-cue-actions button{height:36px;padding:0 10px;border-radius:7px;font:500 14px/1 'Geist Variable',system-ui,sans-serif;cursor:pointer;transition:background .15s}.ds-cue-ok{border:0;background:#17181b;color:#fbfbf9}.ds-cue-ok:hover{background:rgba(23,24,27,.8)}.ds-cue-ok kbd{margin-left:4px;padding:2px 5px;border-radius:3px;background:rgba(251,251,249,.15);font:500 12px 'Geist Variable',system-ui,sans-serif}.ds-cue-all{border:1px solid #e4e2dc;background:#fbfbf9;color:#17181b}.ds-cue-all:hover{background:#f2f1ec}.ds-cue-actions button:focus-visible{outline:none;box-shadow:0 0 0 3px rgba(23,24,27,.5)}"
+    },
+    {
+      "name": "Revision Chip",
+      "kind": "chip",
+      "refersTo": "revision-chip",
+      "description": "Spec version as swatch, mono vN and revision name.",
+      "html": "<a href=\"#\" class=\"ds-rev\"><span class=\"ds-sw\" style=\"background:#f7dee3\"></span><span class=\"ds-v\">v3</span><span class=\"ds-rn\">Pink</span></a>",
+      "css": ".ds-rev{display:inline-flex;align-items:center;gap:6px;padding:2px 6px;border-radius:5px;color:#17181b;text-decoration:none;transition:background .15s}.ds-rev:hover{background:#f2f1ec}.ds-rev:focus-visible{outline:2px solid #17181b;outline-offset:2px}.ds-sw{width:12px;height:12px;border-radius:3px;border:1px solid rgba(0,0,0,.15)}.ds-v{font:400 12px 'Geist Mono Variable',ui-monospace,monospace}.ds-rn{font:400 12px 'Geist Variable',system-ui,sans-serif;color:#5f5e58}"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Run of Show",
+    "overview": "Showrun is a TV rundown sheet for office work. A run is a list of items in order. Each item has a number, an outcome and a time drawn to scale, and nothing irreversible goes out until the user gives the cue. The sheet is paper-white with ink type and warm hairline rules. One red, the studio tally light, marks what is live right now. Each Task Spec version takes a colour from the script revision sequence (White, Blue, Pink, Yellow, Green, Goldenrod), and changed lines carry an asterisk in the right margin, the way a revised script page does.\n\nThe density is a working document's: 14px body, tight rows split by faint rules, numbers and timecodes in mono so columns line up. Hierarchy comes from weight, mono against sans, and the ink-on-paper inversion of the cue card. Accent colour plays almost no part. The surface sits half-screen (about 960px) beside a browser window, so the layout puts the rundown and the current cue side by side and stacks them on narrow screens with the cue on top.\n\nThe world refuses the generic dashboard: no grey card grid, no status pills with dots, no sidebar, no vertical accent bars, no gradients, no glow, no emoji. It is light only, made to sit beside the light mock apps.",
+    "keyCharacteristics": [
+      "Paper ground, ink type, warm hairlines; flat sheets with 1px borders.",
+      "Tally red means live now and appears nowhere else in the UI.",
+      "Spec versions are named and tinted with script revision colours.",
+      "Durations are drawn as bars on one shared scale.",
+      "Status is always a glyph plus a word.",
+      "The user's own spoken words are set in Courier Prime, like script dialogue.",
+      "A pending approval is an inverted ink-headed cue card that takes over the work column."
+    ],
+    "rules": [
+      {
+        "name": "The Tally Rule",
+        "body": "Tally red marks the live item and only that; its one fixed home outside a run is the play cue in the mark. It never marks an error, a link, a hover or emphasis. Errors use Fault Red, a different and deeper hue.",
+        "section": "colors"
+      },
+      {
+        "name": "The Revision Rule",
+        "body": "A spec version is always shown as swatch + `vN` in mono + its revision name (\"v3 Pink\"). Revision colours tint paper. They never fill buttons or text.",
+        "section": "colors"
+      },
+      {
+        "name": "The Glyph-and-Word Rule",
+        "body": "A status never relies on hue alone. Each state pairs a 14px stroke icon with a 13px medium word. When the word is dropped for space, it stays in the DOM for screen readers.",
+        "section": "colors"
+      },
+      {
+        "name": "The Stopwatch Rule",
+        "body": "A number that can be compared or counted is set in Geist Mono. Tables also turn on tabular figures.",
+        "section": "typography"
+      },
+      {
+        "name": "The Dialogue Rule",
+        "body": "Courier Prime is only for words the user actually spoke. Never use it for system text, headings or decoration.",
+        "section": "typography"
+      },
+      {
+        "name": "The One Lift Rule",
+        "body": "Only a card that is waiting on the user leaves the page plane. Everything else stays flat.",
+        "section": "elevation"
+      }
+    ],
+    "dos": [
+      "**Do** keep Tally Red (`#d7372b`) for the live item only: its bar, its timecode, its Running status, plus the play cue in the mark.",
+      "**Do** show every status as glyph + word, with the word kept for screen readers when it is visually dropped.",
+      "**Do** set counts, timecodes, versions, variable names and dates in Geist Mono.",
+      "**Do** name and tint every spec version with its revision colour, and mark changed lines with the right-margin `*`.",
+      "**Do** draw durations as square 6px bars on one shared scale per run.",
+      "**Do** give the inverted cue card and its single shadow only to a step that waits on the user, with keyboard cues on its actions.",
+      "**Do** quote the user's spoken words in Courier Prime and nothing else."
+    ],
+    "donts": [
+      "**Don't** use status pills with dots, vertical accent bars on active or heading items, gradients, glow or emoji. Emoji in source data are stripped before display.",
+      "**Don't** add a dark theme. The UI is light only, beside light apps.",
+      "**Don't** build the generic dashboard: no grey card grid, no sidebar.",
+      "**Don't** use broadcast jargon in UI copy. The metaphor stays in the form, not the words (\"Waiting for your OK\", not \"Standby for cue\").",
+      "**Don't** add shadows to sheets, tables or menus at rest."
+    ]
+  }
+}
