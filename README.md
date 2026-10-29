@@ -11,8 +11,8 @@ Built for the Meta developer hackathon, Indie Developer track. All code in this 
 | Part | State |
 |---|---|
 | `mock-apps/`: Inbox, store admin, courier tracker | Done |
-| Chrome extension recorder | Not started |
-| Backend (Node + SQLite) | Not started |
+| `extension/`: Chrome recorder (clicks, typing, before/after screenshots, voice) | Done, end-to-end test passes |
+| `backend/`: Node + SQLite, stores sessions, transcribes voice | Recording API done; Task Spec next |
 | Playwright runner | Not started |
 | `scripts/risk-tests.mjs`: day-1 Meta API checks | Run, all pass (see log) |
 
@@ -37,6 +37,23 @@ npm run check                # seed matches the demo's decision rules
 | `GET /api/state` | Full state plus the expected outcome per email, for scoring runs |
 
 The 15 emails split as 4 replace, 4 refund, 3 lost (refund and apologize), 2 decline (over 30 days, one with a damage photo) and 2 wrong-item emails the rules don't cover, so Showrun has to ask.
+
+## Recording a task
+
+Needs Node 24+ and a Meta API key in `.env` at the repo root (`MODEL_API_KEY=...`, gitignored).
+
+```bash
+cd backend && npm install && npm start   # http://127.0.0.1:3200
+```
+
+1. Open `chrome://extensions`, turn on Developer mode, click **Load unpacked** and pick the `extension/` folder.
+2. Click the Showrun icon, name the task, press **Start recording**. The first time, a tab asks for the microphone; allow it, then stop and start again.
+3. Do the task once and say your reasons out loud ("over 30 days, so decline").
+4. Press **Stop recording**. The session (events, screenshots, transcript) is at `GET /api/sessions/<id>`.
+
+Each click or Enter gets a screenshot just before it and about a second after. Each event also stores the element's role, accessible name, CSS path and its box on Meta's 0-1000 grid. Password values are never stored.
+
+Test: with the mock apps running, `cd backend && npx playwright install chromium && npm run test:recorder`. It loads the extension in Chromium, plays `scripts/fixtures/narration.wav` as the mic, clicks through the hero case and checks the session.
 
 ## Meta models
 

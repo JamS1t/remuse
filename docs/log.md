@@ -26,3 +26,14 @@
 | 3. Latency | Spark grounding median 3.75 s (2.9-4.3 s). Worst case ~180 calls = ~11 min per 15-email batch. | Fine because DOM selectors come first; the model is the fallback and the step check, not every click. Run checks async where possible. |
 | 4. Cost | 2.1k-5.7k tokens per Spark call, most of the output is reasoning tokens (~90%). SAM reports 0 tokens, 1 image. | Set a spend limit on the Billing page. Prices still to check against dev.meta.ai/docs/pricing-rate-limits. |
 | Bonus: Transcribe | Works, 4.7 s for 14.8 s of audio, transcript exact. TTS narration with no pauses came back as one turn. | Real narration has pauses, so turns should split. If a turn spans several events, assign it to the events inside its time range. |
+
+## Thu Oct 29 (cont.): recorder, ahead of plan
+
+- Chrome MV3 extension (`extension/`, plain JS, no build step) + backend (`backend/`, Node 24 runs the TypeScript directly, built-in `node:sqlite`, no dependencies at runtime).
+- Screenshots: `captureVisibleTab` on `pointerdown` (before the click lands) and ~900 ms after. Chrome allows ~2 captures/s, so they are queued.
+- Typing: `change` only fires on blur, which comes after the next `pointerdown`, so the content script flushes the focused field's value first. Without this, the reply text showed up after the Send click.
+- Voice: offscreen document + MediaRecorder, then decoded and resampled to 16 kHz mono WAV in the browser for Muse Voice Transcribe (no ffmpeg). Offscreen pages can't show the mic prompt, so a one-time `mic.html` tab grants it.
+- Turn times are shifted by the audio start offset (~450 ms) onto the session clock, so a turn lines up with the clicks it describes.
+- Next.js client navigation doesn't reload the content script; it polls `location.href` every 250 ms.
+- `npm run test:recorder` passes: 19 events for the hero case, before/after frames correct (checked by eye: Replace button, then the "Replacement sent" banner), transcript exact.
+- Chrome stable no longer loads unpacked extensions from the command line, so the test uses Playwright's Chromium (`channel: "chromium"`). Loading by hand in normal Chrome still works.
