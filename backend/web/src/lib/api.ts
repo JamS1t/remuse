@@ -2,12 +2,12 @@ import { useCallback, useEffect, useState } from "react";
 
 // Shapes mirror backend/src (runner.ts, understand.ts, server.ts).
 export type Target = { role?: string; name?: string; selector?: string };
-export type Step = { id: string; do: string; describe: string; target?: Target; value?: string; vars?: string[]; irreversible?: boolean; healed?: string; max?: number; said?: string; tool?: { name: string; args: Record<string, string> } };
+export type Step = { id: string; do: string; describe: string; target?: Target; value?: string; vars?: string[]; irreversible?: boolean; healed?: string; max?: number; said?: string; message?: string; tool?: { name: string; args: Record<string, string> } };
 export type Variable = { name: string; kind: string; description: string; question?: string; demoValue?: unknown; candidate?: boolean };
 export type Rule = { if: string; then: string; said?: string; learned?: boolean };
 export type Spec = {
   goal: string; scope: string; scopeTypes?: string[];
-  inputs: { source?: "list" | "rows"; listUrl?: string; itemName?: string; columns?: { name: string; describe: string; demoValue: string }[] };
+  inputs: { source?: "list" | "rows" | "once"; listUrl?: string; itemName?: string; columns?: { name: string; describe: string; demoValue: string }[] };
   variables: Variable[]; steps: Step[]; rules: Rule[];
   outcomes: Record<string, { describe: string; steps: Step[]; reply?: string; demonstrated: boolean }>;
 };
@@ -22,7 +22,7 @@ export type SessionFull = {
 export type LogLine = { at: number; msg: string; level: "info" | "ok" | "warn" | "error"; shot?: string };
 export type ItemStatus = "waiting" | "running" | "approval" | "asking" | "done" | "skipped" | "failed";
 export type Candidate = { url: string; title: string; vars: Record<string, unknown>; score: number | null; shot?: string; best?: boolean };
-export type Item = { url: string; label: string; status: ItemStatus; outcome?: string; because?: string; expected?: string; decidedBy?: "rules" | "you" | "learned"; log: LogLine[]; candidates?: Candidate[] };
+export type Item = { url: string; label: string; status: ItemStatus; outcome?: string; because?: string; expected?: string; decidedBy?: "rules" | "you" | "learned"; log: LogLine[]; candidates?: Candidate[]; report?: string };
 export type Pending =
   | { kind: "approval"; item: number; step: string; target?: string; outcome?: string; because?: string; shot: string; healed?: string }
   | { kind: "ask"; item: number; question: string; options: string[]; shot: string }

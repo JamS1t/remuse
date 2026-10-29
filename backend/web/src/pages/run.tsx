@@ -124,6 +124,12 @@ export function RunPage({ id }: { id: string }) {
                 <Status s={it.status} />
               </div>
               {it.because ? <p className="mt-1.5">Decision: <span className="font-semibold capitalize">{words(it.outcome)}</span>, because {words(it.because)}</p> : null}
+              {it.report ? (
+                <div className="glass mt-3 rounded-2xl px-4 py-3">
+                  <p className="text-[12.5px] text-muted-foreground">Update</p>
+                  <p className="mt-1 text-[16px] leading-snug whitespace-pre-wrap">{it.report}</p>
+                </div>
+              ) : null}
               {it.candidates?.length ? <Compared list={it.candidates} file={file} /> : null}
               {it.log.some((l) => l.shot) ? (
                 <div className="mt-4">

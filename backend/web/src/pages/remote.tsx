@@ -13,12 +13,14 @@ import { cn } from "@/lib/utils";
 
 type Task = {
   sessionId: string; title?: string; specId?: number; version?: number; built: boolean; goal?: string; itemName?: string;
-  source?: "list" | "rows"; columns: { name: string; demoValue: string }[]; endedAt?: number;
+  source?: "list" | "rows" | "once"; columns: { name: string; demoValue: string }[]; endedAt?: number;
   learnStage?: "listening" | "understanding" | "building" | "ready" | "failed" | null; learnError?: string | null;
   rules: { if: string; then: string; said?: string }[]; guessed: string[]; steps: number; compares: boolean; checks: { passed: number; total: number };
+  askedSchedule: { everyMinutes?: number; time?: string; days?: string; said?: string } | null;
+  lastReport: { text: string; at: number; runId: string } | null;
 };
 type Rec = { recording: boolean; rec?: { audioError?: string }; waitingForMic?: boolean };
-type Schedule = { id: number; specId: number; time: string; days: string };
+type Schedule = { id: number; specId: number; sessionId: string; time: string; days: string; everyMinutes: number | null };
 
 const AGENT = location.origin;
 const open = (hash: string) => (inPanel ? ext("openTab", { url: `${AGENT}/${hash}` }) : window.open(`/${hash}`, "_blank"));
@@ -34,6 +36,8 @@ const markSeen = (id: string) => { try { localStorage.setItem(seenKey(id), "1");
 
 const DAYS = ["M", "T", "W", "T", "F", "S", "S"];
 const NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+const every = (m: number) => (m % 60 === 0 ? (m === 60 ? "every hour" : `every ${m / 60} hours`) : `every ${m} minutes`);
+const describeSchedule = (s: { everyMinutes?: number | null; days?: string; time?: string }) => (s.everyMinutes ? every(s.everyMinutes) : when(s.days ?? "1234567", s.time ?? "09:00"));
 function when(days: string, time: string) {
   const at = new Date(`2000-01-01T${time}`).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
   const d = days === "1234567" ? "every day" : days === "12345" ? "every weekday" : days === "67" ? "every weekend" : `every ${[...days].map((x) => NAMES[Number(x) - 1]).join(", ")}`;
@@ -177,11 +181,28 @@ function Learned({ t, onDone, onRetry }: { t: Task; onDone: () => void; onRetry:
         {t.guessed.length ? <li className="flex items-center gap-1.5 text-warn"><CircleAlert className="size-3.5" />I guessed how to {t.guessed.map(words).join(", ")}; check it once</li> : null}
         <li className="flex items-center gap-1.5 text-muted-foreground"><Check className="size-3.5" />Anything I'd pay or send for waits for your OK</li>
       </ul>
+      {t.askedSchedule && t.specId ? <AskedSchedule t={t} onDone={onDone} /> : null}
       <div className="mt-4 flex gap-2">
-        <Button size="sm" className="flex-1" onClick={onDone}>Looks right</Button>
+        <Button size="sm" className="flex-1" variant={t.askedSchedule ? "outline" : "default"} onClick={onDone}>Looks right</Button>
         <Button size="sm" variant="outline" onClick={() => open(`#/spec/${t.specId}`)}>Review</Button>
       </div>
     </section>
+  );
+}
+
+/** You said how often ("every hour"): one tap sets it up. */
+function AskedSchedule({ t, onDone }: { t: Task; onDone: () => void }) {
+  const { busy, run } = useAction();
+  const s = t.askedSchedule!;
+  const go = () => run("sched", async () => {
+    await api("/schedules", "POST", { specId: t.specId, everyMinutes: s.everyMinutes, time: s.time, days: s.days });
+    toast.success(`I'll do it ${describeSchedule(s)}, even with Chrome closed.`);
+    onDone();
+  });
+  return (
+    <Button className="mt-4 w-full rounded-full" onClick={go} disabled={!!busy}>
+      {busy ? <LoaderCircle className="animate-spin" /> : <CalendarClock />}Yes, repeat it {describeSchedule(s)}
+    </Button>
   );
 }
 
@@ -193,7 +214,7 @@ function Tasks({ tasks }: { tasks: Task[] | null }) {
   return (
     <section>
       <h2 className="mb-2 px-1 text-[13px] font-medium text-muted-foreground">Do it again</h2>
-      <ul className="glass divide-y divide-rule overflow-hidden rounded-2xl">{list.map((t) => <TaskRow key={t.sessionId} t={t} schedule={sched?.find((x) => x.specId === t.specId) ?? null} onSchedule={reload} />)}</ul>
+      <ul className="glass divide-y divide-rule overflow-hidden rounded-2xl">{list.map((t) => <TaskRow key={t.sessionId} t={t} schedule={sched?.find((x) => x.sessionId === t.sessionId) ?? null} onSchedule={reload} />)}</ul>
     </section>
   );
 }
@@ -201,15 +222,17 @@ function Tasks({ tasks }: { tasks: Task[] | null }) {
 function TaskRow({ t, schedule, onSchedule }: { t: Task; schedule: Schedule | null; onSchedule: () => void }) {
   const [time, setTime] = useState(schedule?.time ?? "09:00");
   const [days, setDays] = useState(schedule?.days ?? "12345");
+  const [hourly, setHourly] = useState<number | null>(schedule?.everyMinutes ?? t.askedSchedule?.everyMinutes ?? null);
   const [openForm, setOpenForm] = useState(false);
   const [rows, setRows] = useState([t.columns.map((c) => c.name).join(","), t.columns.map((c) => c.demoValue).join(",")].join("\n"));
   const [count, setCount] = useState("");
   const { busy, run } = useAction();
   const isRows = t.source === "rows";
+  const isOnce = t.source === "once";
   const repeat = () => run("sched", async () => {
     const extra = isRows ? { rows: parseCsv(rows) } : { limit: count ? Number(count) : undefined };
-    await api("/schedules", "POST", { specId: t.specId, time, days, ...extra });
-    toast.success(`I'll do this ${when(days, time)}, even with Chrome closed.`);
+    await api("/schedules", "POST", { specId: t.specId, ...(hourly ? { everyMinutes: hourly } : { time, days }), ...extra });
+    toast.success(`I'll do this ${hourly ? every(hourly) : when(days, time)}, even with Chrome closed.`);
     onSchedule();
   });
   const unschedule = () => run("sched", async () => { await api(`/schedules/${schedule!.id}`, "DELETE"); onSchedule(); });
@@ -225,16 +248,22 @@ function TaskRow({ t, schedule, onSchedule }: { t: Task; schedule: Schedule | nu
         <button type="button" onClick={() => open(`#/spec/${t.specId}`)} className="min-w-0 flex-1 text-left">
           <span className="block truncate font-medium">{t.title || "Untitled task"}</span>
           {schedule
-            ? <span className="mt-0.5 inline-flex items-center gap-1 text-[12.5px] text-muted-foreground"><CalendarClock className="size-3.5" />{when(schedule.days, schedule.time)}</span>
+            ? <span className="mt-0.5 inline-flex items-center gap-1 text-[12.5px] text-muted-foreground"><CalendarClock className="size-3.5" />{describeSchedule(schedule)}</span>
             : t.goal ? <span className="line-clamp-1 text-[12.5px] text-muted-foreground">{t.goal}</span> : null}
         </button>
         {t.built
           ? <Button size="sm" variant={openForm ? "ghost" : "secondary"} className="rounded-full" onClick={() => setOpenForm((o) => !o)} aria-expanded={openForm}>{openForm ? <X /> : <Play className="fill-current" />}Again</Button>
           : <Button size="sm" variant="outline" className="rounded-full" onClick={() => open(`#/spec/${t.specId}`)}>Review</Button>}
       </div>
+      {t.lastReport ? (
+        <button type="button" onClick={() => open(`#/run/${t.lastReport!.runId}`)} className="mt-2 block w-full rounded-xl bg-white/[0.04] px-3 py-2 text-left">
+          <span className="block text-[11.5px] text-muted-foreground">Latest update · {new Date(t.lastReport.at).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}</span>
+          <span className="line-clamp-3 text-[13px]">{t.lastReport.text}</span>
+        </button>
+      ) : null}
       {openForm ? (
         <div className="mt-3 space-y-2.5">
-          {isRows ? (
+          {isOnce ? null : isRows ? (
             <>
               <p className="text-[12.5px] text-muted-foreground">One {t.itemName ?? "item"} per line. Pasting from a spreadsheet works.</p>
               <Textarea value={rows} onChange={(e) => setRows(e.target.value)} rows={4} spellCheck={false} className="rounded-xl bg-black/30 font-mono text-[12.5px]" />
@@ -247,7 +276,18 @@ function TaskRow({ t, schedule, onSchedule }: { t: Task; schedule: Schedule | nu
           <Button className="w-full rounded-full" onClick={go} disabled={!!busy}>{busy === "run" ? <LoaderCircle className="animate-spin" /> : <Play className="fill-current" />}Do it now</Button>
           <div className="rounded-xl border border-dashed px-3 py-2.5">
             <p className="text-[12.5px] text-muted-foreground">Or on its own, even with Chrome closed</p>
-            <div className="mt-2 flex flex-wrap items-center gap-1">
+            <div className="mt-2 flex gap-1 text-[12px]">
+              {[["Every few hours", 60], ["On days", null]].map(([label, v]) => (
+                <button key={String(label)} type="button" aria-pressed={hourly === null ? v === null : v !== null} onClick={() => setHourly(v as number | null)}
+                  className={cn("rounded-full border px-3 py-1 font-medium transition-colors", (hourly === null ? v === null : v !== null) ? "border-foreground bg-foreground text-background" : "text-muted-foreground hover:text-foreground")}>{label}</button>
+              ))}
+            </div>
+            {hourly !== null ? (
+              <label className="mt-2 flex items-center gap-2 text-[13px] text-muted-foreground">Every
+                <Input type="number" min={1} max={24} value={hourly / 60} onChange={(e) => setHourly(Math.max(1, Math.min(24, Number(e.target.value) || 1)) * 60)} className="h-7 w-16 rounded-full px-3 font-mono text-[12.5px]" />
+                hour(s)
+              </label>
+            ) : <div className="mt-2 flex flex-wrap items-center gap-1">
               {DAYS.map((d, i) => {
                 const on = days.includes(String(i + 1));
                 return (
@@ -256,7 +296,7 @@ function TaskRow({ t, schedule, onSchedule }: { t: Task; schedule: Schedule | nu
                 );
               })}
               <Input type="time" value={time} onChange={(e) => setTime(e.target.value)} aria-label="Time" className="ml-auto h-7 w-[96px] rounded-full px-3 font-mono text-[12.5px]" />
-            </div>
+            </div>}
             <div className="mt-2.5 flex gap-2">
               <Button size="sm" variant="outline" className="flex-1 rounded-full" onClick={repeat} disabled={!!busy || !days}><CalendarClock />{schedule ? "Update" : "Repeat it"}</Button>
               {schedule ? <Button size="sm" variant="ghost" className="rounded-full" onClick={unschedule} disabled={!!busy}>Stop repeating</Button> : null}

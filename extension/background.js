@@ -59,15 +59,30 @@ async function micAllowed() {
 }
 let pendingStart = null; // { title, tabId } while the mic tab is open
 
-async function start(title) {
+// Tabs opened before the extension was installed or reloaded have no working recorder (Chrome cuts
+// the old one off). Attach a fresh one to every open web page.
+async function attachToOpenTabs() {
+  const tabs = await chrome.tabs.query({ url: ["http://*/*", "https://*/*"] });
+  await Promise.all(tabs.map((t) => chrome.scripting.executeScript({ target: { tabId: t.id }, files: ["content.js"] }).catch(() => {})));
+}
+chrome.runtime.onInstalled.addListener(() => { attachToOpenTabs(); });
+
+// Closing the mic tab without answering cancels the pending start, so nothing stays "waiting for mic".
+chrome.tabs.onRemoved.addListener(async (tabId) => {
+  const p = pendingStart ?? (await chrome.storage.session.get("pendingStart")).pendingStart;
+  if (p?.micTabId === tabId) { pendingStart = null; await chrome.storage.session.remove("pendingStart"); }
+});
+
+async function start(title, { skipMicCheck = false } = {}) {
   if (await current()) throw new Error("already recording");
-  if (!(await micAllowed())) {
+  if (!skipMicCheck && !(await micAllowed())) {
     const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-    pendingStart = { title, tabId: tab?.id };
+    const mic = await chrome.tabs.create({ url: "mic.html" });
+    pendingStart = { title, tabId: tab?.id, micTabId: mic.id };
     await chrome.storage.session.set({ pendingStart });
-    await chrome.tabs.create({ url: "mic.html" });
     return { needsMic: true };
   }
+  await attachToOpenTabs();
   const t0 = Date.now();
   const { id } = await api("/sessions", "POST", { title, startedAt: t0 });
   const r = { id, t0, audioOffsetMs: null, audioError: null };
@@ -177,11 +192,13 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
     // Back to the page the person was on, then start the recording they asked for.
     (async () => {
       const p = pendingStart ?? (await chrome.storage.session.get("pendingStart")).pendingStart;
-      pendingStart = null; await chrome.storage.session.remove("pendingStart");
       if (sender.tab?.id) chrome.tabs.remove(sender.tab.id).catch(() => {});
-      if (!p) return;
+      // Only the mic tab this start opened may resume it; any other grant just closes its tab.
+      if (!p || p.micTabId !== sender.tab?.id) return;
+      pendingStart = null; await chrome.storage.session.remove("pendingStart");
       if (p.tabId) await chrome.tabs.update(p.tabId, { active: true }).catch(() => {});
-      await start(p.title).catch((e) => console.warn("couldn't start after the mic was allowed:", e.message));
+      // The person just allowed it: don't re-check and risk reopening the mic tab in a loop.
+      await start(p.title, { skipMicCheck: true }).catch((e) => console.warn("couldn't start after the mic was allowed:", e.message));
     })();
     return;
   }

@@ -35,6 +35,7 @@ function Steps({ steps }: { steps: Step[] }) {
             {s.target?.name && s.do !== "open_item" ? <span>{s.target.role} <span className="font-medium text-foreground">“{s.target.name}”</span></span> : null}
             {s.do === "fill" && s.value ? <span>types <span className="font-mono text-foreground">{s.value}</span></span> : null}
             {s.do === "compare" ? <span className="font-medium text-foreground">Opens the top {s.max ?? 5} results and keeps the best</span> : null}
+            {s.do === "report" && s.message ? <span>tells you <span className="text-foreground">“{s.message}”</span></span> : null}
             {s.vars?.length ? <span>{s.do === "compare" ? "reads on each" : "reads"} <span className="font-mono text-foreground">{s.vars.join(", ")}</span></span> : null}
             {s.tool ? <span>uses the site's WebMCP tool <span className="font-mono text-foreground">{s.tool.name}</span> when offered</span> : null}
             {s.irreversible ? <span className="inline-flex items-center gap-1 font-medium text-foreground"><Hand className="size-3.5" />Waits for your OK</span> : null}
@@ -89,6 +90,7 @@ export function SpecPage({ id }: { id: number }) {
   const versions = session?.specs ?? [];
   const cols = s.inputs.columns ?? [];
   const isRows = s.inputs.source === "rows" || (!s.inputs.listUrl && cols.length > 0);
+  const isOnce = s.inputs.source === "once";
   const rowsValue = rowsText ?? [cols.map((c) => c.name).join(","), cols.map((c) => csvCell(c.demoValue)).join(",")].join("\n");
 
   const build = () => run("build", async () => { await api(`/specs/${id}/build`, "POST"); reload(); });
@@ -135,16 +137,16 @@ export function SpecPage({ id }: { id: number }) {
               ) : <span className="text-[13px] text-muted-foreground">Needed before a run</span>}
             </div>
             <div className="ml-auto flex flex-wrap items-center gap-4">
-              <div className="flex items-center gap-2">
+              {isOnce ? null : <div className="flex items-center gap-2">
                 <Label htmlFor="limit" className="font-normal text-muted-foreground">{item[0].toUpperCase() + item.slice(1)}s</Label>
                 <Input id="limit" type="number" min={1} placeholder="All" value={limit} onChange={(e) => setLimit(e.target.value)} className="h-8 w-20 bg-card font-mono" />
-              </div>
+              </div>}
               <div className="flex items-center gap-2">
                 <Checkbox id="auto" checked={auto} onCheckedChange={(v) => setAuto(v === true)} />
                 <Label htmlFor="auto" className="font-normal">Approve irreversible steps in advance</Label>
               </div>
               <Button onClick={start} disabled={!!busy || !row.code} title={row.code ? undefined : "Build the rules first"}>
-                {busy === "run" ? <LoaderCircle className="animate-spin" /> : <Play className="fill-current" />}{isRows ? "Run on these rows" : "Run on the list"}
+                {busy === "run" ? <LoaderCircle className="animate-spin" /> : <Play className="fill-current" />}{isRows ? "Run on these rows" : isOnce ? "Run it now" : "Run on the list"}
               </Button>
             </div>
             {isRows ? (
@@ -170,7 +172,9 @@ export function SpecPage({ id }: { id: number }) {
 
           <TabsContent value="steps" className="mt-5 grid gap-6 lg:grid-cols-[1fr_320px]">
             <div>
-              {isRows
+              {isOnce
+                ? <p className="mb-3 text-muted-foreground">Runs on its own each time, nothing to go through.</p>
+                : isRows
                 ? <p className="mb-3 text-muted-foreground">For every {item} you give it, with {cols.map((c, i) => <span key={c.name}>{i ? ", " : ""}<span className="font-mono text-[13px] text-foreground">{c.name}</span> ({c.describe})</span>)}</p>
                 : <p className="mb-3 text-muted-foreground">For every {item} in <a href={s.inputs.listUrl} target="_blank" rel="noreferrer" className="font-mono text-[13px]">{s.inputs.listUrl}</a></p>}
               <Sheet><Steps steps={s.steps} /></Sheet>

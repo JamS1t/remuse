@@ -1,6 +1,11 @@
 // Runs in every page. Reports clicks, typing and page changes to the background worker,
 // which drops them unless a recording is running.
+// The background also injects this into tabs that were open before the extension (re)loaded, whose
+// first copy is cut off. Run once per live extension: a copy from before a reload is dead and doesn't count.
 (() => {
+  const alive = () => { try { return !!chrome.runtime?.id; } catch { return false; } };
+  if (window.__remuseRecorder?.alive()) return;
+  window.__remuseRecorder = { alive };
   const send = (kind, data = {}) => {
     try {
       chrome.runtime.sendMessage({ type: "event", ev: { at: Date.now(), kind, url: location.href, title: document.title, ...data } }).catch(() => {});

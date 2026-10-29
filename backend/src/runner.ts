@@ -8,6 +8,7 @@ import { askJson, ground, sam, text, png, type Box } from "./meta.ts";
 import { load, type Rules } from "./build.ts";
 import type { Spec, Step, Target } from "./understand.ts";
 import { applyLogins } from "./logins.ts";
+import { notify } from "./notify.ts";
 
 export type LogLine = { at: number; msg: string; level: "info" | "ok" | "warn" | "error"; shot?: string };
 export type Candidate = { url: string; title: string; vars: Record<string, unknown>; score: number | null; shot?: string; best?: boolean };
@@ -16,6 +17,7 @@ export type Item = {
   status: "waiting" | "running" | "approval" | "asking" | "done" | "skipped" | "failed";
   vars: Record<string, unknown>; outcome?: string; because?: string; expected?: string; decidedBy?: "rules" | "you" | "learned"; log: LogLine[];
   candidates?: Candidate[];
+  report?: string; // the update a "report" step gave the person
 };
 export type Pending =
   | { kind: "approval"; item: number; step: string; target?: string; outcome?: string; because?: string; shot: string; healed?: string }
@@ -65,6 +67,8 @@ export class Runner {
   dir: string;
   page!: Page;
   stopped = false;
+  // Variables from the previous run of this task, by item label, for {{prev_<name>}} ("change since last time").
+  prev: Record<string, Record<string, unknown>> = {};
   baseRules: Spec["rules"]; // decide() indexes these; learned rules are added to the spec, not here
   private resolve: ((a: Answer) => void) | null = null;
   private shots = 0;
@@ -114,7 +118,10 @@ export class Runner {
     try {
       this.page = browser.pages()[0] ?? (await browser.newPage());
       const { source, listUrl, itemSelector } = this.spec.inputs;
-      if (source === "rows") {
+      if (source === "once") {
+        // Nothing to go through: a check or an update that runs as one item.
+        this.run.items = [{ url: "", label: (this.spec.title ?? this.spec.goal).slice(0, 90), status: "waiting", vars: {}, log: [] }];
+      } else if (source === "rows") {
         // One item per row the person gave; its columns become the item's variables.
         const rows = (this.run.rows ?? []).slice(0, limit);
         if (!rows.length) throw new Error("this task needs rows to work on, and none were given");
@@ -156,6 +163,10 @@ export class Runner {
   private async runItem() {
     const it = this.item;
     it.vars = { ...it.vars, item_url: it.url, today: manila() };
+    const labels = Object.keys(this.prev);
+    // A "once" task is the same single item every time even if its name changed; other items match by label only.
+    const before = this.prev[it.label] ?? (this.spec.inputs.source === "once" && labels.length === 1 ? this.prev[labels[0]] : undefined);
+    for (const v of this.spec.variables) it.vars[`prev_${v.name}`] = before?.[v.name] ?? null;
     for (const step of this.spec.steps) if (!(await this.step(step))) return;
     for (const v of this.spec.variables.filter((x) => x.kind === "computed" && !x.candidate)) {
       it.vars[v.name] = this.rules.compute[v.name]?.(it.vars);
@@ -299,6 +310,18 @@ export class Runner {
     else if (step.do === "goto") await this.page.goto(step.url!);
     else if (step.do === "extract") return this.extract(step.vars ?? []);
     else if (step.do === "compare") return this.compare(step);
+    else if (step.do === "report") {
+      // Tell the person: a Windows notification, and the update is kept on the run.
+      // A value that doesn't exist yet (no previous run to compare with) drops its "(… since last time)"
+      // part instead of leaving a gap; any other missing value shows as a dash.
+      const NONE = "\u0000";
+      const msg = (raw.message ?? step.describe).replace(/\{\{\s*(\w+)\s*\}\}/g, (_, k) => (v[k] === undefined || v[k] === null || v[k] === "" ? NONE : String(v[k])))
+        .replace(/\s*\([^()]*\u0000[^()]*\)/g, "").replaceAll(NONE, "–");
+      it.report = msg;
+      this.log(`Update: ${msg}`, "ok");
+      notify(this.spec.title ?? "Remuse update", msg, `http://127.0.0.1:${process.env.PORT ?? 3200}/#/run/${this.run.id}`);
+      return;
+    }
     else if (raw.tool && (await this.hasTool(raw.tool.name))) {
       // The page offers this action as a WebMCP tool: call it directly instead of clicking. Same approval gate.
       const gated = raw.irreversible || IRREVERSIBLE.test(step.target?.name ?? "") || IRREVERSIBLE.test(raw.tool.name.replace(/_/g, " "));

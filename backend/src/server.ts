@@ -2,7 +2,7 @@
 // Run: npm start   (port 3200, reads MODEL_API_KEY from ../.env)
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { DatabaseSync } from "node:sqlite";
-import { mkdirSync, readFileSync, writeFileSync, existsSync, rmSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync, existsSync, rmSync, statSync } from "node:fs";
 import { join, dirname, extname } from "node:path";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
@@ -130,9 +130,12 @@ function saveSpec(sessionId: string, spec: Spec, note: string, code: string | nu
 // A recording with no actions (stopped right away, mic trouble) teaches nothing and only clutters the
 // history: it is dropped on Stop, and old ones are cleared when the Agent starts.
 const ACTIONS = "kind NOT IN ('start', 'tools')";
+// Your voice counts: a recording where you talked it through is kept even with no clicks (more than a
+// second of 16 kHz mono audio).
+const hasVoice = (id: string) => { const f = join(sessionDir(id), "voice.wav"); return existsSync(f) && statSync(f).size > 44 + 32000; };
 const isEmpty = (id: string) =>
   !(db.prepare(`SELECT 1 FROM events WHERE session_id = ? AND ${ACTIONS} LIMIT 1`).get(id)) &&
-  !(db.prepare("SELECT 1 FROM specs WHERE session_id = ? LIMIT 1").get(id));
+  !(db.prepare("SELECT 1 FROM specs WHERE session_id = ? LIMIT 1").get(id)) && !hasVoice(id);
 function discard(id: string) {
   db.prepare("DELETE FROM events WHERE session_id = ?").run(id);
   db.prepare("DELETE FROM turns WHERE session_id = ?").run(id);
@@ -216,10 +219,17 @@ db.exec(`CREATE TABLE IF NOT EXISTS schedules (
   id INTEGER PRIMARY KEY, spec_id INTEGER NOT NULL REFERENCES specs(id), time TEXT NOT NULL, days TEXT NOT NULL,
   rows TEXT, run_limit INTEGER, enabled INTEGER NOT NULL DEFAULT 1, last_run TEXT
 )`);
-type Schedule = { id: number; specId: number; time: string; days: string; rows: Record<string, string>[] | null; limit: number | null; enabled: boolean; lastRun: string | null };
-const schedules = (): Schedule[] => (db.prepare("SELECT * FROM schedules ORDER BY id").all() as any[]).map((s) => ({
-  id: s.id, specId: s.spec_id, time: s.time, days: s.days, rows: s.rows ? JSON.parse(s.rows) : null, limit: s.run_limit, enabled: !!s.enabled, lastRun: s.last_run,
+// Two kinds: every N minutes ("every hour"), or on chosen days at a time ("weekdays at 9:00").
+for (const col of ["every_minutes INTEGER", "last_at INTEGER"]) { try { db.exec(`ALTER TABLE schedules ADD COLUMN ${col}`); } catch { /* already there */ } }
+type Schedule = { id: number; specId: number; sessionId: string; time: string; days: string; everyMinutes: number | null; rows: Record<string, string>[] | null; limit: number | null; enabled: boolean; lastRun: string | null; lastAt: number | null };
+// sessionId names the task, so a schedule stays attached to it across new spec versions.
+const schedules = (): Schedule[] => (db.prepare("SELECT s.*, x.session_id FROM schedules s JOIN specs x ON x.id = s.spec_id ORDER BY s.id").all() as any[]).map((s) => ({
+  id: s.id, specId: s.spec_id, sessionId: s.session_id, time: s.time, days: s.days, everyMinutes: s.every_minutes, rows: s.rows ? JSON.parse(s.rows) : null,
+  limit: s.run_limit, enabled: !!s.enabled, lastRun: s.last_run, lastAt: s.last_at,
 }));
+// A schedule follows its task: it always runs the task's newest Task Spec, including versions learned since.
+// Only built versions can run: an edited-but-not-rebuilt version must not silence the schedule.
+const latestSpec = (specId: number) => (db.prepare("SELECT MAX(id) AS id FROM specs WHERE code IS NOT NULL AND session_id = (SELECT session_id FROM specs WHERE id = ?)").get(specId) as any)?.id ?? specId;
 // Manila clock: "HH:MM", ISO weekday 1 (Mon) .. 7 (Sun), and the date.
 function manilaNow() {
   const parts = Object.fromEntries(new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Manila", weekday: "short", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(new Date()).map((x) => [x.type, x.value]));
@@ -228,10 +238,13 @@ function manilaNow() {
 setInterval(async () => {
   const now = manilaNow();
   for (const s of schedules()) {
-    if (!s.enabled || s.lastRun === now.date || !s.days.includes(now.day) || s.time > now.time) continue;
+    if (!s.enabled) continue;
+    const due = s.everyMinutes ? Date.now() - (s.lastAt ?? 0) >= s.everyMinutes * 60_000
+      : s.lastRun !== now.date && s.days.includes(now.day) && s.time <= now.time;
+    if (!due) continue;
     if (active && !["done", "failed", "stopped"].includes(active.run.status)) return; // try again next tick
-    db.prepare("UPDATE schedules SET last_run = ? WHERE id = ?").run(now.date, s.id);
-    try { await startRun(s.specId, { rows: s.rows ?? undefined, limit: s.limit ?? undefined, scheduled: true }); }
+    db.prepare("UPDATE schedules SET last_run = ?, last_at = ? WHERE id = ?").run(now.date, Date.now(), s.id);
+    try { await startRun(latestSpec(s.specId), { rows: s.rows ?? undefined, limit: s.limit ?? undefined, scheduled: true }); }
     catch (e) { notify("Remuse couldn't start a scheduled task", (e as Error).message, `http://127.0.0.1:${PORT}/#/spec/${s.specId}`); }
   }
 }, 30_000).unref();
@@ -259,6 +272,7 @@ async function startRun(specId: number, opts: { limit?: number; autoApprove?: bo
     }
     asked = key;
   });
+  runner.prev = lastValues(row.sessionId);
   active = runner;
   saveRun(run);
   runner.start(opts.limit).then(() => {
@@ -272,6 +286,37 @@ async function startRun(specId: number, opts: { limit?: number; autoApprove?: bo
     }
   });
   return run;
+}
+
+// Parsed runs, kept while their row is unchanged: the sidebar asks for these every couple of seconds.
+const parsed = new Map<string, { at: number; run: Run }>();
+function recentRuns(sessionId: string): Run[] {
+  const rows = db.prepare(`SELECT r.id, r.updated_at, r.json FROM runs r JOIN specs x ON x.id = r.spec_id WHERE x.session_id = ? ORDER BY r.updated_at DESC LIMIT 10`).all(sessionId) as any[];
+  return rows.map((r) => {
+    const hit = parsed.get(r.id);
+    if (hit && hit.at === r.updated_at) return hit.run;
+    const run = JSON.parse(r.json) as Run;
+    parsed.set(r.id, { at: r.updated_at, run });
+    return run;
+  });
+}
+
+/** The newest update a "report" step gave for this task, if any. */
+function lastReport(sessionId: string): { text: string; at: number; runId: string } | null {
+  for (const run of recentRuns(sessionId)) {
+    const it = [...run.items].reverse().find((i) => i.report);
+    if (it) return { text: it.report!, at: run.endedAt ?? run.startedAt, runId: run.id };
+  }
+  return null;
+}
+
+/** The item variables of this task's most recent finished run, by item label. */
+function lastValues(sessionId: string): Record<string, Record<string, unknown>> {
+  for (const run of recentRuns(sessionId)) {
+    const done = run.items.filter((i) => i.status === "done");
+    if (done.length) return Object.fromEntries(done.map((i) => [i.label, Object.fromEntries(Object.entries(i.vars).filter(([k]) => !k.startsWith("prev_")))]));
+  }
+  return {};
 }
 
 function getRun(id: string): Run {
@@ -305,13 +350,17 @@ async function route(req: IncomingMessage, res: ServerResponse) {
     const b = await json(req);
     const specId = Number(b.specId);
     specRow(specId); // 404 if it doesn't exist
-    if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(b.time ?? "")) throw new HttpError(400, "time must be HH:MM");
+    const every = b.everyMinutes ? Math.round(Number(b.everyMinutes)) : null;
+    if (every !== null && !(every >= 15 && every <= 1440)) throw new HttpError(400, "repeat between every 15 minutes and once a day");
+    if (!every && !/^([01]\d|2[0-3]):[0-5]\d$/.test(b.time ?? "")) throw new HttpError(400, "time must be HH:MM");
     const days = String(b.days ?? "1234567").replace(/[^1-7]/g, "");
     if (!days) throw new HttpError(400, "pick at least one day");
     const rows = Array.isArray(b.rows) ? JSON.stringify(b.rows) : null;
     // One schedule per task: saving again replaces it.
     db.prepare("DELETE FROM schedules WHERE spec_id IN (SELECT id FROM specs WHERE session_id = (SELECT session_id FROM specs WHERE id = ?))").run(specId);
-    db.prepare("INSERT INTO schedules (spec_id, time, days, rows, run_limit, enabled) VALUES (?, ?, ?, ?, ?, 1)").run(specId, b.time, days, rows, b.limit ? Number(b.limit) : null);
+    // An interval schedule starts counting now; the first run is one interval away.
+    db.prepare("INSERT INTO schedules (spec_id, time, days, rows, run_limit, enabled, every_minutes, last_at) VALUES (?, ?, ?, ?, ?, 1, ?, ?)")
+      .run(specId, b.time ?? "00:00", days, rows, b.limit ? Number(b.limit) : null, every, every ? Date.now() : null);
     return send(res, 200, schedules());
   }
   if (p[1] === "schedules" && p[2] && m === "DELETE") { db.prepare("DELETE FROM schedules WHERE id = ?").run(Number(p[2])); return send(res, 200, schedules()); }
@@ -319,7 +368,7 @@ async function route(req: IncomingMessage, res: ServerResponse) {
   if (url.pathname === "/api/tasks" && m === "GET")
     return send(res, 200, (db.prepare(`SELECT s.id AS sessionId, s.title, s.started_at AS startedAt, s.ended_at AS endedAt, s.learn_stage AS learnStage, s.learn_error AS learnError,
       x.id AS specId, x.version, x.json, x.tests, x.code IS NOT NULL AS built
-      FROM sessions s LEFT JOIN specs x ON x.id = (SELECT MAX(id) FROM specs WHERE session_id = s.id) WHERE EXISTS (SELECT 1 FROM events e WHERE e.session_id = s.id AND e.kind NOT IN ('start', 'tools')) OR EXISTS (SELECT 1 FROM specs y WHERE y.session_id = s.id) ORDER BY s.started_at DESC`).all() as any[])
+      FROM sessions s LEFT JOIN specs x ON x.id = (SELECT MAX(id) FROM specs WHERE session_id = s.id) WHERE EXISTS (SELECT 1 FROM events e WHERE e.session_id = s.id AND e.kind NOT IN ('start', 'tools')) OR EXISTS (SELECT 1 FROM specs y WHERE y.session_id = s.id) OR (s.transcript IS NOT NULL AND s.transcript != '') OR s.learn_stage IS NOT NULL ORDER BY s.started_at DESC`).all() as any[])
       .map(({ json: j, tests: tj, built, ...t }) => {
         const spec = j ? (JSON.parse(j) as Spec) : null;
         const tests = tj ? (JSON.parse(tj) as { ok: boolean }[]) : [];
@@ -329,7 +378,8 @@ async function route(req: IncomingMessage, res: ServerResponse) {
           rules: spec?.rules.map((r) => ({ if: r.if, then: r.then, said: r.said })) ?? [],
           guessed: spec ? Object.entries(spec.outcomes).filter(([, o]) => !o.demonstrated).map(([k]) => k) : [],
           steps: spec?.steps.length ?? 0, compares: spec?.steps.some((s) => s.do === "compare") ?? false,
-          checks: { passed: tests.filter((x) => x.ok).length, total: tests.length } };
+          checks: { passed: tests.filter((x) => x.ok).length, total: tests.length },
+          askedSchedule: spec?.schedule ?? null, lastReport: lastReport(t.sessionId) };
       }));
   if (url.pathname === "/api/logins" && m === "POST") {
     const b = await json(req);
@@ -355,7 +405,7 @@ async function route(req: IncomingMessage, res: ServerResponse) {
     return send(res, 200, db.prepare(`SELECT s.id, s.title, s.started_at, s.ended_at,
       (SELECT COUNT(*) FROM events e WHERE e.session_id = s.id) AS events,
       (SELECT MAX(id) FROM specs x WHERE x.session_id = s.id) AS latest_spec
-      FROM sessions s WHERE EXISTS (SELECT 1 FROM events e WHERE e.session_id = s.id AND e.kind NOT IN ('start', 'tools')) OR EXISTS (SELECT 1 FROM specs y WHERE y.session_id = s.id) ORDER BY started_at DESC`).all());
+      FROM sessions s WHERE EXISTS (SELECT 1 FROM events e WHERE e.session_id = s.id AND e.kind NOT IN ('start', 'tools')) OR EXISTS (SELECT 1 FROM specs y WHERE y.session_id = s.id) OR (s.transcript IS NOT NULL AND s.transcript != '') OR s.learn_stage IS NOT NULL ORDER BY started_at DESC`).all());
 
   if (m === "POST" && url.pathname === "/api/sessions") {
     const { title, startedAt } = await json(req);
