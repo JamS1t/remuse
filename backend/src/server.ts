@@ -2,7 +2,7 @@
 // Run: npm start   (port 3200, reads MODEL_API_KEY from ../.env)
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { DatabaseSync } from "node:sqlite";
-import { mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync, existsSync, rmSync } from "node:fs";
 import { join, dirname, extname } from "node:path";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
@@ -125,6 +125,22 @@ function saveSpec(sessionId: string, spec: Spec, note: string, code: string | nu
   const r = db.prepare("INSERT INTO specs (session_id, version, note, json, code, tests, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
     .run(sessionId, v, note, JSON.stringify(spec), code, tests ? JSON.stringify(tests) : null, Date.now());
   return Number(r.lastInsertRowid);
+}
+
+// A recording with no actions (stopped right away, mic trouble) teaches nothing and only clutters the
+// history: it is dropped on Stop, and old ones are cleared when the Agent starts.
+const ACTIONS = "kind NOT IN ('start', 'tools')";
+const isEmpty = (id: string) =>
+  !(db.prepare(`SELECT 1 FROM events WHERE session_id = ? AND ${ACTIONS} LIMIT 1`).get(id)) &&
+  !(db.prepare("SELECT 1 FROM specs WHERE session_id = ? LIMIT 1").get(id));
+function discard(id: string) {
+  db.prepare("DELETE FROM events WHERE session_id = ?").run(id);
+  db.prepare("DELETE FROM turns WHERE session_id = ?").run(id);
+  db.prepare("DELETE FROM sessions WHERE id = ?").run(id);
+  rmSync(sessionDir(id), { recursive: true, force: true });
+}
+for (const s of db.prepare("SELECT id FROM sessions WHERE ended_at IS NOT NULL OR started_at < ?").all(Date.now() - 3600_000) as any[]) {
+  if (isEmpty(s.id)) discard(s.id);
 }
 
 async function transcribeSession(id: string, offsetMs: number) {
@@ -303,7 +319,7 @@ async function route(req: IncomingMessage, res: ServerResponse) {
   if (url.pathname === "/api/tasks" && m === "GET")
     return send(res, 200, (db.prepare(`SELECT s.id AS sessionId, s.title, s.started_at AS startedAt, s.ended_at AS endedAt, s.learn_stage AS learnStage, s.learn_error AS learnError,
       x.id AS specId, x.version, x.json, x.tests, x.code IS NOT NULL AS built
-      FROM sessions s LEFT JOIN specs x ON x.id = (SELECT MAX(id) FROM specs WHERE session_id = s.id) ORDER BY s.started_at DESC`).all() as any[])
+      FROM sessions s LEFT JOIN specs x ON x.id = (SELECT MAX(id) FROM specs WHERE session_id = s.id) WHERE EXISTS (SELECT 1 FROM events e WHERE e.session_id = s.id AND e.kind NOT IN ('start', 'tools')) OR EXISTS (SELECT 1 FROM specs y WHERE y.session_id = s.id) ORDER BY s.started_at DESC`).all() as any[])
       .map(({ json: j, tests: tj, built, ...t }) => {
         const spec = j ? (JSON.parse(j) as Spec) : null;
         const tests = tj ? (JSON.parse(tj) as { ok: boolean }[]) : [];
@@ -339,7 +355,7 @@ async function route(req: IncomingMessage, res: ServerResponse) {
     return send(res, 200, db.prepare(`SELECT s.id, s.title, s.started_at, s.ended_at,
       (SELECT COUNT(*) FROM events e WHERE e.session_id = s.id) AS events,
       (SELECT MAX(id) FROM specs x WHERE x.session_id = s.id) AS latest_spec
-      FROM sessions s ORDER BY started_at DESC`).all());
+      FROM sessions s WHERE EXISTS (SELECT 1 FROM events e WHERE e.session_id = s.id AND e.kind NOT IN ('start', 'tools')) OR EXISTS (SELECT 1 FROM specs y WHERE y.session_id = s.id) ORDER BY started_at DESC`).all());
 
   if (m === "POST" && url.pathname === "/api/sessions") {
     const { title, startedAt } = await json(req);
@@ -378,6 +394,7 @@ async function route(req: IncomingMessage, res: ServerResponse) {
     if (m === "POST" && p[3] === "finish") {
       const { endedAt, audioOffsetMs, learn: auto } = await json(req);
       db.prepare("UPDATE sessions SET ended_at = ?, audio_offset_ms = ? WHERE id = ?").run(endedAt ?? Date.now(), audioOffsetMs ?? null, id);
+      if (isEmpty(id)) { discard(id); return send(res, 200, { id, discarded: true }); }
       // Proactive: learn the whole task in the background (name, spec, tested code). The sidebar follows along.
       if (auto !== false) { learn(id, audioOffsetMs ?? 0); return send(res, 202, { id, learning: true }); }
       await transcribeSession(id, audioOffsetMs ?? 0);

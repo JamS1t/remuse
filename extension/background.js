@@ -105,8 +105,9 @@ async function stop() {
   // The Agent learns the task on its own from here: names it, writes the spec, builds and tests it.
   // The recording is over either way; a failure here is reported, not left as a stuck "recording".
   let finishError = null;
-  await api(`/sessions/${r.id}/finish`, "POST", { endedAt: Date.now(), audioOffsetMs: r.audioOffsetMs }).catch((e) => { finishError = e.message; });
-  const result = { id: r.id, learning: !finishError, error: finishError ?? r.audioError ?? null };
+  const done = await api(`/sessions/${r.id}/finish`, "POST", { endedAt: Date.now(), audioOffsetMs: r.audioOffsetMs }).catch((e) => { finishError = e.message; return null; });
+  // Nothing was done in the recording: the Agent dropped it rather than keep an empty task.
+  const result = { id: r.id, learning: !finishError && !done?.discarded, discarded: !!done?.discarded, error: finishError ?? r.audioError ?? null };
   await chrome.storage.local.set({ last: result });
   return result;
 }

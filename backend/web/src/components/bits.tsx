@@ -7,6 +7,8 @@ import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { api, useApi, type ItemStatus } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import lockupSvg from "@/assets/lockup.svg?raw";
+import markSvg from "@/assets/mark.svg?raw";
 
 /** Run an async action with a busy flag; errors become a toast. */
 export function useAction() {
@@ -61,8 +63,7 @@ export function TopBar({ at }: { at: string }) {
     <header className="sticky top-0 z-20 border-b bg-background/40 backdrop-blur-xl">
       <div className="mx-auto flex h-12 max-w-[1240px] items-center gap-3 px-4 sm:gap-5 sm:px-5">
         <a href="#/" className="flex items-center gap-2 text-foreground no-underline">
-          <Mark />
-          <span className="text-[15px] font-semibold tracking-[-0.02em]">Remuse</span>
+          <Lockup className="h-[19px]" />
         </a>
         <nav className="flex items-center gap-1">
           {link("#/", "Recordings", at === "" || at === "session" || at === "spec")}
@@ -103,9 +104,12 @@ export function Orb({ state = "idle", size = 18, className }: { state?: OrbState
   );
 }
 
-/** Wordmark spot until the logo lands: the idle orb. */
-export function Mark() {
-  return <Orb size={18} />;
+/** The Remuse logo (C Inner mark + soft geometric wordmark), drawn in the current text colour. */
+export function Lockup({ className }: { className?: string }) {
+  return <span role="img" aria-label="Remuse" className={cn("inline-flex [&>svg]:h-full [&>svg]:w-auto", className)} dangerouslySetInnerHTML={{ __html: lockupSvg }} />;
+}
+export function Mark({ className }: { className?: string }) {
+  return <span role="img" aria-label="Remuse" className={cn("inline-flex [&>svg]:h-full [&>svg]:w-auto", className)} dangerouslySetInnerHTML={{ __html: markSvg }} />;
 }
 
 export function Page({ children }: { children: ReactNode }) {

@@ -4,7 +4,7 @@ import { CalendarClock, Check, ChevronDown, CircleAlert, ExternalLink, Globe, Lo
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import { ItemLabel, Orb, Said, useAction, type OrbState } from "@/components/bits";
+import { ItemLabel, Lockup, Orb, Said, useAction, type OrbState } from "@/components/bits";
 import { PendingCard } from "@/pages/run";
 import { parseCsv } from "@/pages/spec";
 import { api, isLive, useApi, type Run, type RunRow } from "@/lib/api";
@@ -73,7 +73,11 @@ export function Remote() {
   });
   // The recording ends even if something fails on the way out, so always show the real state after.
   const stop = () => act("stop", async () => {
-    try { const r = await ext<{ error?: string | null }>("stop"); if (r?.error) toast.error(r.error); }
+    try {
+      const r = await ext<{ error?: string | null; discarded?: boolean }>("stop");
+      if (r?.discarded) toast("Nothing was recorded, so I didn't keep it.");
+      else if (r?.error) toast.error(r.error);
+    }
     finally { await refresh(); reloadTasks(); }
   });
   const answer = (body: object) => act("answer", async () => { await api(`/runs/${live!.id}/answer`, "POST", body); reloadRun(); });
@@ -92,7 +96,7 @@ export function Remote() {
   return (
     <div className="flex min-h-screen flex-col">
       <header className="flex h-11 items-center gap-2 px-4">
-        <span className="text-[14px] font-semibold tracking-[-0.02em]">Remuse</span>
+        <Lockup className="h-[17px]" />
         <button type="button" onClick={() => open("#/")} className="ml-auto inline-flex items-center gap-1 text-[12.5px] text-muted-foreground hover:text-foreground">
           Full view <ExternalLink className="size-3.5" />
         </button>

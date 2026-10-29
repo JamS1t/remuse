@@ -1,4 +1,9 @@
-# Remuse
+<h1>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="brand/colour/remuse-horizontal-gradient-on-dark.svg">
+    <img alt="Remuse" src="brand/colour/remuse-horizontal-gradient-on-light.svg" height="56">
+  </picture>
+</h1>
 
 Show it once, it does it forever, and it knows when to stop and ask.
 

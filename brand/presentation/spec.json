@@ -1,0 +1,36 @@
+{
+  "brand": "Remuse",
+  "tagline": "Show it once. Remuse does it again.",
+  "brief": "A browser agent for non-technical people: show it a task once, it repeats it on new items, compares options, asks when unsure and always waits for your OK. Built on Muse Spark for the Meta developer hackathon. The UI is dark, with a glowing orb as the agent's presence.",
+  "adjectives": ["calm", "attentive", "capable", "trustworthy", "quietly delightful"],
+  "criteria": "Reads at 16 px in the Chrome toolbar, belongs next to the UI orb, works in one colour, avoids AI clichés (sparkles, robots, brains, chat bubbles).",
+  "industry": "software",
+  "mockups": ["readme", "favicon-tab", "app-icon", "terminal", "website", "sticker"],
+  "nav": ["Tasks", "Schedules", "Approvals"],
+  "brand_color": "#6E9BFF",
+  "tile_color": "#0B0B0D",
+  "greyscale": false,
+  "final": true,
+  "designer": "Remuse team",
+  "concepts": [
+    {
+      "name": "Inner echo",
+      "symbol": "../symbol/remuse-symbol.svg",
+      "lockup": "../lockup/remuse-horizontal.svg",
+      "stacked": "../lockup/remuse-stacked.svg",
+      "avatar": "../symbol/remuse-symbol-small.svg",
+      "symbol_on_tile": "../symbol/remuse-symbol-gradient.svg",
+      "symbol_on_dark": "../symbol/remuse-symbol-gradient.svg",
+      "lockup_on_dark": "../colour/remuse-horizontal-gradient-on-dark.svg",
+      "stacked_on_dark": "../colour/remuse-stacked-gradient-on-dark.svg",
+      "idea": "The agent's orb holds its own echo: a core and the crescent it leaves when it does the task again.",
+      "rationale": [
+        "One clean circle silhouette, so it holds at 16 px in the toolbar and sits beside the glowing UI orb",
+        "Soft geometric lowercase wordmark whose round bowls rhyme with the orb; calm, light and airy",
+        "One colour is the master; the blue-to-violet orb gradient is an approved accent on dark"
+      ]
+    }
+  ],
+  "recommendation": "Use white on #0B0B0D as the primary pairing, the small-size cuts at 24 px and below, and the gradient orb only as an accent.",
+  "next_steps": ["Trademark search before launch", "Wire ui/mark.svg and ui/lockup-dark.svg into the app and extension", "Motion study: the core easing into its echo"]
+}
