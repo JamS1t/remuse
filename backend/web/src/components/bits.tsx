@@ -58,7 +58,7 @@ export function TopBar({ at }: { at: string }) {
       className={cn("rounded-md px-2.5 py-1.5 text-[13px] font-medium no-underline transition-colors", on ? "text-foreground bg-muted" : "text-muted-foreground hover:text-foreground")}>{label}</a>
   );
   return (
-    <header className="sticky top-0 z-20 border-b bg-background/95 backdrop-blur-[2px]">
+    <header className="sticky top-0 z-20 border-b bg-background/40 backdrop-blur-xl">
       <div className="mx-auto flex h-12 max-w-[1240px] items-center gap-3 px-4 sm:gap-5 sm:px-5">
         <a href="#/" className="flex items-center gap-2 text-foreground no-underline">
           <Mark />

@@ -11,9 +11,11 @@ import { useHash } from "@/lib/api";
 export default function App() {
   const [view = "", id] = useHash();
   // The Chrome sidebar gets its own compact remote, without the full app's top bar.
-  if (view === "remote") return <TooltipProvider><Remote /><Toaster position="bottom-center" /></TooltipProvider>;
+  const aurora = <div className="aurora" aria-hidden><i /><i /><i /></div>;
+  if (view === "remote") return <TooltipProvider>{aurora}<Remote /><Toaster position="bottom-center" /></TooltipProvider>;
   return (
     <TooltipProvider>
+      {aurora}
       <TopBar at={view} />
       {view === "session" && id ? <Session key={id} id={id} />
         : view === "spec" && id ? <SpecPage key={id} id={Number(id)} />
