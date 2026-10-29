@@ -9,7 +9,10 @@ import { fileURLToPath } from "node:url";
 import { transcribe, calls } from "./meta.ts";
 import { understand, type Spec } from "./understand.ts";
 import { build } from "./build.ts";
-import { Runner, type Run } from "./runner.ts";
+import { Runner, openBrowser, type Run } from "./runner.ts";
+import type { BrowserContext } from "playwright";
+import { SITE, listLogins, removeLogin, saveLogin } from "./logins.ts";
+import { notify } from "./notify.ts";
 
 const PORT = Number(process.env.PORT ?? 3200);
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -17,6 +20,8 @@ const DATA = process.env.DATA_DIR ?? join(HERE, "..", "data");
 const PUBLIC = join(HERE, "..", "public");
 const MOCK = process.env.MOCK_URL ?? "http://localhost:3100";
 mkdirSync(DATA, { recursive: true });
+// Vite's dev server (5173) proxies to us during UI work.
+const ALLOWED_ORIGINS = new Set([`http://127.0.0.1:${PORT}`, `http://localhost:${PORT}`, "http://localhost:5173", "http://127.0.0.1:5173"]);
 
 const db = new DatabaseSync(join(DATA, "showrun.db"));
 db.exec(`
@@ -60,7 +65,7 @@ async function body(req: IncomingMessage): Promise<Buffer> {
 }
 const json = async (req: IncomingMessage) => JSON.parse((await body(req)).toString() || "{}");
 
-const TYPES: Record<string, string> = { ".html": "text/html; charset=utf-8", ".js": "text/javascript", ".css": "text/css", ".png": "image/png", ".wav": "audio/wav", ".svg": "image/svg+xml" };
+const TYPES: Record<string, string> = { ".html": "text/html; charset=utf-8", ".js": "text/javascript", ".css": "text/css", ".png": "image/png", ".wav": "audio/wav", ".svg": "image/svg+xml", ".woff2": "font/woff2", ".woff": "font/woff" };
 function send(res: ServerResponse, status: number, data: unknown, type = "application/json") {
   res.writeHead(status, { "Content-Type": type, "Cache-Control": "no-store" });
   res.end(type === "application/json" ? JSON.stringify(data) : (data as Buffer));
@@ -121,19 +126,80 @@ function saveRun(run: Run) {
     .run(run.id, run.specId, JSON.stringify(run), Date.now());
 }
 
-async function startRun(specId: number, opts: { limit?: number; autoApprove?: boolean }) {
+// The sign-in window: the same Chrome profile runs use, opened so the person can log in to sites once.
+let signIn: BrowserContext | null = null;
+async function openSignIn(url: string) {
+  if (active && !["done", "failed", "stopped"].includes(active.run.status)) throw new HttpError(409, "wait for the run to finish first");
+  if (!signIn) {
+    signIn = await openBrowser(false);
+    signIn.on("close", () => { signIn = null; });
+  }
+  const page = signIn.pages()[0] ?? (await signIn.newPage());
+  await page.goto(url).catch(() => {});
+  await page.bringToFront();
+}
+
+// A run that was going when the Agent stopped (shutdown, crash) can't resume: mark it stopped.
+for (const r of db.prepare("SELECT id, json FROM runs").all() as any[]) {
+  const run = JSON.parse(r.json) as Run;
+  if (run.status !== "starting" && run.status !== "running") continue;
+  Object.assign(run, { status: "stopped", pending: null, endedAt: run.endedAt ?? Date.now(), error: run.error ?? "The Showrun Agent stopped during this run." });
+  saveRun(run);
+}
+
+// ---- Schedules: the Agent repeats a task by itself, Chrome open or not. ----
+db.exec(`CREATE TABLE IF NOT EXISTS schedules (
+  id INTEGER PRIMARY KEY, spec_id INTEGER NOT NULL REFERENCES specs(id), time TEXT NOT NULL, days TEXT NOT NULL,
+  rows TEXT, run_limit INTEGER, enabled INTEGER NOT NULL DEFAULT 1, last_run TEXT
+)`);
+type Schedule = { id: number; specId: number; time: string; days: string; rows: Record<string, string>[] | null; limit: number | null; enabled: boolean; lastRun: string | null };
+const schedules = (): Schedule[] => (db.prepare("SELECT * FROM schedules ORDER BY id").all() as any[]).map((s) => ({
+  id: s.id, specId: s.spec_id, time: s.time, days: s.days, rows: s.rows ? JSON.parse(s.rows) : null, limit: s.run_limit, enabled: !!s.enabled, lastRun: s.last_run,
+}));
+// Manila clock: "HH:MM", ISO weekday 1 (Mon) .. 7 (Sun), and the date.
+function manilaNow() {
+  const parts = Object.fromEntries(new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Manila", weekday: "short", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(new Date()).map((x) => [x.type, x.value]));
+  return { time: `${parts.hour}:${parts.minute}`, day: String(["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].indexOf(parts.weekday) + 1), date: today() };
+}
+setInterval(async () => {
+  const now = manilaNow();
+  for (const s of schedules()) {
+    if (!s.enabled || s.lastRun === now.date || !s.days.includes(now.day) || s.time > now.time) continue;
+    if (active && !["done", "failed", "stopped"].includes(active.run.status)) return; // try again next tick
+    db.prepare("UPDATE schedules SET last_run = ? WHERE id = ?").run(now.date, s.id);
+    try { await startRun(s.specId, { rows: s.rows ?? undefined, limit: s.limit ?? undefined, scheduled: true }); }
+    catch (e) { notify("Showrun couldn't start a scheduled task", (e as Error).message, `http://127.0.0.1:${PORT}/#/spec/${s.specId}`); }
+  }
+}, 30_000).unref();
+
+async function startRun(specId: number, opts: { limit?: number; autoApprove?: boolean; rows?: Record<string, string>[]; scheduled?: boolean }) {
   if (active && !["done", "failed", "stopped"].includes(active.run.status)) throw new HttpError(409, "a run is already going");
   const row = specRow(specId);
   if (!row.code) throw new HttpError(400, "build the rules first");
-  const run: Run = { id: randomUUID(), specId, status: "starting", items: [], current: 0, pending: null, autoApprove: !!opts.autoApprove, startedAt: Date.now(), heals: [], learned: [] };
+  // Both use the one Chrome profile, which only one window can hold.
+  if (signIn) { await signIn.close().catch(() => {}); signIn = null; }
+  const run: Run = { id: randomUUID(), specId, status: "starting", items: [], current: 0, pending: null, autoApprove: !!opts.autoApprove, startedAt: Date.now(), heals: [], learned: [], rows: opts.rows };
   let last = 0;
+  let asked = "";
+  const link = `http://127.0.0.1:${PORT}/#/run/${run.id}`;
   const runner = new Runner(run, row.spec, row.code, runDir(run.id), (r) => {
     if (Date.now() - last > 300 || ["done", "failed", "stopped"].includes(r.status)) { last = Date.now(); saveRun(r); }
+    // Anything waiting on the person becomes a Windows notification, once.
+    const p = r.pending;
+    const key = p ? `${p.kind}-${p.item}-${p.shot}` : "";
+    if (p && key !== asked) {
+      const label = r.items[p.item]?.label ?? "";
+      if (p.kind === "approval") notify("Showrun needs your OK", `${p.step}: ${label}`, link);
+      else if (p.kind === "ask") notify("Showrun has a question", p.question, link);
+      else notify("Showrun needs you in the browser", `Stuck on "${p.step}". Sign in or clear the check, then press Try again.`, link);
+    }
+    asked = key;
   });
   active = runner;
   saveRun(run);
   runner.start(opts.limit).then(() => {
     saveRun(run);
+    if (opts.scheduled) notify(`Showrun finished: ${row.spec.goal}`.slice(0, 120), `${run.items.filter((i) => i.status === "done").length} of ${run.items.length} done${run.error ? `. Problem: ${run.error}` : ""}`, link);
     // What the run learned (new labels after a redesign, answers you gave) becomes the next spec version.
     if (run.heals.length || run.learned.length) {
       const parts = [run.heals.length && `${run.heals.length} element(s) updated after a layout change`, run.learned.length && `learned: ${run.learned.map((l) => `${l.requestType} → ${l.outcome}`).join(", ")}`].filter(Boolean);
@@ -159,11 +225,58 @@ async function route(req: IncomingMessage, res: ServerResponse) {
   // UI
   if (m === "GET" && p[0] !== "api") {
     const name = p.length ? p.join("/") : "index.html";
-    if (!/^[\w.-]+$/.test(name)) throw new HttpError(404, "not found");
+    if (!/^(assets\/)?[\w-][\w.-]*$/.test(name)) throw new HttpError(404, "not found");
     return file(res, join(PUBLIC, name));
   }
 
   if (m === "GET" && url.pathname === "/api/calls") return send(res, 200, calls.slice(-200));
+  // Only the Agent's own pages and the Showrun extension may call the API; any other website is refused,
+  // so a page you visit can't read your runs or hand the Agent fake logins.
+  const origin = req.headers.origin;
+  if (origin && !ALLOWED_ORIGINS.has(origin) && !origin.startsWith("chrome-extension://")) throw new HttpError(403, "not allowed from this page");
+
+  if (url.pathname === "/api/logins" && m === "GET") return send(res, 200, listLogins());
+  if (url.pathname === "/api/schedules" && m === "GET") return send(res, 200, schedules());
+  if (url.pathname === "/api/schedules" && m === "POST") {
+    const b = await json(req);
+    const specId = Number(b.specId);
+    specRow(specId); // 404 if it doesn't exist
+    if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(b.time ?? "")) throw new HttpError(400, "time must be HH:MM");
+    const days = String(b.days ?? "1234567").replace(/[^1-7]/g, "");
+    if (!days) throw new HttpError(400, "pick at least one day");
+    const rows = Array.isArray(b.rows) ? JSON.stringify(b.rows) : null;
+    // One schedule per task: saving again replaces it.
+    db.prepare("DELETE FROM schedules WHERE spec_id IN (SELECT id FROM specs WHERE session_id = (SELECT session_id FROM specs WHERE id = ?))").run(specId);
+    db.prepare("INSERT INTO schedules (spec_id, time, days, rows, run_limit, enabled) VALUES (?, ?, ?, ?, ?, 1)").run(specId, b.time, days, rows, b.limit ? Number(b.limit) : null);
+    return send(res, 200, schedules());
+  }
+  if (p[1] === "schedules" && p[2] && m === "DELETE") { db.prepare("DELETE FROM schedules WHERE id = ?").run(Number(p[2])); return send(res, 200, schedules()); }
+  // Saved tasks for the sidebar: every recording with its latest Task Spec.
+  if (url.pathname === "/api/tasks" && m === "GET")
+    return send(res, 200, (db.prepare(`SELECT s.id AS sessionId, s.title, s.started_at AS startedAt, x.id AS specId, x.version, x.json, x.code IS NOT NULL AS built
+      FROM sessions s LEFT JOIN specs x ON x.id = (SELECT MAX(id) FROM specs WHERE session_id = s.id) ORDER BY s.started_at DESC`).all() as any[])
+      .map(({ json: j, built, ...t }) => {
+        const spec = j ? (JSON.parse(j) as Spec) : null;
+        return { ...t, built: !!built, goal: spec?.goal ?? null, itemName: spec?.inputs.itemName ?? null,
+          source: spec?.inputs.source ?? (spec ? "list" : null), columns: spec?.inputs.columns ?? [] };
+      }));
+  if (url.pathname === "/api/logins" && m === "POST") {
+    const b = await json(req);
+    const site = String(b.site ?? "").toLowerCase();
+    if (!SITE.test(site) || !Array.isArray(b.cookies)) throw new HttpError(400, "send {site, cookies}");
+    saveLogin(site, b.cookies);
+    return send(res, 200, { site, cookies: b.cookies.length });
+  }
+  if (p[1] === "logins" && p[2] && m === "DELETE") { removeLogin(p[2].toLowerCase()); return send(res, 200, { ok: true }); }
+
+  if (m === "POST" && url.pathname === "/api/browser/open") {
+    const target = url.searchParams.get("url") || "https://www.google.com";
+    if (!/^https?:\/\//.test(target)) throw new HttpError(400, "give a web address starting with http");
+    await openSignIn(target);
+    return send(res, 200, { open: true });
+  }
+  if (m === "GET" && url.pathname === "/api/mock/status")
+    return send(res, 200, { up: await fetch(`${MOCK}/api/state`, { signal: AbortSignal.timeout(800) }).then((r) => r.ok, () => false) });
   if (m === "POST" && url.pathname === "/api/mock/reset") return send(res, 200, await (await fetch(`${MOCK}/api/reset`, { method: "POST" })).json());
   if (m === "POST" && url.pathname === "/api/mock/layout") return send(res, 200, await (await fetch(`${MOCK}/api/layout?v=${url.searchParams.get("v") === "v2" ? "v2" : "v1"}`, { method: "POST" })).json());
 
@@ -251,7 +364,8 @@ async function route(req: IncomingMessage, res: ServerResponse) {
     }
     if (m === "POST" && p[3] === "runs") {
       const opts = await json(req);
-      return send(res, 201, await startRun(sid, { limit: opts.limit ? Number(opts.limit) : undefined, autoApprove: !!opts.autoApprove }));
+      const rows = Array.isArray(opts.rows) ? opts.rows.filter((r: unknown) => r && typeof r === "object").map((r: Record<string, unknown>) => Object.fromEntries(Object.entries(r).map(([k, v]) => [String(k), String(v ?? "")]))) : undefined;
+      return send(res, 201, await startRun(sid, { limit: opts.limit ? Number(opts.limit) : undefined, autoApprove: !!opts.autoApprove, rows }));
     }
   }
 

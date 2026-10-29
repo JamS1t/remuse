@@ -2,64 +2,76 @@
 
 Show it once, it does it forever, and it knows when to stop and ask.
 
-Showrun learns a browser task by watching you do it once (screen, clicks, voice), turns it into an editable Task Spec, then runs it on new inputs with a check after every step. Anything irreversible (refund, send, pay, submit) waits for your approval.
+Showrun learns a browser task by watching you do it once (screen, clicks, voice), turns it into an editable Task Spec, then repeats it on new items with a check after every step. Anything irreversible (pay, check out, send, refund, submit) waits for your approval.
 
-Built for the Meta developer hackathon, Indie Developer track. All code in this repo was written during the hackathon window.
+It works on the sites you already use, with the logins you already have, and keeps working when Chrome is closed.
+
+Built for the Meta developer hackathon, Indie Developer track. All code in this repo was written during the hackathon window, with Claude Code as a coding assistant.
+
+## Two parts
+
+- **Showrun Agent** (`backend/`): a small program on your PC that starts with Windows. It keeps your tasks and schedules, runs them in its own browser, and asks you through Windows notifications when it needs an OK. It runs whether Chrome is open or not.
+- **Showrun in Chrome** (`extension/`): the Showrun button in the toolbar opens a sidebar:
+  - **Watch me** records a task in any tab, voice included.
+  - **Again** repeats a saved task now, or on a schedule.
+  - **Connected sites** shares your existing login for the sites you choose with the Agent. It stays on your PC, so you never sign in twice.
+  - Live progress and approval cards also show here. There's no chat: you teach it by showing it.
 
 ## How it works
 
-1. **Record.** A Chrome extension captures every click and typed value, a screenshot just before and just after each action, and your voice. Muse Voice Transcribe turns the voice into timed text that lines up with the clicks.
-2. **Understand.** Muse Spark reads the event log, the key frames and what you said, and writes a **Task Spec**: the steps, the values to read on each page, your rules in your own words, what each decision does, and what the screen should look like after every step. Outcomes you didn't demonstrate are inferred from the screen and marked for review.
-3. **Review.** You check the spec in the Showrun page and edit it if needed. Each save is a new version.
-4. **Build.** Muse Spark writes the rules and the data extraction as JavaScript. Showrun runs that code against your demo (it must read the same values and reach the same decision you did) plus tests Muse Spark writes for each rule. Dates, thresholds and rule order are computed in code, not guessed.
-5. **Run.** Playwright repeats the task on every item in the list:
-   - Finds elements by role and name first, then the recorded selector. If the page was redesigned, Muse Spark finds the element on a screenshot, SAM 3.1 snaps the click to the exact element, and the spec is updated.
-   - Reads values with the generated code; if the page wording changed, Muse Spark reads them instead.
-   - Checks every step against the page, and has Muse Spark look at the screen after every irreversible action.
-   - Stops for your approval before refund, replace, send and similar clicks.
-   - Asks you when an item is outside the scope of your rules or a value can't be read, instead of guessing. Your answer is remembered for similar items in the same run and saved into the next spec version.
+1. **Record.** The extension captures every click and typed value, a screenshot just before and just after each action, any WebMCP tools the page offers, and your voice. Muse Voice Transcribe turns the voice into timed text that lines up with the clicks.
+2. **Understand.** Muse Spark reads the event log, the key frames and what you said, and writes a **Task Spec**:
+   - **Where items come from:** a list on a page (emails, orders), or rows you paste each time (a shopping list).
+   - **Steps:** what to do for each item.
+   - **Values:** what to read on each page.
+   - **Your rules:** in your own words.
+   - **Outcomes:** what each decision does.
+   - **Checks:** what the screen should look like after every step.
+   - **Compare:** if you opened several results and picked one, a step that opens the top results, reads the same values on each and keeps the best.
+3. **Review.** You check the spec and edit it if needed. Each save is a new version.
+4. **Build.** Muse Spark writes the rules, the data extraction and the ranking as JavaScript. Showrun runs that code against your demo (it must read the same values and reach the same decision you did) plus tests Muse Spark writes for each rule. Dates, thresholds, prices per unit and rule order are computed in code, not guessed.
+5. **Run.** The Agent repeats the task:
+   - **Finding things:** it looks for elements by role and name first, then by the recorded selector. If the page was redesigned, Muse Spark finds the element on a screenshot, SAM 3.1 snaps the click to the exact element, and the spec is updated.
+   - **WebMCP:** if the page offers the action as a WebMCP tool, Showrun calls the tool instead of clicking.
+   - **Checks:** every step is checked against the page, and Muse Spark looks at the screen after every irreversible action.
+   - **Approvals:** it stops for your OK before paying, checking out, sending and similar steps.
+   - **Questions:** it asks when an item is outside your rules or a value can't be read. Your answer is remembered and saved into the next spec version.
+   - **Your turn:** if a sign-in page, a captcha or a popup gets in the way, it hands the browser to you, then tries again.
 
-## Status
+## Install (Windows)
 
-| Part | State |
-|---|---|
-| `mock-apps/`: Inbox, store admin, courier tracker | Done |
-| `extension/`: Chrome recorder (clicks, typing, before/after screenshots, voice) | Done, end-to-end test passes |
-| `backend/`: sessions, Understand, Build, runner, review and run UI | Done, first full runs pass (see log) |
-| `scripts/risk-tests.mjs`: day-1 Meta API checks | Run, all pass |
+Needs Node.js 24+ and Google Chrome.
 
-## Run it
+1. Right-click `scripts\install-windows.ps1` and choose **Run with PowerShell**. It installs the Agent, makes it start with Windows, starts it, and opens `chrome://extensions`.
+2. On that page, turn on **Developer mode**, click **Load unpacked** and pick the `extension` folder.
+3. Click the Showrun icon in the Chrome toolbar. The first recording asks for the microphone once.
 
-Needs Node 24+ and a Meta API key in `.env` at the repo root (`MODEL_API_KEY=...`, gitignored).
+Model calls go through the Showrun proxy (`proxy/`, hosted at showrun.sitsit.dev), so there is no API key to set up. To use your own key instead, put `MODEL_API_KEY=...` in `.env` at the repo root.
 
-```bash
-cd mock-apps && npm install && npm run build && npm start      # demo apps, http://localhost:3100
-cd backend && npm install && npx playwright install chromium     # once
-cd backend && npm start                                          # Showrun, http://127.0.0.1:3200
-```
-
-1. Open `chrome://extensions`, turn on Developer mode, click **Load unpacked** and pick the `extension/` folder.
-2. Click the Showrun icon, name the task, press **Start recording**. The first time, a tab asks for the microphone; allow it, then stop and start again.
-3. Do the task once and say your rules out loud ("if the order is more than 30 days old, decline").
-4. Press **Stop recording**, open http://127.0.0.1:3200, pick the recording and press **Write the Task Spec**.
-5. Review it, press **Build the rules into code**, then **Run on the list**. The run opens a browser window you can watch; approvals and questions appear on the run page.
-
-`HEADLESS=1 npm start` hides the browser window.
+For development: `cd backend && npm start` runs the Agent in a terminal (http://127.0.0.1:3200), and `HEADLESS=1` hides its browser. The full-page UI is a React + shadcn/ui app in `backend/web`; a built copy is committed in `backend/public`. After changing it, run `cd backend/web && npm install && npm run build`.
 
 ## Mock apps
 
-Three fake apps in one Next.js project. All people, products, the store (Kalye Goods) and the courier (Bilis Express) are made up. State lives in memory.
+Three fake apps in one Next.js project (`cd mock-apps && npm install && npm run build && npm start`, http://localhost:3100). All people, products, the store (Kalye Goods) and the courier (Bilis Express) are made up. State lives in memory.
 
 | URL | What it is |
 |---|---|
 | `/inbox` | 15 customer emails, some with a photo attached |
-| `/store` | Kalye Goods admin: orders, Refund / Replace |
+| `/store` | Kalye Goods admin: orders, Refund / Replace. Also offers `refund_order` and `replace_order` as WebMCP tools |
 | `/courier` | Bilis Express tracker: delivered, in transit, lost |
 | `POST /api/reset` | Re-seed everything |
 | `POST /api/layout?v=v2` | Switch the store admin to the redesigned layout (new labels, new positions) |
 | `GET /api/state` | Full state plus the expected outcome per email, used to score runs |
 
-The 15 emails split as 4 replace, 4 refund, 3 lost (refund and apologize), 2 decline (over 30 days, one with a damage photo) and 2 wrong-item emails the rules don't cover, so Showrun has to ask. `npm run check` confirms the seed matches the rules.
+The 15 emails split as follows; `npm run check` confirms the seed matches the rules.
+
+| Kind | Count |
+|---|---|
+| Replace | 4 |
+| Refund | 4 |
+| Lost (refund and apologize) | 3 |
+| Decline (over 30 days, one with a damage photo) | 2 |
+| Wrong item, not covered by the rules, so Showrun has to ask | 2 |
 
 ## Meta models
 
@@ -67,14 +79,19 @@ The 15 emails split as 4 replace, 4 refund, 3 lost (refund and apologize), 2 dec
 |---|---|---|
 | Record | Muse Voice Transcribe | Voice to timed text |
 | Understand | Muse Spark | Key frames + event log + transcript to a Task Spec |
-| Build | Muse Spark | Writes the rules and extractors as tested JavaScript (Muse Code has no API) |
-| Run | Muse Spark | Judges request type, checks photos for damage, checks the screen after irreversible steps, reads values when the wording changed, finds elements on screenshots |
+| Build | Muse Spark | Writes the rules, extractors and ranking as tested JavaScript (Muse Code has no API) |
+| Run | Muse Spark | Judges item kinds, checks photos, checks the screen after irreversible steps, reads values when the wording changed, finds elements on screenshots |
 | Run | SAM 3.1 | Snaps a click to the exact element when the layout changed |
 
 ## Tests
 
-- `cd backend && npm run test:recorder`: loads the extension in Chromium, plays `scripts/fixtures/narration.wav` as the mic, clicks through the hero case on the mock apps and checks the recorded session.
-- `cd mock-apps && npm run check`: the seed data agrees with the spoken rules.
-- `node --env-file=.env scripts/risk-tests.mjs`: the day-1 Meta API checks.
+| Command | What it checks |
+|---|---|
+| `cd backend && npm run test:recorder` | Loads the extension in Chromium, plays `scripts/fixtures/narration.wav` as the mic, clicks through the hero case on the mock apps and checks the recorded session |
+| `cd backend && node test/sidepanel.check.ts` | The sidebar loads the Agent, and connecting a site shares its login with the Agent (disconnecting removes it) |
+| `cd backend && node test/logins.check.ts` | A shared login reaches a real site from the Agent's browser; expired cookies are dropped |
+| `cd backend && node test/webmcp.check.ts` | A page's WebMCP tool is seen and called by the Agent's browser |
+| `cd mock-apps && npm run check` | The seed data agrees with the spoken rules |
+| `node --env-file=.env scripts/risk-tests.mjs` | The day-1 Meta API checks |
 
 See [docs/log.md](docs/log.md) for what was tried and what happened.

@@ -1,0 +1,18 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Showrun</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #fbfbf9; color: #17181b; font: 14px/1.5 system-ui, sans-serif; }
+  iframe { border: 0; width: 100%; height: 100%; display: block; }
+  #down { padding: 20px 16px; display: none; }
+  #down h1 { font-size: 15px; margin: 0 0 6px; }
+  #down p { margin: 0 0 10px; color: #5f5e58; }
+  #down button { font: inherit; border: 1px solid #d9d6cf; background: #fff; border-radius: 6px; padding: 6px 12px; cursor: pointer; }
+</style>
+<div id="down">
+  <h1>The Showrun Agent isn't running</h1>
+  <p>Showrun's Agent runs on this computer and does the work, even when Chrome is closed. Start it from the Showrun shortcut, then try again.</p>
+  <button id="retry">Try again</button>
+</div>
+<iframe id="ui" title="Showrun" allow="clipboard-write"></iframe>
+<script src="sidepanel.js"></script>

@@ -8,6 +8,8 @@ export type Rules = {
   extract: Record<string, (pageText: string) => unknown>;
   compute: Record<string, (v: Record<string, unknown>) => unknown>;
   decide: (v: Record<string, unknown>) => { outcome: string; rule: number };
+  // compare steps only: higher is better; null means this result doesn't qualify.
+  score?: (c: Record<string, unknown>, v: Record<string, unknown>) => number | null;
 };
 export type TestResult = { name: string; ok: boolean; detail: string };
 export type Built = { code: string; tests: TestResult[]; ok: boolean };
@@ -24,7 +26,25 @@ const SHAPE = `({
   decide: (v) => { /* ... */ return { outcome: "refund", rule: 3 }; },
   // one test per rule, plus edge cases (exactly at a threshold, missing values)
   tests: [ { name: "lost parcel", vars: { /* every variable decide reads */ }, expect: "lost_refund" } ],
+  // ONLY if there is a compare step: score one result. c = that result's candidate variables (already
+  // extracted and computed), v = the item's variables. Higher is better; return null if it doesn't qualify.
+  score: (c, v) => { /* ... */ return 0; },
+  // ONLY with a compare step: pairs where the person's rule says "better" must outscore "worse"
+  rankTests: [ { name: "cheaper per unit wins", better: { /* candidate vars */ }, worse: { /* ... */ } } ],
 })`;
+
+const compares = (spec: Spec) => [...spec.steps, ...Object.values(spec.outcomes).flatMap((o) => o.steps)].filter((s) => s.do === "compare");
+function compareText(spec: Spec) {
+  const c = compares(spec);
+  if (!c.length) return "There is no compare step: leave out score and rankTests.\n\n";
+  const cand = spec.variables.filter((v) => v.candidate).map((v) => ({ name: v.name, kind: v.kind, demoValue: v.demoValue }));
+  return `Compare step: the robot opens several results and keeps the best by score(). How the person chooses: "${c.map((x) => x.said ?? x.describe).join("; ")}"
+Candidate variables (score receives these as c; computed candidate variables are computed per result first):
+${JSON.stringify(cand, null, 2)}
+After comparing, decide() also receives best_<name> for each candidate variable, best_url, best_title and candidates_found.
+
+`;
+}
 
 function prompt(spec: Spec, pages: { url: string; text: string }[], failures?: string, previous?: string) {
   const textVars = spec.variables.filter((v) => v.kind === "text").map((v) => ({ name: v.name, description: v.description, demoValue: v.demoValue }));
@@ -41,10 +61,13 @@ ${JSON.stringify(textVars, null, 2)}
 Computed variables:
 ${JSON.stringify(computed, null, 2)}
 
+Values the person gives per item (always present in v):
+${JSON.stringify(spec.inputs.columns ?? [], null, 2)}
+
 Variables filled by vision or judgement before decide runs (decide receives these too):
 ${JSON.stringify(other, null, 2)}
 
-Rules, in order (first match wins):
+${compareText(spec)}Rules, in order (first match wins):
 ${spec.rules.map((r, i) => `${i}. if ${r.if} -> ${r.then}${r.said ? `   (person said: "${r.said}")` : ""}`).join("\n")}
 
 Notes: compare strings case-insensitively and trim them. Dates on the pages are YYYY-MM-DD; compute day differences in UTC so time zones can't shift them. Make extractors robust to layout changes: anchor on labels and value formats, not on line positions.
@@ -69,7 +92,7 @@ export function selfTest(spec: Spec, code: string, pages: { url: string; text: s
   let r: Rules & { tests?: { name: string; vars: Record<string, unknown>; expect: string }[] };
   try { r = load(code) as any; } catch (e) { return [{ name: "code loads", ok: false, detail: (e as Error).message }]; }
 
-  const demo: Record<string, unknown> = { today };
+  const demo: Record<string, unknown> = { today, ...Object.fromEntries((spec.inputs.columns ?? []).map((c) => [c.name, c.demoValue])) };
   for (const v of spec.variables) {
     if (v.kind === "text") {
       const fn = r.extract?.[v.name];
@@ -86,6 +109,21 @@ export function selfTest(spec: Spec, code: string, pages: { url: string; text: s
       demo[v.name] = got;
       out.push({ name: `compute ${v.name}`, ok: same(got, v.demoValue), detail: `got ${JSON.stringify(got)}, demo had ${JSON.stringify(v.demoValue)}` });
     } catch (e) { out.push({ name: `compute ${v.name}`, ok: false, detail: (e as Error).message }); }
+  }
+  if (compares(spec).length) {
+    const c = Object.fromEntries(spec.variables.filter((v) => v.candidate).map((v) => [v.name, demo[v.name]]));
+    for (const [k, val] of Object.entries(c)) demo[`best_${k}`] = val;
+    demo.candidates_found = 1;
+    try {
+      const s = r.score?.(c, demo);
+      out.push({ name: "the result you picked qualifies", ok: typeof s === "number", detail: `score() gave ${JSON.stringify(s)}` });
+    } catch (e) { out.push({ name: "the result you picked qualifies", ok: false, detail: (e as Error).message }); }
+    for (const t of (r as any).rankTests ?? []) {
+      try {
+        const a = r.score?.(t.better, demo), b = r.score?.(t.worse, demo);
+        out.push({ name: `ranking: ${t.name}`, ok: typeof a === "number" && (b === null || (typeof b === "number" && a > b)), detail: `better scored ${a}, worse scored ${b}` });
+      } catch (e) { out.push({ name: `ranking: ${t.name}`, ok: false, detail: (e as Error).message }); }
+    }
   }
   const shown = Object.entries(spec.outcomes).find(([, o]) => o.demonstrated)?.[0];
   try {

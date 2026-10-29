@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { connection } from "next/server";
 import { db } from "@/lib/db";
+import { WebMcpTools } from "./webmcp-tools";
 
 // v1: dark sidebar. v2: redesigned top bar. Same data, different markup and labels.
 export default async function StoreLayout({ children }: LayoutProps<"/store">) {
@@ -13,6 +14,7 @@ export default async function StoreLayout({ children }: LayoutProps<"/store">) {
         <Link href="/store">Order list</Link>
       </nav>
       <main>{children}</main>
+      <WebMcpTools />
     </div>
   ) : (
     <div className="store">
@@ -23,6 +25,7 @@ export default async function StoreLayout({ children }: LayoutProps<"/store">) {
         <span className="disabled">Customers</span>
       </aside>
       <main className="store-main">{children}</main>
+      <WebMcpTools />
     </div>
   );
 }

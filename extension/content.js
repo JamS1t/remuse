@@ -7,6 +7,17 @@
     } catch { /* extension reloaded; this page's script is orphaned */ }
   };
 
+  // WebMCP tools the page offers (seen by webmcp.js in the page's own world), recorded once per change.
+  let lastTools = "";
+  addEventListener("message", (e) => {
+    if (e.source !== window || e.data?.__showrun !== "tools") return;
+    const key = JSON.stringify(e.data.tools.map((t) => t.name));
+    if (key === lastTools || !e.data.tools.length) return;
+    lastTools = key;
+    send("tools", { tools: e.data.tools.map((t) => ({ name: t.name, description: t.description, inputSchema: t.inputSchema, readOnly: t.readOnly })) });
+  });
+  window.postMessage({ __showrun: "list" }, "*"); // tools registered before this script loaded
+
   const IMPLICIT = { button: "button", a: "link", select: "combobox", textarea: "textbox" };
   const INPUT_ROLE = { submit: "button", button: "button", reset: "button", checkbox: "checkbox", radio: "radio" };
   const clean = (s) => (s ?? "").replace(/\s+/g, " ").trim().slice(0, 80) || undefined;
@@ -54,6 +65,8 @@
       label: name(el),
       text: clean(el.innerText),
       selector: cssPath(el),
+      // The link's address lets the runner find sibling results by URL shape on any site.
+      href: el.closest("a[href]")?.href || undefined,
       // Same 0-1000 grid Muse Spark uses for boxes on a viewport screenshot.
       grid: { x_min: g(r.left, innerWidth), y_min: g(r.top, innerHeight), x_max: g(r.right, innerWidth), y_max: g(r.bottom, innerHeight) },
     };
