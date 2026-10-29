@@ -86,7 +86,16 @@
   addEventListener("change", (e) => typed(e.target), true);
 
   // ponytail: polls for client-side navigation (Next.js Link); webNavigation API if this ever misses one.
+  // Page text lets the Build stage write extractors against what was really on screen.
+  const snapshot = () => ({
+    text: document.body.innerText.slice(0, 4000),
+    images: [...document.images].slice(0, 5).map((i) => ({ src: i.src, alt: i.alt || undefined })),
+  });
   let href = location.href;
-  send("page");
-  setInterval(() => { if (location.href !== href) { href = location.href; send("page"); } }, 250);
+  send("page", snapshot());
+  setInterval(() => {
+    if (location.href === href) return;
+    href = location.href;
+    setTimeout(() => send("page", snapshot()), 400); // client-side nav: let the new page render
+  }, 250);
 })();

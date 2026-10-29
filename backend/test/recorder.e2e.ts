@@ -18,7 +18,10 @@ const hasKey = existsSync(join(ROOT, ".env")) && /MODEL_API_KEY=\S/.test(readFil
 await fetch(MOCK).catch(() => { console.error("Mock apps not running on :3100. Start them: cd mock-apps && npm start"); process.exit(1); });
 await fetch(`${MOCK}/api/reset`, { method: "POST" });
 
-const data = mkdtempSync(join(tmpdir(), "showrun-"));
+// DATA_DIR=data keeps the session (e.g. as a dev fixture); NARRATION picks the fake mic file.
+const data = process.env.DATA_DIR ? join(ROOT, "backend", process.env.DATA_DIR) : mkdtempSync(join(tmpdir(), "showrun-"));
+const narration = join(ROOT, "scripts", "fixtures", process.env.NARRATION ?? "narration.wav");
+const narrationMs = ((readFileSync(narration).length - 44) / 32000) * 1000; // 16 kHz mono 16-bit
 const backend = spawn(process.execPath, ["--env-file-if-exists=../.env", "src/server.ts"], {
   cwd: join(ROOT, "backend"), env: { ...process.env, DATA_DIR: data }, stdio: "inherit",
 });
@@ -34,7 +37,7 @@ try {
   args: [
     `--disable-extensions-except=${ext}`, `--load-extension=${ext}`,
     "--use-fake-ui-for-media-stream", "--use-fake-device-for-media-stream",
-    `--use-file-for-fake-audio-capture=${join(ROOT, "scripts", "fixtures", "narration.wav")}`,
+    `--use-file-for-fake-audio-capture=${narration}`,
   ],
 });
 
@@ -60,7 +63,7 @@ try {
   await page.goto(`${MOCK}/inbox/m001`); await pause();
   await page.locator("#reply-body").fill("Hi Maria, sorry about the mug. A replacement is on its way.");
   await page.getByRole("button", { name: "Send reply" }).click(); await pause();
-  await page.waitForTimeout(Math.max(0, started.t0 + 16000 - Date.now())); // narration fixture is 14.8 s
+  await page.waitForTimeout(Math.max(0, started.t0 + narrationMs + 1200 - Date.now())); // let the narration finish
 
   const result = await worker.evaluate(() => (globalThis as any).showrun.stop());
   console.log("stopped", result);
