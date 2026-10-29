@@ -1,12 +1,12 @@
 import { useState } from "react";
 import { toast } from "sonner";
-import { CalendarClock, Check, ChevronRight, CircleAlert, Code2, Ellipsis, Hand, LoaderCircle, Mic, RotateCcw, Trash2 } from "lucide-react";
+import { CalendarClock, Check, ChevronRight, CircleAlert, Code2, Ellipsis, Hand, LoaderCircle, Mic, RotateCcw, ShieldAlert, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Orb, Said, useAction } from "@/components/bits";
-import { RunButton } from "@/components/run-button";
+import { RunButton, useRunTask } from "@/components/run-button";
 import { ScheduleEditor, describeSchedule } from "@/components/schedule";
 import { Content, PageHead } from "@/components/shell";
 import { RunsList } from "@/pages/activity";
@@ -100,16 +100,7 @@ export function TaskPage({ id, tab = "overview" }: { id: string; tab?: string })
         actions={learning ? null : (
           <>
             {t.specId ? <RunButton task={t} /> : null}
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild><Button variant="ghost" size="icon" className="rounded-full" aria-label="More"><Ellipsis /></Button></DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-56">
-                <DropdownMenuItem onSelect={() => setEditing("schedule")}><CalendarClock />{schedule ? "Change schedule" : "Repeat by itself…"}</DropdownMenuItem>
-                <DropdownMenuItem onSelect={relearn} disabled={!!busy}><RotateCcw />Learn again from the recording</DropdownMenuItem>
-                {t.specId ? <DropdownMenuItem onSelect={() => { location.hash = `#/spec/${t.specId}`; }}><Code2 />Advanced editor</DropdownMenuItem> : null}
-                <DropdownMenuSeparator />
-                <DropdownMenuItem variant="destructive" onSelect={() => setEditing("delete")}><Trash2 />Delete task</DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
+            <TaskMenu t={t} hasSchedule={!!schedule} onSchedule={() => setEditing("schedule")} onRelearn={relearn} onDelete={() => setEditing("delete")} busy={!!busy} />
           </>
         )}
       />
@@ -286,5 +277,26 @@ function RecordingSummary({ id }: { id: string }) {
       ) : <p className="text-muted-foreground">No voice in this recording.</p>}
       <a href={`#/session/${id}`} className="inline-flex items-center gap-1 text-[13px] text-muted-foreground">See every click with screenshots<ChevronRight className="size-3.5" /></a>
     </div>
+  );
+}
+
+/** The task's other actions, each with its icon: run without approvals, schedule, learn again, editor, delete. */
+function TaskMenu({ t, hasSchedule, onSchedule, onRelearn, onDelete, busy }: { t: Task; hasSchedule: boolean; onSchedule: () => void; onRelearn: () => void; onDelete: () => void; busy: boolean }) {
+  const runner = useRunTask(t);
+  return (
+    <>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild><Button variant="ghost" size="icon" className="rounded-full" aria-label="More"><Ellipsis /></Button></DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="w-60">
+          {t.built ? <DropdownMenuItem onSelect={() => runner.open("unattended")}><ShieldAlert />Run without asking me</DropdownMenuItem> : null}
+          <DropdownMenuItem onSelect={() => onSchedule()}><CalendarClock />{hasSchedule ? "Change schedule" : "Repeat by itself…"}</DropdownMenuItem>
+          <DropdownMenuItem onSelect={onRelearn} disabled={busy}><RotateCcw />Learn again from the recording</DropdownMenuItem>
+          {t.specId ? <DropdownMenuItem onSelect={() => { location.hash = `#/spec/${t.specId}`; }}><Code2 />Advanced editor</DropdownMenuItem> : null}
+          <DropdownMenuSeparator />
+          <DropdownMenuItem variant="destructive" onSelect={() => onDelete()}><Trash2 />Delete task</DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+      {runner.dialog}
+    </>
   );
 }
