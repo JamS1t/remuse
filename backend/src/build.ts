@@ -61,6 +61,8 @@ ${JSON.stringify(textVars, null, 2)}
 Computed variables:
 ${JSON.stringify(computed, null, 2)}
 
+Also in v: prev_<name> for every variable, its value from the previous run of this task, or null on the first run (use it for "change since last time"; return null when it is null).
+
 Values the person gives per item (always present in v):
 ${JSON.stringify(spec.inputs.columns ?? [], null, 2)}
 
@@ -92,7 +94,8 @@ export function selfTest(spec: Spec, code: string, pages: { url: string; text: s
   let r: Rules & { tests?: { name: string; vars: Record<string, unknown>; expect: string }[] };
   try { r = load(code) as any; } catch (e) { return [{ name: "code loads", ok: false, detail: (e as Error).message }]; }
 
-  const demo: Record<string, unknown> = { today, ...Object.fromEntries((spec.inputs.columns ?? []).map((c) => [c.name, c.demoValue])) };
+  // The demo was a first run: no previous values yet.
+  const demo: Record<string, unknown> = { today, ...Object.fromEntries((spec.inputs.columns ?? []).map((c) => [c.name, c.demoValue])), ...Object.fromEntries(spec.variables.map((v) => [`prev_${v.name}`, null])) };
   for (const v of spec.variables) {
     if (v.kind === "text") {
       const fn = r.extract?.[v.name];

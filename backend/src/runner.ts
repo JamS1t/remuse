@@ -8,6 +8,11 @@ import { askJson, ground, sam, text, png, type Box } from "./meta.ts";
 import { load, type Rules } from "./build.ts";
 import type { Spec, Step, Target } from "./understand.ts";
 import { applyLogins } from "./logins.ts";
+import { notify } from "./notify.ts";
+import { captionFor, chooseFile, findFolder, freeName, markUsed, pathIn, usedFor } from "./folders.ts";
+
+/** Ends the item quietly as skipped (e.g. nothing new to upload yet), not as a failure. */
+class Skip extends Error {}
 
 export type LogLine = { at: number; msg: string; level: "info" | "ok" | "warn" | "error"; shot?: string };
 export type Candidate = { url: string; title: string; vars: Record<string, unknown>; score: number | null; shot?: string; best?: boolean };
@@ -16,6 +21,7 @@ export type Item = {
   status: "waiting" | "running" | "approval" | "asking" | "done" | "skipped" | "failed";
   vars: Record<string, unknown>; outcome?: string; because?: string; expected?: string; decidedBy?: "rules" | "you" | "learned"; log: LogLine[];
   candidates?: Candidate[];
+  report?: string; // the update a "report" step gave the person
 };
 export type Pending =
   | { kind: "approval"; item: number; step: string; target?: string; outcome?: string; because?: string; shot: string; healed?: string }
@@ -26,6 +32,8 @@ export type Run = {
   id: string; specId: number; status: "starting" | "running" | "done" | "failed" | "stopped";
   items: Item[]; current: number; pending: Pending | null; autoApprove: boolean;
   rows?: Record<string, string>[];
+  // Runs work hidden in the background unless the person chose to watch; who started it.
+  visible?: boolean; trigger?: "you" | "schedule";
   startedAt: number; endedAt?: number; error?: string; shot?: string;
   heals: { step: string; from: string; to: string }[];
   learned: { requestType: string; outcome: string; note?: string; reply?: string }[];
@@ -34,15 +42,27 @@ export type Run = {
 
 const VIEW = { width: 1440, height: 900 };
 const MOCK = process.env.MOCK_URL ?? "http://localhost:3100";
-const IRREVERSIBLE = /\b(refund|replace|send|pay|submit|ship|confirm|delete|place order|issue|buy|checkout|check out|purchase|book|transfer|message seller)\b/i;
+const IRREVERSIBLE = /\b(refund|replace|send|pay|submit|ship|confirm|delete|place order|issue|buy|checkout|check out|purchase|book|transfer|message seller|post|share|publish)\b/i;
 const PROFILE = fileURLToPath(new URL("../data/browser", import.meta.url));
 
 /** The Remuse browser: the person's installed Chrome with its own profile, so sign-ins stick between runs. */
+// Hidden Chrome calls itself "HeadlessChrome", which sites like Google treat as a bot. Learn the real
+// user agent once and present that instead, so a hidden run looks like the person's normal Chrome.
+let realUA: string | null = null;
+const launch = async (opts: Parameters<typeof chromium.launchPersistentContext>[1]) => {
+  try { return await chromium.launchPersistentContext(PROFILE, { ...opts, channel: "chrome" }); }
+  catch { return chromium.launchPersistentContext(PROFILE, opts); } // ponytail: no Chrome installed, bundled Chromium
+};
+
 export async function openBrowser(headless: boolean): Promise<BrowserContext> {
   const opts = { headless, viewport: VIEW, args: headless ? [] : [`--window-size=${VIEW.width},${VIEW.height + 120}`] };
-  let ctx: BrowserContext;
-  try { ctx = await chromium.launchPersistentContext(PROFILE, { ...opts, channel: "chrome" }); }
-  catch { ctx = await chromium.launchPersistentContext(PROFILE, opts); } // ponytail: no Chrome installed, bundled Chromium
+  if (headless && !realUA) {
+    const probe = await launch(opts);
+    const ua = await (probe.pages()[0] ?? (await probe.newPage())).evaluate(() => navigator.userAgent).catch(() => "");
+    await probe.close();
+    realUA = ua.replace("HeadlessChrome", "Chrome") || null;
+  }
+  const ctx = await launch(headless && realUA ? { ...opts, userAgent: realUA } : opts);
   // See the WebMCP tools pages register (same script the extension uses while recording).
   await ctx.addInitScript({ path: fileURLToPath(new URL("../../extension/webmcp.js", import.meta.url)) });
   // The person's logins for connected sites, shared by the Chrome helper.
@@ -65,6 +85,10 @@ export class Runner {
   dir: string;
   page!: Page;
   stopped = false;
+  // Variables from the previous run of this task, by item label, for {{prev_<name>}} ("change since last time").
+  prev: Record<string, Record<string, unknown>> = {};
+  // Which task this is (its recording id): uploaded files are remembered per task.
+  taskKey = "";
   baseRules: Spec["rules"]; // decide() indexes these; learned rules are added to the spec, not here
   private resolve: ((a: Answer) => void) | null = null;
   private shots = 0;
@@ -109,12 +133,33 @@ export class Runner {
   }
 
   async start(limit?: number) {
-    const headless = process.env.HEADLESS === "1";
+    const headless = process.env.HEADLESS === "1" || !this.run.visible;
     const browser = await openBrowser(headless);
     try {
       this.page = browser.pages()[0] ?? (await browser.newPage());
+      const keep = findFolder(this.spec.saveDownloads ?? null);
+      // Downloads in flight: an item (and the run) waits for them before the browser closes.
+      const saving: Promise<void>[] = [];
+      const settle = async () => { if (!keep) return; await this.page.waitForTimeout(1000).catch(() => {}); await Promise.allSettled(saving); };
+      if (keep) {
+        const watch = (pg: Page) => pg.on("download", (d) => {
+          const it = this.item;
+          saving.push((async () => {
+            try {
+              const to = freeName(keep, d.suggestedFilename());
+              await d.saveAs(to);
+              it?.log.push({ at: Date.now(), msg: `Saved ${to.split(/[\\/]/).pop()} to ${keep.name}`, level: "ok" }); this.changed();
+            } catch (e) { it?.log.push({ at: Date.now(), msg: `Couldn't save a download: ${(e as Error).message}`, level: "warn" }); this.changed(); }
+          })());
+        });
+        browser.pages().forEach(watch);
+        browser.on("page", watch);
+      }
       const { source, listUrl, itemSelector } = this.spec.inputs;
-      if (source === "rows") {
+      if (source === "once") {
+        // Nothing to go through: a check or an update that runs as one item.
+        this.run.items = [{ url: "", label: (this.spec.title ?? this.spec.goal).slice(0, 90), status: "waiting", vars: {}, log: [] }];
+      } else if (source === "rows") {
         // One item per row the person gave; its columns become the item's variables.
         const rows = (this.run.rows ?? []).slice(0, limit);
         if (!rows.length) throw new Error("this task needs rows to work on, and none were given");
@@ -131,6 +176,7 @@ export class Runner {
         it.status = "running"; this.changed();
         try { await this.runItem(); }
         catch (e) { it.status = "failed"; this.log(`Stopped this item: ${(e as Error).message}`, "error"); }
+        await settle();
       }
       this.run.status = this.stopped ? "stopped" : "done";
       this.scoreRun();
@@ -156,6 +202,10 @@ export class Runner {
   private async runItem() {
     const it = this.item;
     it.vars = { ...it.vars, item_url: it.url, today: manila() };
+    const labels = Object.keys(this.prev);
+    // A "once" task is the same single item every time even if its name changed; other items match by label only.
+    const before = this.prev[it.label] ?? (this.spec.inputs.source === "once" && labels.length === 1 ? this.prev[labels[0]] : undefined);
+    for (const v of this.spec.variables) it.vars[`prev_${v.name}`] = before?.[v.name] ?? null;
     for (const step of this.spec.steps) if (!(await this.step(step))) return;
     for (const v of this.spec.variables.filter((x) => x.kind === "computed" && !x.candidate)) {
       it.vars[v.name] = this.rules.compute[v.name]?.(it.vars);
@@ -214,6 +264,34 @@ export class Runner {
       if (it.status === "skipped") return;
     }
     it.status = "done"; this.changed();
+    if (it.vars.file_name && this.taskKey) markUsed(this.taskKey, [String(it.vars.file_name)]);
+  }
+
+  /** Pick a file from an allowed folder by the task's rule and hand it to the page's upload control. */
+  private async upload(raw: Step, step: Step) {
+    const it = this.item;
+    const rule = raw.file ?? { folder: null };
+    const folder = findFolder(rule.folder);
+    if (!folder) throw new Error(rule.folder ? `the folder "${rule.folder}" isn't allowed any more; add it on the Folders page` : "choose which folder to upload from on the task page");
+    const name = chooseFile(folder, rule, usedFor(this.taskKey));
+    if (!name) throw new Skip(`Nothing new to upload in ${folder.name} right now (${rule.pick ?? "next"} file). Skipped.`);
+    const path = pathIn(folder, name);
+    it.vars.file_name = name;
+    it.vars.file_caption = captionFor(folder, name);
+    // Most sites keep a hidden file input; set it directly. Otherwise click their button and answer the file picker.
+    const input = this.page.locator('input[type="file"]');
+    if (await input.count()) await input.first().setInputFiles(path);
+    else {
+      const found = raw.target ? await this.locate(raw, step) : null;
+      const [chooser] = await Promise.all([
+        this.page.waitForEvent("filechooser", { timeout: 10_000 }),
+        found?.loc ? found.loc.click() : found?.point ? this.page.mouse.click(found.point.x, found.point.y) : Promise.reject(new Error("no upload button found")),
+      ]);
+      await chooser.setFiles(path);
+    }
+    await this.page.waitForTimeout(1500); // let the site read the file and show its preview
+    const { file } = await this.shot();
+    this.log(`Uploaded ${name} from ${folder.name}${it.vars.file_caption ? " (with its caption)" : ""}`, "ok", file);
   }
 
   private hasTool(name: string) {
@@ -226,7 +304,9 @@ export class Runner {
     for (;;) {
       try { await this.exec(s); return true; }
       catch (e) {
-        if (this.stopped || process.env.HEADLESS === "1") throw e;
+        if (e instanceof Skip) { this.item.status = "skipped"; this.log(e.message, "info"); return false; }
+        // A hidden run has no window to hand over: the item fails and says why instead of waiting forever.
+        if (this.stopped || process.env.HEADLESS === "1" || !this.run.visible) throw e;
         const { file } = await this.shot();
         const it = this.item;
         this.log(`Stuck on "${s.describe}": ${(e as Error).message}`, "warn", file);
@@ -299,6 +379,19 @@ export class Runner {
     else if (step.do === "goto") await this.page.goto(step.url!);
     else if (step.do === "extract") return this.extract(step.vars ?? []);
     else if (step.do === "compare") return this.compare(step);
+    else if (step.do === "upload") return this.upload(raw, step);
+    else if (step.do === "report") {
+      // Tell the person: a Windows notification, and the update is kept on the run.
+      // A value that doesn't exist yet (no previous run to compare with) drops its "(… since last time)"
+      // part instead of leaving a gap; any other missing value shows as a dash.
+      const NONE = "\u0000";
+      const msg = (raw.message ?? step.describe).replace(/\{\{\s*(\w+)\s*\}\}/g, (_, k) => (v[k] === undefined || v[k] === null || v[k] === "" ? NONE : String(v[k])))
+        .replace(/\s*\([^()]*\u0000[^()]*\)/g, "").replaceAll(NONE, "–");
+      it.report = msg;
+      this.log(`Update: ${msg}`, "ok");
+      notify(this.spec.title ?? "Remuse update", msg, `http://127.0.0.1:${process.env.PORT ?? 3200}/#/run/${this.run.id}`);
+      return;
+    }
     else if (raw.tool && (await this.hasTool(raw.tool.name))) {
       // The page offers this action as a WebMCP tool: call it directly instead of clicking. Same approval gate.
       const gated = raw.irreversible || IRREVERSIBLE.test(step.target?.name ?? "") || IRREVERSIBLE.test(raw.tool.name.replace(/_/g, " "));

@@ -81,10 +81,7 @@
   body {
     @apply text-foreground font-sans;
     font-size: 14px; line-height: 1.5; font-feature-settings: "ss01", "cv11";
-    /* the faint dot grid of the reference: the room the orb lights */
     background-color: var(--background);
-    background-image: radial-gradient(rgb(255 255 255 / 0.045) 1px, transparent 1.2px);
-    background-size: 18px 18px;
   }
   ::selection { background: rgb(124 147 255 / 0.35); color: #fff; }
   input, textarea { caret-color: var(--ring); }
@@ -96,6 +93,21 @@
   ::-webkit-scrollbar-thumb { background: #26262c; border-radius: 8px; border: 3px solid var(--background); }
   ::-webkit-scrollbar-track { background: transparent; }
 }
+
+/* The room: the orb's colours drifting slowly behind every page. Soft gradients moved by transform only,
+   so it stays cheap; content sits above it. */
+.aurora { position: fixed; inset: 0; z-index: -1; overflow: hidden; pointer-events: none; background: var(--background); }
+.aurora i { position: absolute; width: 70vmax; height: 70vmax; border-radius: 50%; opacity: .9; will-change: transform; }
+.aurora i:nth-child(1) { left: -20vmax; top: -30vmax; background: radial-gradient(circle, rgb(79 107 255 / .42), transparent 62%); animation: drift-a 38s ease-in-out infinite alternate; }
+.aurora i:nth-child(2) { right: -25vmax; top: -10vmax; background: radial-gradient(circle, rgb(157 123 255 / .36), transparent 62%); animation: drift-b 46s ease-in-out infinite alternate; }
+.aurora i:nth-child(3) { left: 10vmax; bottom: -40vmax; background: radial-gradient(circle, rgb(110 224 255 / .24), transparent 62%); animation: drift-c 54s ease-in-out infinite alternate; }
+.aurora::after { /* keep the middle calm and readable */
+  content: ""; position: absolute; inset: 0;
+  background: radial-gradient(ellipse at 50% 35%, rgb(11 11 13 / .45), rgb(11 11 13 / .1) 65%, transparent 100%);
+}
+@keyframes drift-a { to { transform: translate(18vmax, 14vmax) scale(1.1); } }
+@keyframes drift-b { to { transform: translate(-16vmax, 20vmax) scale(.92); } }
+@keyframes drift-c { to { transform: translate(14vmax, -16vmax) scale(1.08); } }
 
 /* Glass: a panel lit faintly from above. */
 .glass {
@@ -155,6 +167,6 @@
 .orb[data-state="done"]     { --c1: #5fd39a; --c2: #7fd8ff; --c3: #c7ffe6; --spin: 16s; --breath: 6s; }
 
 @media (prefers-reduced-motion: reduce) {
-  .orb::before, .orb .swirl, .shimmer, .live-bar { animation: none; }
+  .orb::before, .orb .swirl, .shimmer, .live-bar, .aurora i { animation: none; }
   .shimmer { color: #cfcfd6; background: none; }
 }

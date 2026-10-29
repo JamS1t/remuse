@@ -2,7 +2,7 @@
 // Run: npm start   (port 3200, reads MODEL_API_KEY from ../.env)
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { DatabaseSync } from "node:sqlite";
-import { mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync, existsSync, rmSync, statSync } from "node:fs";
 import { join, dirname, extname } from "node:path";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
@@ -13,6 +13,10 @@ import { Runner, openBrowser, type Run } from "./runner.ts";
 import type { BrowserContext } from "playwright";
 import { SITE, listLogins, removeLogin, saveLogin } from "./logins.ts";
 import { notify } from "./notify.ts";
+import { addFolder, chooseFile, filesIn, findFolder, listFolders, pickFolder, removeFolder, usedFor } from "./folders.ts";
+
+// What Muse Spark sees of the allowed folders: names and their newest file names.
+const folderHints = () => listFolders().map((f) => { try { return { name: f.name, files: filesIn(f).slice(0, 8).map((x) => x.name) }; } catch { return { name: f.name, files: [] }; } });
 
 const PORT = Number(process.env.PORT ?? 3200);
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -23,7 +27,15 @@ mkdirSync(DATA, { recursive: true });
 // Vite's dev server (5173) proxies to us during UI work.
 const ALLOWED_ORIGINS = new Set([`http://127.0.0.1:${PORT}`, `http://localhost:${PORT}`, "http://localhost:5173", "http://127.0.0.1:5173"]);
 
+// One Agent at a time. A second one would fight the first over the database and the browser profile,
+// so it leaves before touching either.
+if (await fetch(`http://127.0.0.1:${PORT}/api/sessions`, { signal: AbortSignal.timeout(1500) }).then((r) => r.ok, () => false)) {
+  console.log(`Remuse Agent is already running on port ${PORT}.`);
+  process.exit(0);
+}
+
 const db = new DatabaseSync(join(DATA, "showrun.db"));
+db.exec("PRAGMA busy_timeout = 5000; PRAGMA journal_mode = WAL;");
 db.exec(`
   CREATE TABLE IF NOT EXISTS sessions (
     id TEXT PRIMARY KEY, title TEXT, started_at INTEGER NOT NULL, ended_at INTEGER,
@@ -119,6 +131,25 @@ function saveSpec(sessionId: string, spec: Spec, note: string, code: string | nu
   return Number(r.lastInsertRowid);
 }
 
+// A recording with no actions (stopped right away, mic trouble) teaches nothing and only clutters the
+// history: it is dropped on Stop, and old ones are cleared when the Agent starts.
+const ACTIONS = "kind NOT IN ('start', 'tools')";
+// Your voice counts: a recording where you talked it through is kept even with no clicks (more than a
+// second of 16 kHz mono audio).
+const hasVoice = (id: string) => { const f = join(sessionDir(id), "voice.wav"); return existsSync(f) && statSync(f).size > 44 + 32000; };
+const isEmpty = (id: string) =>
+  !(db.prepare(`SELECT 1 FROM events WHERE session_id = ? AND ${ACTIONS} LIMIT 1`).get(id)) &&
+  !(db.prepare("SELECT 1 FROM specs WHERE session_id = ? LIMIT 1").get(id)) && !hasVoice(id);
+function discard(id: string) {
+  db.prepare("DELETE FROM events WHERE session_id = ?").run(id);
+  db.prepare("DELETE FROM turns WHERE session_id = ?").run(id);
+  db.prepare("DELETE FROM sessions WHERE id = ?").run(id);
+  rmSync(sessionDir(id), { recursive: true, force: true });
+}
+for (const s of db.prepare("SELECT id FROM sessions WHERE ended_at IS NOT NULL OR started_at < ?").all(Date.now() - 3600_000) as any[]) {
+  if (isEmpty(s.id)) discard(s.id);
+}
+
 async function transcribeSession(id: string, offsetMs: number) {
   const wavPath = join(sessionDir(id), "voice.wav");
   if (!existsSync(wavPath)) return;
@@ -145,7 +176,7 @@ async function learn(id: string, offsetMs: number) {
     stage(id, "listening");
     await transcribeSession(id, offsetMs);
     stage(id, "understanding");
-    const spec = await understand(full(id), sessionDir(id));
+    const spec = await understand(full(id), sessionDir(id), folderHints());
     if (spec.title && !session(id).title) db.prepare("UPDATE sessions SET title = ? WHERE id = ?").run(spec.title, id);
     const specId = saveSpec(id, spec, "Learned by Muse Spark from your recording");
     stage(id, "building");
@@ -192,10 +223,17 @@ db.exec(`CREATE TABLE IF NOT EXISTS schedules (
   id INTEGER PRIMARY KEY, spec_id INTEGER NOT NULL REFERENCES specs(id), time TEXT NOT NULL, days TEXT NOT NULL,
   rows TEXT, run_limit INTEGER, enabled INTEGER NOT NULL DEFAULT 1, last_run TEXT
 )`);
-type Schedule = { id: number; specId: number; time: string; days: string; rows: Record<string, string>[] | null; limit: number | null; enabled: boolean; lastRun: string | null };
-const schedules = (): Schedule[] => (db.prepare("SELECT * FROM schedules ORDER BY id").all() as any[]).map((s) => ({
-  id: s.id, specId: s.spec_id, time: s.time, days: s.days, rows: s.rows ? JSON.parse(s.rows) : null, limit: s.run_limit, enabled: !!s.enabled, lastRun: s.last_run,
+// Two kinds: every N minutes ("every hour"), or on chosen days at a time ("weekdays at 9:00").
+for (const col of ["every_minutes INTEGER", "last_at INTEGER"]) { try { db.exec(`ALTER TABLE schedules ADD COLUMN ${col}`); } catch { /* already there */ } }
+type Schedule = { id: number; specId: number; sessionId: string; time: string; days: string; everyMinutes: number | null; rows: Record<string, string>[] | null; limit: number | null; enabled: boolean; lastRun: string | null; lastAt: number | null };
+// sessionId names the task, so a schedule stays attached to it across new spec versions.
+const schedules = (): Schedule[] => (db.prepare("SELECT s.*, x.session_id FROM schedules s JOIN specs x ON x.id = s.spec_id ORDER BY s.id").all() as any[]).map((s) => ({
+  id: s.id, specId: s.spec_id, sessionId: s.session_id, time: s.time, days: s.days, everyMinutes: s.every_minutes, rows: s.rows ? JSON.parse(s.rows) : null,
+  limit: s.run_limit, enabled: !!s.enabled, lastRun: s.last_run, lastAt: s.last_at,
 }));
+// A schedule follows its task: it always runs the task's newest Task Spec, including versions learned since.
+// Only built versions can run: an edited-but-not-rebuilt version must not silence the schedule.
+const latestSpec = (specId: number) => (db.prepare("SELECT MAX(id) AS id FROM specs WHERE code IS NOT NULL AND session_id = (SELECT session_id FROM specs WHERE id = ?)").get(specId) as any)?.id ?? specId;
 // Manila clock: "HH:MM", ISO weekday 1 (Mon) .. 7 (Sun), and the date.
 function manilaNow() {
   const parts = Object.fromEntries(new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Manila", weekday: "short", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(new Date()).map((x) => [x.type, x.value]));
@@ -204,21 +242,25 @@ function manilaNow() {
 setInterval(async () => {
   const now = manilaNow();
   for (const s of schedules()) {
-    if (!s.enabled || s.lastRun === now.date || !s.days.includes(now.day) || s.time > now.time) continue;
+    if (!s.enabled) continue;
+    const due = s.everyMinutes ? Date.now() - (s.lastAt ?? 0) >= s.everyMinutes * 60_000
+      : s.lastRun !== now.date && s.days.includes(now.day) && s.time <= now.time;
+    if (!due) continue;
     if (active && !["done", "failed", "stopped"].includes(active.run.status)) return; // try again next tick
-    db.prepare("UPDATE schedules SET last_run = ? WHERE id = ?").run(now.date, s.id);
-    try { await startRun(s.specId, { rows: s.rows ?? undefined, limit: s.limit ?? undefined, scheduled: true }); }
+    db.prepare("UPDATE schedules SET last_run = ?, last_at = ? WHERE id = ?").run(now.date, Date.now(), s.id);
+    try { await startRun(latestSpec(s.specId), { rows: s.rows ?? undefined, limit: s.limit ?? undefined, scheduled: true }); }
     catch (e) { notify("Remuse couldn't start a scheduled task", (e as Error).message, `http://127.0.0.1:${PORT}/#/spec/${s.specId}`); }
   }
 }, 30_000).unref();
 
-async function startRun(specId: number, opts: { limit?: number; autoApprove?: boolean; rows?: Record<string, string>[]; scheduled?: boolean }) {
+async function startRun(specId: number, opts: { limit?: number; autoApprove?: boolean; rows?: Record<string, string>[]; scheduled?: boolean; watch?: boolean }) {
   if (active && !["done", "failed", "stopped"].includes(active.run.status)) throw new HttpError(409, "a run is already going");
   const row = specRow(specId);
   if (!row.code) throw new HttpError(400, "build the rules first");
   // Both use the one Chrome profile, which only one window can hold.
   if (signIn) { await signIn.close().catch(() => {}); signIn = null; }
-  const run: Run = { id: randomUUID(), specId, status: "starting", items: [], current: 0, pending: null, autoApprove: !!opts.autoApprove, startedAt: Date.now(), heals: [], learned: [], rows: opts.rows };
+  const run: Run = { id: randomUUID(), specId, status: "starting", items: [], current: 0, pending: null, autoApprove: !!opts.autoApprove, startedAt: Date.now(), heals: [], learned: [], rows: opts.rows,
+    visible: !!opts.watch && !opts.scheduled, trigger: opts.scheduled ? "schedule" : "you" };
   let last = 0;
   let asked = "";
   const link = `http://127.0.0.1:${PORT}/#/run/${run.id}`;
@@ -235,6 +277,8 @@ async function startRun(specId: number, opts: { limit?: number; autoApprove?: bo
     }
     asked = key;
   });
+  runner.prev = lastValues(row.sessionId);
+  runner.taskKey = row.sessionId;
   active = runner;
   saveRun(run);
   runner.start(opts.limit).then(() => {
@@ -248,6 +292,37 @@ async function startRun(specId: number, opts: { limit?: number; autoApprove?: bo
     }
   });
   return run;
+}
+
+// Parsed runs, kept while their row is unchanged: the sidebar asks for these every couple of seconds.
+const parsed = new Map<string, { at: number; run: Run }>();
+function recentRuns(sessionId: string): Run[] {
+  const rows = db.prepare(`SELECT r.id, r.updated_at, r.json FROM runs r JOIN specs x ON x.id = r.spec_id WHERE x.session_id = ? ORDER BY r.updated_at DESC LIMIT 10`).all(sessionId) as any[];
+  return rows.map((r) => {
+    const hit = parsed.get(r.id);
+    if (hit && hit.at === r.updated_at) return hit.run;
+    const run = JSON.parse(r.json) as Run;
+    parsed.set(r.id, { at: r.updated_at, run });
+    return run;
+  });
+}
+
+/** The newest update a "report" step gave for this task, if any. */
+function lastReport(sessionId: string): { text: string; at: number; runId: string } | null {
+  for (const run of recentRuns(sessionId)) {
+    const it = [...run.items].reverse().find((i) => i.report);
+    if (it) return { text: it.report!, at: run.endedAt ?? run.startedAt, runId: run.id };
+  }
+  return null;
+}
+
+/** The item variables of this task's most recent finished run, by item label. */
+function lastValues(sessionId: string): Record<string, Record<string, unknown>> {
+  for (const run of recentRuns(sessionId)) {
+    const done = run.items.filter((i) => i.status === "done");
+    if (done.length) return Object.fromEntries(done.map((i) => [i.label, Object.fromEntries(Object.entries(i.vars).filter(([k]) => !k.startsWith("prev_")))]));
+  }
+  return {};
 }
 
 function getRun(id: string): Run {
@@ -276,18 +351,33 @@ async function route(req: IncomingMessage, res: ServerResponse) {
   if (origin && !ALLOWED_ORIGINS.has(origin) && !origin.startsWith("chrome-extension://")) throw new HttpError(403, "not allowed from this page");
 
   if (url.pathname === "/api/logins" && m === "GET") return send(res, 200, listLogins());
+
+  // Folders the person allows: the Windows folder picker adds one; each lists its newest files.
+  if (url.pathname === "/api/folders" && m === "GET")
+    return send(res, 200, listFolders().map((f) => { try { const files = filesIn(f); return { ...f, count: files.length, latest: files[0] ?? null, ok: true }; } catch { return { ...f, count: 0, latest: null, ok: false }; } }));
+  if (url.pathname === "/api/folders/pick" && m === "POST") {
+    const path = await pickFolder();
+    if (!path) return send(res, 200, { cancelled: true });
+    return send(res, 200, addFolder(path));
+  }
+  if (url.pathname === "/api/folders" && m === "POST") { const b = await json(req); return send(res, 200, addFolder(String(b.path ?? ""), b.name)); }
+  if (p[1] === "folders" && p[2] && m === "DELETE") { removeFolder(p[2]); return send(res, 200, { ok: true }); }
   if (url.pathname === "/api/schedules" && m === "GET") return send(res, 200, schedules());
   if (url.pathname === "/api/schedules" && m === "POST") {
     const b = await json(req);
     const specId = Number(b.specId);
     specRow(specId); // 404 if it doesn't exist
-    if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(b.time ?? "")) throw new HttpError(400, "time must be HH:MM");
+    const every = b.everyMinutes ? Math.round(Number(b.everyMinutes)) : null;
+    if (every !== null && !(every >= 15 && every <= 1440)) throw new HttpError(400, "repeat between every 15 minutes and once a day");
+    if (!every && !/^([01]\d|2[0-3]):[0-5]\d$/.test(b.time ?? "")) throw new HttpError(400, "time must be HH:MM");
     const days = String(b.days ?? "1234567").replace(/[^1-7]/g, "");
     if (!days) throw new HttpError(400, "pick at least one day");
     const rows = Array.isArray(b.rows) ? JSON.stringify(b.rows) : null;
     // One schedule per task: saving again replaces it.
     db.prepare("DELETE FROM schedules WHERE spec_id IN (SELECT id FROM specs WHERE session_id = (SELECT session_id FROM specs WHERE id = ?))").run(specId);
-    db.prepare("INSERT INTO schedules (spec_id, time, days, rows, run_limit, enabled) VALUES (?, ?, ?, ?, ?, 1)").run(specId, b.time, days, rows, b.limit ? Number(b.limit) : null);
+    // An interval schedule starts counting now; the first run is one interval away.
+    db.prepare("INSERT INTO schedules (spec_id, time, days, rows, run_limit, enabled, every_minutes, last_at) VALUES (?, ?, ?, ?, ?, 1, ?, ?)")
+      .run(specId, b.time ?? "00:00", days, rows, b.limit ? Number(b.limit) : null, every, every ? Date.now() : null);
     return send(res, 200, schedules());
   }
   if (p[1] === "schedules" && p[2] && m === "DELETE") { db.prepare("DELETE FROM schedules WHERE id = ?").run(Number(p[2])); return send(res, 200, schedules()); }
@@ -295,7 +385,7 @@ async function route(req: IncomingMessage, res: ServerResponse) {
   if (url.pathname === "/api/tasks" && m === "GET")
     return send(res, 200, (db.prepare(`SELECT s.id AS sessionId, s.title, s.started_at AS startedAt, s.ended_at AS endedAt, s.learn_stage AS learnStage, s.learn_error AS learnError,
       x.id AS specId, x.version, x.json, x.tests, x.code IS NOT NULL AS built
-      FROM sessions s LEFT JOIN specs x ON x.id = (SELECT MAX(id) FROM specs WHERE session_id = s.id) ORDER BY s.started_at DESC`).all() as any[])
+      FROM sessions s LEFT JOIN specs x ON x.id = (SELECT MAX(id) FROM specs WHERE session_id = s.id) WHERE EXISTS (SELECT 1 FROM events e WHERE e.session_id = s.id AND e.kind NOT IN ('start', 'tools')) OR EXISTS (SELECT 1 FROM specs y WHERE y.session_id = s.id) OR (s.transcript IS NOT NULL AND s.transcript != '') OR s.learn_stage IS NOT NULL ORDER BY s.started_at DESC`).all() as any[])
       .map(({ json: j, tests: tj, built, ...t }) => {
         const spec = j ? (JSON.parse(j) as Spec) : null;
         const tests = tj ? (JSON.parse(tj) as { ok: boolean }[]) : [];
@@ -305,7 +395,10 @@ async function route(req: IncomingMessage, res: ServerResponse) {
           rules: spec?.rules.map((r) => ({ if: r.if, then: r.then, said: r.said })) ?? [],
           guessed: spec ? Object.entries(spec.outcomes).filter(([, o]) => !o.demonstrated).map(([k]) => k) : [],
           steps: spec?.steps.length ?? 0, compares: spec?.steps.some((s) => s.do === "compare") ?? false,
-          checks: { passed: tests.filter((x) => x.ok).length, total: tests.length } };
+          checks: { passed: tests.filter((x) => x.ok).length, total: tests.length },
+          askedSchedule: spec?.schedule ?? null, lastReport: lastReport(t.sessionId),
+          uploads: spec ? [...spec.steps, ...Object.values(spec.outcomes).flatMap((o) => o.steps)].filter((x) => x.do === "upload").map((x) => ({ folder: x.file?.folder ?? null, pick: x.file?.pick ?? "next" })) : [],
+          saveDownloads: spec?.saveDownloads ?? null };
       }));
   if (url.pathname === "/api/logins" && m === "POST") {
     const b = await json(req);
@@ -331,7 +424,7 @@ async function route(req: IncomingMessage, res: ServerResponse) {
     return send(res, 200, db.prepare(`SELECT s.id, s.title, s.started_at, s.ended_at,
       (SELECT COUNT(*) FROM events e WHERE e.session_id = s.id) AS events,
       (SELECT MAX(id) FROM specs x WHERE x.session_id = s.id) AS latest_spec
-      FROM sessions s ORDER BY started_at DESC`).all());
+      FROM sessions s WHERE EXISTS (SELECT 1 FROM events e WHERE e.session_id = s.id AND e.kind NOT IN ('start', 'tools')) OR EXISTS (SELECT 1 FROM specs y WHERE y.session_id = s.id) OR (s.transcript IS NOT NULL AND s.transcript != '') OR s.learn_stage IS NOT NULL ORDER BY started_at DESC`).all());
 
   if (m === "POST" && url.pathname === "/api/sessions") {
     const { title, startedAt } = await json(req);
@@ -345,6 +438,20 @@ async function route(req: IncomingMessage, res: ServerResponse) {
     const id = p[2];
     session(id);
     if (m === "GET" && p.length === 3) return send(res, 200, full(id));
+    // Delete a task: its recording, every spec version, runs and schedule. The UI asks first.
+    if (m === "DELETE" && p.length === 3) {
+      session(id);
+      if (active && !["done", "failed", "stopped"].includes(active.run.status) && specRow(active.run.specId).sessionId === id) throw new HttpError(409, "stop its run first");
+      const specIds = (db.prepare("SELECT id FROM specs WHERE session_id = ?").all(id) as any[]).map((x) => x.id);
+      for (const sid of specIds) {
+        for (const r of db.prepare("SELECT id FROM runs WHERE spec_id = ?").all(sid) as any[]) rmSync(runDir(r.id), { recursive: true, force: true });
+        db.prepare("DELETE FROM runs WHERE spec_id = ?").run(sid);
+        db.prepare("DELETE FROM schedules WHERE spec_id = ?").run(sid);
+      }
+      db.prepare("DELETE FROM specs WHERE session_id = ?").run(id);
+      discard(id);
+      return send(res, 200, { deleted: true });
+    }
 
     if (m === "POST" && p[3] === "events" && p.length === 4) {
       const { t, kind, url: pageUrl, before, after, ...data } = await json(req);
@@ -370,6 +477,7 @@ async function route(req: IncomingMessage, res: ServerResponse) {
     if (m === "POST" && p[3] === "finish") {
       const { endedAt, audioOffsetMs, learn: auto } = await json(req);
       db.prepare("UPDATE sessions SET ended_at = ?, audio_offset_ms = ? WHERE id = ?").run(endedAt ?? Date.now(), audioOffsetMs ?? null, id);
+      if (isEmpty(id)) { discard(id); return send(res, 200, { id, discarded: true }); }
       // Proactive: learn the whole task in the background (name, spec, tested code). The sidebar follows along.
       if (auto !== false) { learn(id, audioOffsetMs ?? 0); return send(res, 202, { id, learning: true }); }
       await transcribeSession(id, audioOffsetMs ?? 0);
@@ -379,7 +487,7 @@ async function route(req: IncomingMessage, res: ServerResponse) {
     if (m === "POST" && p[3] === "learn") { learn(id, session(id).audio_offset_ms ?? 0); return send(res, 202, { id, learning: true }); }
     // Understand: recording -> Task Spec (Muse Spark, about a minute)
     if (m === "POST" && p[3] === "spec") {
-      const spec = await understand(full(id), sessionDir(id));
+      const spec = await understand(full(id), sessionDir(id), folderHints());
       return send(res, 201, specRow(saveSpec(id, spec, "Written by Muse Spark from your recording")));
     }
     if (m === "GET" && p[3] === "files" && p[4] && /^[\w.-]+\.(png|wav)$/.test(p[4])) return file(res, join(sessionDir(id), p[4]));
@@ -395,6 +503,25 @@ async function route(req: IncomingMessage, res: ServerResponse) {
       if (!spec?.steps || !spec?.rules || !spec?.outcomes) throw new HttpError(400, "spec needs steps, rules and outcomes");
       return send(res, 201, specRow(saveSpec(row.sessionId, spec, note ?? "Edited by you")));
     }
+    // The task's file settings (which folder and rule each upload uses; where downloads go). Saved as a new
+    // version that keeps the built code, since the rules didn't change.
+    if (m === "POST" && p[3] === "files") {
+      const b = await json(req);
+      const spec = structuredClone(row.spec);
+      const steps = [...spec.steps, ...Object.values(spec.outcomes).flatMap((o) => o.steps)];
+      for (const st of steps.filter((x) => x.do === "upload")) {
+        if (b.uploadFolder !== undefined) st.file = { ...(st.file ?? { folder: null }), folder: b.uploadFolder ? findFolder(b.uploadFolder)?.name ?? null : null };
+        if (b.pick) st.file = { ...(st.file ?? { folder: null }), pick: b.pick };
+      }
+      if (b.saveDownloads !== undefined) spec.saveDownloads = b.saveDownloads ? findFolder(b.saveDownloads)?.name ?? null : null;
+      return send(res, 201, specRow(saveSpec(row.sessionId, spec, "File settings changed", row.code, row.tests)));
+    }
+    // Which file the next upload would pick, for the task page.
+    if (m === "GET" && p[3] === "next-file") {
+      const st = [...row.spec.steps, ...Object.values(row.spec.outcomes).flatMap((o) => o.steps)].find((x) => x.do === "upload");
+      const folder = findFolder(st?.file?.folder);
+      return send(res, 200, { folder: folder?.name ?? null, file: folder && st?.file ? chooseFile(folder, st.file, usedFor(row.sessionId)) : null });
+    }
     // Build: rules -> tested code (Muse Spark)
     if (m === "POST" && p[3] === "build") {
       const r = await build(row.spec, pagesOf(row.sessionId), new Date(session(row.sessionId).started_at).toLocaleDateString("en-CA", { timeZone: "Asia/Manila" }));
@@ -404,14 +531,26 @@ async function route(req: IncomingMessage, res: ServerResponse) {
     if (m === "POST" && p[3] === "runs") {
       const opts = await json(req);
       const rows = Array.isArray(opts.rows) ? opts.rows.filter((r: unknown) => r && typeof r === "object").map((r: Record<string, unknown>) => Object.fromEntries(Object.entries(r).map(([k, v]) => [String(k), String(v ?? "")]))) : undefined;
-      return send(res, 201, await startRun(sid, { limit: opts.limit ? Number(opts.limit) : undefined, autoApprove: !!opts.autoApprove, rows }));
+      return send(res, 201, await startRun(sid, { limit: opts.limit ? Number(opts.limit) : undefined, autoApprove: !!opts.autoApprove, rows, watch: !!opts.watch }));
     }
   }
 
   if (p[0] === "api" && p[1] === "runs") {
-    if (m === "GET" && p.length === 2) return send(res, 200, (db.prepare("SELECT json FROM runs ORDER BY updated_at DESC LIMIT 20").all() as any[]).map((r) => {
-      const run = JSON.parse(r.json); return { id: run.id, specId: run.specId, status: run.status, startedAt: run.startedAt, items: run.items.length, score: run.score };
-    }));
+    // Activity: the latest runs, each with its task, how it went and its update. ?task=<sessionId> narrows to one task.
+    if (m === "GET" && p.length === 2) {
+      const task = url.searchParams.get("task");
+      const rows = (task
+        ? db.prepare("SELECT r.json, x.session_id FROM runs r JOIN specs x ON x.id = r.spec_id WHERE x.session_id = ? ORDER BY r.updated_at DESC LIMIT 50").all(task)
+        : db.prepare("SELECT r.json, x.session_id FROM runs r JOIN specs x ON x.id = r.spec_id ORDER BY r.updated_at DESC LIMIT 50").all()) as any[];
+      const titles = new Map((db.prepare("SELECT id, title FROM sessions").all() as any[]).map((x) => [x.id, x.title]));
+      return send(res, 200, rows.map((r) => {
+        const run = JSON.parse(r.json) as Run;
+        const done = run.items.filter((i) => i.status === "done").length;
+        return { id: run.id, specId: run.specId, sessionId: r.session_id, task: titles.get(r.session_id) ?? null, status: run.status,
+          startedAt: run.startedAt, endedAt: run.endedAt ?? null, items: run.items.length, done, error: run.error ?? null,
+          waiting: !!run.pending, report: run.items.find((i) => i.report)?.report ?? null, score: run.score };
+      }));
+    }
     const id = p[2];
     if (m === "GET" && p.length === 3) return send(res, 200, getRun(id));
     if (m === "POST" && (p[3] === "answer" || p[3] === "stop")) {

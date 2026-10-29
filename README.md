@@ -1,4 +1,9 @@
-# Remuse
+<h1>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="brand/colour/remuse-horizontal-gradient-on-dark.svg">
+    <img alt="Remuse" src="brand/colour/remuse-horizontal-gradient-on-light.svg" height="56">
+  </picture>
+</h1>
 
 Show it once, it does it forever, and it knows when to stop and ask.
 
@@ -37,6 +42,7 @@ Built for the Meta developer hackathon, Indie Developer track. All code in this 
    - **Approvals:** it stops for your OK before paying, checking out, sending and similar steps.
    - **Questions:** it asks when an item is outside your rules or a value can't be read. Your answer is remembered and saved into the next spec version.
    - **Your turn:** if a sign-in page, a captcha or a popup gets in the way, it hands the browser to you, then tries again.
+   - **Files:** it uploads from folders you allowed (the next file in line, the newest, or the one labelled with today's date and time), with the caption from a `.txt` file of the same name, never posting a file twice; downloads go into a folder you choose.
 
 ## Install (Windows)
 
@@ -90,6 +96,8 @@ The 15 emails split as follows; `npm run check` confirms the seed matches the ru
 | `cd backend && npm run test:recorder` | Loads the extension in Chromium, plays `scripts/fixtures/narration.wav` as the mic, clicks through the hero case on the mock apps and checks the recorded session |
 | `cd backend && node test/sidepanel.check.ts` | The sidebar loads the Agent, and connecting a site shares its login with the Agent (disconnecting removes it) |
 | `cd backend && node test/logins.check.ts` | A shared login reaches a real site from the Agent's browser; expired cookies are dropped |
+| `cd backend && node test/folders.check.ts` | Which file an upload picks (next, newest, dated), captions, and that files never leave their folder |
+| `cd backend && node test/files.e2e.ts` | A posting task uploads the next file with its caption, saves its download, never reposts, skips when nothing is new |
 | `cd backend && node test/webmcp.check.ts` | A page's WebMCP tool is seen and called by the Agent's browser |
 | `cd mock-apps && npm run check` | The seed data agrees with the spoken rules |
 | `node --env-file=.env scripts/risk-tests.mjs` | The day-1 Meta API checks |

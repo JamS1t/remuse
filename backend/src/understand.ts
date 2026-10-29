@@ -5,7 +5,10 @@ import { askJson, text, png, type Part } from "./meta.ts";
 
 export type Target = { role?: string; name?: string; selector?: string; fuzzy?: boolean };
 export type Step = {
-  id: string; do: "open_item" | "goto" | "click" | "fill" | "press" | "extract" | "compare";
+  id: string; do: "open_item" | "goto" | "click" | "fill" | "press" | "extract" | "compare" | "report" | "upload";
+  message?: string;
+  // upload only: which file to send from one of the person's allowed folders.
+  file?: { folder: string | null; pick?: "next" | "newest" | "dated"; ext?: string[] }; // report only: what to tell the person, with {{variables}}
   url?: string; target?: Target; value?: string; key?: string; vars?: string[];
   describe: string; expect?: { urlIncludes?: string; textIncludes?: string; looks?: string };
   irreversible?: boolean; fromEvent?: number | null; healed?: string;
@@ -20,15 +23,20 @@ export type Variable = {
   candidate?: boolean; // read on each compared result, not on the item
 };
 export type Rule = { if: string; then: string; said?: string; learned?: boolean };
-// Where the items come from: links on a page ("list"), or rows the person gives each run ("rows").
+// Where the items come from: links on a page ("list"), rows the person gives each run ("rows"), or
+// nothing at all: the task runs once by itself, like a check or an update ("once").
 export type Inputs = {
-  source?: "list" | "rows"; itemName: string;
+  source?: "list" | "rows" | "once"; itemName: string;
   listUrl?: string; itemEvent?: number; itemSelector?: string;
   columns?: { name: string; describe: string; demoValue: string }[];
 };
 export type Spec = {
   title?: string; goal: string; scope: string;
   inputs: Inputs;
+  // How often the person said to repeat it, if they did.
+  schedule?: { everyMinutes?: number; time?: string; days?: string; said?: string };
+  // An allowed folder (by name) where every file the task downloads is saved, or null.
+  saveDownloads?: string | null;
   scopeTypes: string[]; variables: Variable[]; steps: Step[]; rules: Rule[];
   outcomes: Record<string, { describe: string; steps: Step[]; reply?: string; demonstrated: boolean }>;
 };
@@ -38,8 +46,10 @@ const SCHEMA = `{
   "goal": "one sentence",
   "scope": "which kinds of items these rules are meant for. Anything outside this must be asked about, not guessed.",
   "scopeTypes": ["the item_type options the rules are meant for; [] when items don't vary in kind"],
+  "saveDownloads": "the allowed folder's name to keep downloaded files in, or null",
+  "schedule": "optional, only if the person said how often: { \"everyMinutes\": 60, \"said\": \"every hour\" } or { \"time\": \"HH:MM\", \"days\": \"12345\" (1=Mon..7=Sun), \"said\": \"...\" }",
   "inputs": {
-    "source": "list" | "rows",
+    "source": "list" | "rows" | "once",
     "itemName": "what one item is, singular: email, order, shopping list item, invoice...",
     "listUrl": "list only: page with the list of items",
     "itemEvent": <list only: event # of the click that opened the item>,
@@ -55,7 +65,9 @@ const SCHEMA = `{
       "candidate": true | false }
   ],
   "steps": [
-    { "id": "s1", "do": "open_item" | "goto" | "click" | "fill" | "press" | "extract" | "compare",
+    { "id": "s1", "do": "open_item" | "goto" | "click" | "fill" | "press" | "extract" | "compare" | "report" | "upload",
+      "file": { "folder": "upload only: the allowed folder's name, or null", "pick": "next" | "newest" | "dated", "ext": ["optional file types, e.g. jpg, mp4"] },
+      "message": "report only: the update to give the person, with {{variables}}",
       "url": "goto only, may contain {{var}}",
       "target": { "role": "...", "name": "...", "selector": "..." },
       "value": "fill only, use {{var}} for anything that changes per item",
@@ -81,6 +93,7 @@ const INSTRUCTIONS = `You are Remuse. A person recorded themselves doing a brows
 Where items come from ("inputs.source"):
 - "list": the person opened one item from a list on a page (emails, orders, tickets, listings) and the robot should do the same for every item in that list. Set listUrl and itemEvent.
 - "rows": the task starts from values the person brought (a product to buy, a name to look up, a form to fill), so next time the robot needs a new value for each run. Make one column per value that changes per item, with what they typed in the demo as demoValue, and use {{column_name}} wherever it was typed or appeared in a URL. A shopping list, a list of names, a CSV are all "rows".
+- "once": there is nothing to go through. The task is a check, an update or a report on the same pages each time (e.g. "every hour tell me my video's views, CTR and average view duration"). It runs as a single item; start with a "goto" to the first page the person opened.
 
 Rules for the spec:
 - "steps" are what to do for EVERY item before deciding. For "list", the first step is "open_item". For "rows", start with a "goto" to where the person started. Put an "extract" step right after the step that lands on the page holding those variables.
@@ -96,6 +109,11 @@ Rules for the spec:
 - Mark "irreversible": true on any step that pays, buys, checks out, places an order, sends a message, submits, refunds, books, transfers or deletes. Adding to a cart is not irreversible; checking out is.
 - Built-in variables: {{item_url}} (list items), {{today}} (YYYY-MM-DD), {{reply}}.
 - Every step gets an "expect" so the robot can check its own work.
+- Reports: when the person wants to be told something (an update, a summary, an alert), the outcome ends with a "report" step. Its "message" is short and readable, with {{variables}}, e.g. "Views {{views}} ({{views_change}} since last time), CTR {{ctr}}%". Reports are not irreversible. Read every number they mentioned with extract steps.
+- Changes since last time: {{prev_<name>}} holds a variable's value from the previous run of this task (null on the first run). For "how much did X change", add a computed variable like ctr_change from ctr and prev_ctr: a string with a sign, e.g. "+0.6" or "-1.2", and null when prev_ctr is null. In the report message put changes in parentheses, e.g. "CTR {{ctr}} ({{ctr_change}} since last time)"; that part is left out automatically when there is no previous value.
+- Uploading: an "upload" line means the person chose a file to upload. Keep the click that opened the file picker if there was one, then add {"do": "upload", "target": <the file input from the upload line>, "file": {...}}. "folder" is the allowed folder (listed below) whose files look like the one chosen; null if none fits (the person will pick one). "pick": "next" = the oldest file not uploaded yet, for a posting queue (the default); "newest" = whatever arrived most recently ("the latest file"); "dated" = the file whose name carries today's date and a time not later than now ("the one labelled for today"). After an upload step, {{file_name}} is the file's name and {{file_caption}} the text of a .txt file with the same name (null if none): use it for a caption or description box. Posting, sharing or publishing is irreversible.
+- Downloads: if the person downloaded something they want kept, set "saveDownloads" to the allowed folder they meant; otherwise null.
+- Schedule: if the person said how often ("every hour", "every morning at 9"), fill "schedule". Don't invent one.
 - WebMCP: "tools" lines list actions a page offers to agents directly. When a step does what one of those tools does (e.g. the Refund button and a refund_order tool), keep the step as recorded and add "tool" with the tool name and its args, using {{variables}}. The robot calls the tool when the page offers it and clicks otherwise.
 
 Reply with ONLY the JSON object, in this shape:
@@ -107,12 +125,14 @@ function eventLine(e: any, i: number) {
   const t = e.target ? ` target={role:${JSON.stringify(e.target.role)}, name:${JSON.stringify(e.target.label)}, selector:${JSON.stringify(e.target.selector)}}` : "";
   const v = e.value !== undefined ? ` value=${JSON.stringify(e.value)}` : "";
   const k = e.key ? ` key=${e.key}` : "";
+  if (e.kind === "upload") return `#${i} t=${(e.t / 1000).toFixed(1)}s upload url=${e.url}${t} files=${JSON.stringify((e.files ?? []).map((x: any) => x.name))}`;
   if (e.kind === "tools") return `#${i} tools url=${e.url} offered: ${(e.tools ?? []).map((x: any) => `${x.name}(${Object.keys(x.inputSchema?.properties ?? {}).join(", ")}): ${x.description ?? ""}`).join("; ")}`;
   return `#${i} t=${(e.t / 1000).toFixed(1)}s ${e.kind} url=${e.url}${t}${v}${k}`;
 }
 
-export function buildPrompt(s: Session, dir: string): Part[] {
-  const parts: Part[] = [text(INSTRUCTIONS), text(`Task name given by the person: ${s.title ?? "(none)"}\n\nRecording, in time order. Voice lines are what the person said; frames are screenshots.`)];
+export type FolderHint = { name: string; files: string[] };
+export function buildPrompt(s: Session, dir: string, folders: FolderHint[] = []): Part[] {
+  const parts: Part[] = [text(INSTRUCTIONS), text(`Allowed folders (name: newest files): ${folders.length ? folders.map((f) => `\n- ${f.name}: ${f.files.join(", ") || "(empty)"}`).join("") : "none yet"}`), text(`Task name given by the person: ${s.title ?? "(none)"}\n\nRecording, in time order. Voice lines are what the person said; frames are screenshots.`)];
   const items = [
     ...s.events.map((e, i) => ({ t: e.t, i, e })),
     ...s.turns.map((v) => ({ t: v.startMs, v })),
@@ -138,8 +158,8 @@ export function buildPrompt(s: Session, dir: string): Part[] {
   return parts;
 }
 
-export async function understand(s: Session, dir: string): Promise<Spec> {
-  const spec = await askJson<Spec>(buildPrompt(s, dir), "understand");
+export async function understand(s: Session, dir: string, folders: FolderHint[] = []): Promise<Spec> {
+  const spec = await askJson<Spec>(buildPrompt(s, dir, folders), "understand");
   return normalize(spec, s);
 }
 
@@ -147,7 +167,7 @@ export async function understand(s: Session, dir: string): Promise<Spec> {
 export function normalize(spec: Spec, s: Session): Spec {
   // The recorded selector of one clicked item, minus its position, matches all its siblings.
   const generic = (sel?: string) => sel?.replace(/:nth-of-type\(\d+\)/g, "").replace(/:nth-child\(\d+\)/g, "");
-  spec.inputs.source ??= spec.inputs.columns?.length ? "rows" : "list";
+  spec.inputs.source ??= spec.inputs.columns?.length ? "rows" : spec.inputs.itemEvent != null || spec.inputs.listUrl ? "list" : "once";
   if (spec.inputs.source === "list") {
     const ev = s.events[spec.inputs.itemEvent ?? -1];
     if (ev?.target?.selector) spec.inputs.itemSelector = generic(ev.target.selector);

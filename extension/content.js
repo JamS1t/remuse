@@ -1,6 +1,11 @@
 // Runs in every page. Reports clicks, typing and page changes to the background worker,
 // which drops them unless a recording is running.
+// The background also injects this into tabs that were open before the extension (re)loaded, whose
+// first copy is cut off. Run once per live extension: a copy from before a reload is dead and doesn't count.
 (() => {
+  const alive = () => { try { return !!chrome.runtime?.id; } catch { return false; } };
+  if (window.__remuseRecorder?.alive()) return;
+  window.__remuseRecorder = { alive };
   const send = (kind, data = {}) => {
     try {
       chrome.runtime.sendMessage({ type: "event", ev: { at: Date.now(), kind, url: location.href, title: document.title, ...data } }).catch(() => {});
@@ -72,7 +77,15 @@
     };
   }
 
-  const isField = (el) => el && ((el.tagName === "INPUT" && !["submit", "button", "checkbox", "radio", "hidden", "reset"].includes(el.type)) || el.tagName === "TEXTAREA" || el.tagName === "SELECT");
+  const isField = (el) => el && ((el.tagName === "INPUT" && !["submit", "button", "checkbox", "radio", "hidden", "reset", "file"].includes(el.type)) || el.tagName === "TEXTAREA" || el.tagName === "SELECT");
+
+  // Choosing a file to upload: the browser only shares the file's name, which is enough for Remuse to
+  // match it to one of your allowed folders and learn which file to pick next time.
+  addEventListener("change", (e) => {
+    const el = e.target;
+    if (el?.tagName !== "INPUT" || el.type !== "file" || !el.files?.length) return;
+    send("upload", { target: describe(el), files: [...el.files].map((f) => ({ name: f.name, size: f.size, type: f.type, modified: f.lastModified })) });
+  }, true);
   const recorded = new WeakMap();
 
   function typed(el) {
