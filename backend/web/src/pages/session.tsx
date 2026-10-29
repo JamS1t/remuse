@@ -19,14 +19,15 @@ export function Session({ id }: { id: string }) {
     ...s.turns.map((v, i) => ({ t: v.startMs, key: `v${i}`, voice: true as const, v })),
   ].sort((a, b) => a.t - b.t);
 
+  // Learn again: the same background pipeline as after recording; the task page shows progress.
   const write = () => run("spec", async () => {
-    const spec = await api<{ id: number }>(`/sessions/${id}/spec`, "POST");
-    location.hash = `#/spec/${spec.id}`;
+    await api(`/sessions/${id}/learn`, "POST");
+    location.hash = `#/task/${id}`;
   });
 
   return (
     <Page>
-      <Crumb href="#/">Recordings</Crumb>
+      <Crumb href={`#/task/${id}/recording`}>Back to the task</Crumb>
       <div className="mt-3 flex flex-wrap items-end justify-between gap-4">
         <div>
           <h1 className="text-[22px] font-semibold">{s.title || "Untitled task"}</h1>
@@ -34,8 +35,8 @@ export function Session({ id }: { id: string }) {
             Recorded {fmtWhen(s.started_at)} · {s.events.length} actions · {s.turns.length} things you said
           </p>
         </div>
-        <Button onClick={write} disabled={!!busy} variant={s.specs.length ? "outline" : "default"}>
-          {busy ? <><LoaderCircle className="animate-spin" />Reading your recording</> : s.specs.length ? "Write a new version" : "Write the Task Spec"}
+        <Button onClick={write} disabled={!!busy} variant="outline" className="rounded-full">
+          {busy ? <><LoaderCircle className="animate-spin" />Starting</> : "Learn it again"}
         </Button>
       </div>
       {busy ? <p className="mt-2 text-right text-[13px] text-muted-foreground">Muse Spark is watching the key frames and your words. About a minute.</p> : null}

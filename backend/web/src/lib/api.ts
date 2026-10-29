@@ -80,3 +80,27 @@ export function useHash() {
 export const fmtWhen = (ms: number) => new Date(ms).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 export const fmtSecs = (ms: number) => (ms < 60_000 ? `${(ms / 1000).toFixed(1)}s` : `${Math.floor(ms / 60_000)}m ${String(Math.round((ms % 60_000) / 1000)).padStart(2, "0")}s`);
 export const timecode = (ms: number) => { const s = Math.floor(ms / 1000); return `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`; };
+
+/** A task: one recording, its newest Task Spec and what the sidebar/full view show about it. */
+export type Task = {
+  sessionId: string; title?: string | null; specId?: number | null; version?: number | null; built: boolean; goal?: string | null; itemName?: string | null;
+  source?: "list" | "rows" | "once" | null; columns: { name: string; describe?: string; demoValue: string }[]; startedAt: number; endedAt?: number | null;
+  learnStage?: "listening" | "understanding" | "building" | "ready" | "failed" | null; learnError?: string | null;
+  rules: { if: string; then: string; said?: string }[]; guessed: string[]; steps: number; compares: boolean; checks: { passed: number; total: number };
+  askedSchedule: { everyMinutes?: number; time?: string; days?: string; said?: string } | null;
+  lastReport: { text: string; at: number; runId: string } | null;
+};
+export type ScheduleRow = { id: number; specId: number; sessionId: string; time: string; days: string; everyMinutes: number | null };
+/** A run as Activity lists it. */
+export type ActivityRun = {
+  id: string; specId: number; sessionId: string; task: string | null; status: Run["status"]; startedAt: number; endedAt: number | null;
+  items: number; done: number; error: string | null; waiting: boolean; report: string | null; score?: Run["score"];
+};
+
+export const ago = (ms: number) => {
+  const s = Math.round((Date.now() - ms) / 1000);
+  if (s < 60) return "just now";
+  if (s < 3600) return `${Math.floor(s / 60)} min ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)} h ago`;
+  return fmtWhen(ms);
+};

@@ -7,7 +7,7 @@ import { Kbd } from "@/components/ui/kbd";
 import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Textarea } from "@/components/ui/textarea";
-import { Crumb, ErrorNote, ItemLabel, Orb, Page, Revision, Shot, Status, useAction } from "@/components/bits";
+import { Crumb, ErrorNote, ItemLabel, Orb, Page, Shot, Status, useAction } from "@/components/bits";
 import { Loading } from "@/pages/lists";
 import { api, fmtSecs, fmtWhen, isLive, timecode, useApi, type Candidate, type Item, type Pending, type Run, type SpecRow } from "@/lib/api";
 import { cn } from "@/lib/utils";
@@ -39,8 +39,7 @@ export function RunPage({ id }: { id: string }) {
   return (
     <Page>
       <div className="flex flex-wrap items-center gap-2">
-        <Crumb href={`#/spec/${r.specId}`}>Task Spec</Crumb>
-        {spec ? <Revision v={spec.version} href={`#/spec/${r.specId}`} /> : null}
+        <Crumb href={spec ? `#/task/${spec.sessionId}/activity` : "#/activity"}>{spec ? "Back to the task" : "Activity"}</Crumb>
       </div>
       <div className="mt-3 flex flex-wrap items-end justify-between gap-x-8 gap-y-3">
         <div>

@@ -419,6 +419,20 @@ async function route(req: IncomingMessage, res: ServerResponse) {
     const id = p[2];
     session(id);
     if (m === "GET" && p.length === 3) return send(res, 200, full(id));
+    // Delete a task: its recording, every spec version, runs and schedule. The UI asks first.
+    if (m === "DELETE" && p.length === 3) {
+      session(id);
+      if (active && !["done", "failed", "stopped"].includes(active.run.status) && specRow(active.run.specId).sessionId === id) throw new HttpError(409, "stop its run first");
+      const specIds = (db.prepare("SELECT id FROM specs WHERE session_id = ?").all(id) as any[]).map((x) => x.id);
+      for (const sid of specIds) {
+        for (const r of db.prepare("SELECT id FROM runs WHERE spec_id = ?").all(sid) as any[]) rmSync(runDir(r.id), { recursive: true, force: true });
+        db.prepare("DELETE FROM runs WHERE spec_id = ?").run(sid);
+        db.prepare("DELETE FROM schedules WHERE spec_id = ?").run(sid);
+      }
+      db.prepare("DELETE FROM specs WHERE session_id = ?").run(id);
+      discard(id);
+      return send(res, 200, { deleted: true });
+    }
 
     if (m === "POST" && p[3] === "events" && p.length === 4) {
       const { t, kind, url: pageUrl, before, after, ...data } = await json(req);
@@ -484,9 +498,21 @@ async function route(req: IncomingMessage, res: ServerResponse) {
   }
 
   if (p[0] === "api" && p[1] === "runs") {
-    if (m === "GET" && p.length === 2) return send(res, 200, (db.prepare("SELECT json FROM runs ORDER BY updated_at DESC LIMIT 20").all() as any[]).map((r) => {
-      const run = JSON.parse(r.json); return { id: run.id, specId: run.specId, status: run.status, startedAt: run.startedAt, items: run.items.length, score: run.score };
-    }));
+    // Activity: the latest runs, each with its task, how it went and its update. ?task=<sessionId> narrows to one task.
+    if (m === "GET" && p.length === 2) {
+      const task = url.searchParams.get("task");
+      const rows = (task
+        ? db.prepare("SELECT r.json, x.session_id FROM runs r JOIN specs x ON x.id = r.spec_id WHERE x.session_id = ? ORDER BY r.updated_at DESC LIMIT 50").all(task)
+        : db.prepare("SELECT r.json, x.session_id FROM runs r JOIN specs x ON x.id = r.spec_id ORDER BY r.updated_at DESC LIMIT 50").all()) as any[];
+      const titles = new Map((db.prepare("SELECT id, title FROM sessions").all() as any[]).map((x) => [x.id, x.title]));
+      return send(res, 200, rows.map((r) => {
+        const run = JSON.parse(r.json) as Run;
+        const done = run.items.filter((i) => i.status === "done").length;
+        return { id: run.id, specId: run.specId, sessionId: r.session_id, task: titles.get(r.session_id) ?? null, status: run.status,
+          startedAt: run.startedAt, endedAt: run.endedAt ?? null, items: run.items.length, done, error: run.error ?? null,
+          waiting: !!run.pending, report: run.items.find((i) => i.report)?.report ?? null, score: run.score };
+      }));
+    }
     const id = p[2];
     if (m === "GET" && p.length === 3) return send(res, 200, getRun(id));
     if (m === "POST" && (p[3] === "answer" || p[3] === "stop")) {

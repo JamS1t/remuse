@@ -23,7 +23,7 @@ export function useAction() {
 }
 
 /** Opens the Remuse browser (its own Chrome profile) so the person can sign in to sites once. */
-function SignIn() {
+export function SignIn() {
   const [open, setOpen] = useState(false);
   const [url, setUrl] = useState("https://");
   const { busy, run } = useAction();
@@ -34,8 +34,8 @@ function SignIn() {
   });
   return (
     <>
-      <Button variant="ghost" size="sm" className="text-muted-foreground" onClick={() => setOpen(true)}>
-        <KeyRound /><span className="max-sm:hidden">Sign in to sites</span>
+      <Button variant="ghost" size="sm" className="w-full justify-start gap-2.5 px-3 text-muted-foreground" onClick={() => setOpen(true)}>
+        <KeyRound />Sign in to sites
       </Button>
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent className="sm:max-w-[460px]">
@@ -51,47 +51,30 @@ function SignIn() {
   );
 }
 
-export function TopBar({ at }: { at: string }) {
+/** Demo controls for the mock apps, shown only while they run (for the demo video). */
+export function DemoMenu() {
   const { busy, run } = useAction();
   const { data: mock } = useApi<{ up: boolean }>("/mock/status");
   const demo = (label: string, path: string) => run(path, async () => { await api(path, "POST"); toast.success(label); });
-  const link = (href: string, label: string, on: boolean) => (
-    <a href={href} aria-current={on ? "page" : undefined}
-      className={cn("rounded-md px-2.5 py-1.5 text-[13px] font-medium no-underline transition-colors", on ? "text-foreground bg-muted" : "text-muted-foreground hover:text-foreground")}>{label}</a>
-  );
+  if (!mock?.up) return null;
   return (
-    <header className="sticky top-0 z-20 border-b bg-background/40 backdrop-blur-xl">
-      <div className="mx-auto flex h-12 max-w-[1240px] items-center gap-3 px-4 sm:gap-5 sm:px-5">
-        <a href="#/" className="flex items-center gap-2 text-foreground no-underline">
-          <Lockup className="h-[19px]" />
-        </a>
-        <nav className="flex items-center gap-1">
-          {link("#/", "Recordings", at === "" || at === "session" || at === "spec")}
-          {link("#/runs", "Runs", at === "runs" || at === "run")}
-        </nav>
-        <div className="ml-auto flex items-center gap-1">
-          <SignIn />
-          {mock?.up ? <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="sm" className="text-muted-foreground" disabled={!!busy}>
-                {busy ? <LoaderCircle className="animate-spin" /> : null}<span className="max-sm:hidden">Demo apps</span><span className="sm:hidden">Demo</span> <ChevronDown />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-56">
-              <DropdownMenuLabel className="text-muted-foreground text-xs font-normal">Mock inbox, store and courier</DropdownMenuLabel>
-              <DropdownMenuItem onSelect={() => demo("Demo data reset", "/mock/reset")}>Reset demo data</DropdownMenuItem>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem onSelect={() => demo("Store uses the original layout", "/mock/layout?v=v1")}>Store layout: original</DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => demo("Store uses the redesigned layout", "/mock/layout?v=v2")}>Store layout: redesigned</DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu> : null}
-        </div>
-      </div>
-    </header>
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button variant="ghost" size="sm" className="w-full justify-start gap-2.5 px-3 text-muted-foreground" disabled={!!busy}>
+          {busy ? <LoaderCircle className="animate-spin" /> : <ChevronDown />}Demo apps
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="w-56">
+        <DropdownMenuLabel className="text-muted-foreground text-xs font-normal">Mock inbox, store and courier</DropdownMenuLabel>
+        <DropdownMenuItem onSelect={() => demo("Demo data reset", "/mock/reset")}>Reset demo data</DropdownMenuItem>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem onSelect={() => demo("Store uses the original layout", "/mock/layout?v=v1")}>Store layout: original</DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => demo("Store uses the redesigned layout", "/mock/layout?v=v2")}>Store layout: redesigned</DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 
-/** Remuse mark: a play cue inside a frame. */
 export type OrbState = "idle" | "watching" | "thinking" | "working" | "waiting" | "done";
 
 /** Remuse's presence: a glass orb whose light shows what it's doing. */

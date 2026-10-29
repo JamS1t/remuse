@@ -1,13 +1,10 @@
 import { useState, type ReactNode } from "react";
-import { Check, CircleAlert, Eye, Hand, LoaderCircle, Play, X } from "lucide-react";
+import { Check, CircleAlert, Eye, Hand, LoaderCircle, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Checkbox } from "@/components/ui/checkbox";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
-import { Crumb, ErrorNote, Revision, Said, revColor, revName, useAction } from "@/components/bits";
+import { Crumb, ErrorNote, Revision, Said, revColor, useAction } from "@/components/bits";
 import { Loading } from "@/pages/lists";
 import { api, useApi, type SessionFull, type SpecRow, type Step } from "@/lib/api";
 import { cn } from "@/lib/utils";
@@ -48,7 +45,6 @@ function Steps({ steps }: { steps: Step[] }) {
   );
 }
 
-const csvCell = (v: string) => (/[",\n]/.test(v) ? `"${v.replaceAll('"', '""')}"` : v);
 /** Header line + rows, comma or tab separated (pasting from a spreadsheet gives tabs). Quotes allowed. */
 export function parseCsv(text: string): Record<string, string>[] {
   const lines = text.split(/\r?\n/).filter((l) => l.trim());
@@ -76,10 +72,7 @@ export function SpecPage({ id }: { id: number }) {
   const { data: row, error, reload } = useApi<SpecRow>(`/specs/${id}`);
   const { data: session } = useApi<SessionFull | null>(row ? `/sessions/${row.sessionId}` : null);
   const { busy, run } = useAction();
-  const [limit, setLimit] = useState("");
-  const [auto, setAuto] = useState(false);
   const [json, setJson] = useState<string | null>(null);
-  const [rowsText, setRowsText] = useState<string | null>(null);
 
   if (error) return <main className="mx-auto max-w-[1240px] px-5 pt-6"><ErrorNote>{error}</ErrorNote></main>;
   if (!row) return <main className="mx-auto max-w-[1240px] px-5 pt-6"><Loading /></main>;
@@ -91,15 +84,8 @@ export function SpecPage({ id }: { id: number }) {
   const cols = s.inputs.columns ?? [];
   const isRows = s.inputs.source === "rows" || (!s.inputs.listUrl && cols.length > 0);
   const isOnce = s.inputs.source === "once";
-  const rowsValue = rowsText ?? [cols.map((c) => c.name).join(","), cols.map((c) => csvCell(c.demoValue)).join(",")].join("\n");
 
   const build = () => run("build", async () => { await api(`/specs/${id}/build`, "POST"); reload(); });
-  const start = () => run("run", async () => {
-    const rows = isRows ? parseCsv(rowsValue) : undefined;
-    if (isRows && !rows?.length) throw new Error("Add at least one row under the header line.");
-    const r = await api<{ id: string }>(`/specs/${id}/runs`, "POST", { limit: limit ? Number(limit) : undefined, autoApprove: auto, rows });
-    location.hash = `#/run/${r.id}`;
-  });
   const save = () => run("save", async () => {
     let spec;
     try { spec = JSON.parse(json ?? ""); } catch (e) { throw new Error(`That is not valid JSON: ${(e as Error).message}`); }
@@ -109,53 +95,31 @@ export function SpecPage({ id }: { id: number }) {
 
   return (
     <>
-      {/* The spec sheet takes its revision colour, edge to edge. */}
-      <div className="border-b border-black/10" style={{ background: revColor(row.version) }}>
-        <div className="mx-auto max-w-[1240px] px-5 pt-5 pb-5">
-          <Crumb href={`#/session/${row.sessionId}`}>Recording</Crumb>
+      {/* The spec takes its revision colour as a faint tint. Running lives on the task page; this is the detail view. */}
+      <div className="border-b border-white/10" style={{ background: revColor(row.version) }}>
+        <div className="mx-auto max-w-[1240px] px-5 pt-8 pb-6 md:px-10">
+          <Crumb href={`#/task/${row.sessionId}`}>Back to the task</Crumb>
           <div className="mt-3 flex flex-wrap items-start justify-between gap-x-8 gap-y-4">
             <div className="max-w-[72ch]">
-              <h1 className="text-[22px] leading-tight font-semibold">{s.goal}</h1>
-              <p className="mt-1.5 text-foreground/75">Task Spec v{row.version}, {revName(row.version)} revision{row.note ? ` · ${row.note}` : ""}</p>
+              <h1 className="text-[22px] leading-tight font-medium tracking-[-0.02em]">{s.goal}</h1>
+              <p className="mt-1.5 text-foreground/70">Advanced editor · version {row.version}{row.note ? ` · ${row.note}` : ""}</p>
             </div>
-            {versions.length > 1 ? (
-              <div className="flex flex-wrap gap-0.5" aria-label="Versions">
-                {[...versions].reverse().map((x) => <Revision key={x.id} v={x.version} href={`#/spec/${x.id}`} active={x.id === id} />)}
-              </div>
-            ) : null}
-          </div>
-
-          <div className="mt-5 flex flex-wrap items-center gap-x-6 gap-y-3 rounded-lg border border-black/10 bg-card/80 px-3 py-2.5">
             <div className="flex items-center gap-3">
-              <Button variant={row.code ? "outline" : "default"} onClick={build} disabled={!!busy}>
-                {busy === "build" ? <><LoaderCircle className="animate-spin" />Writing and testing the code</> : row.code ? "Build again" : "Build the rules into code"}
-              </Button>
               {row.code ? (
                 <span className={cn("inline-flex items-center gap-1.5 text-[13px] font-medium", passed === tests.length ? "text-ok" : "text-destructive")}>
                   {passed === tests.length ? <Check className="size-3.5" /> : <X className="size-3.5" />}{passed} of {tests.length} checks pass
                 </span>
-              ) : <span className="text-[13px] text-muted-foreground">Needed before a run</span>}
-            </div>
-            <div className="ml-auto flex flex-wrap items-center gap-4">
-              {isOnce ? null : <div className="flex items-center gap-2">
-                <Label htmlFor="limit" className="font-normal text-muted-foreground">{item[0].toUpperCase() + item.slice(1)}s</Label>
-                <Input id="limit" type="number" min={1} placeholder="All" value={limit} onChange={(e) => setLimit(e.target.value)} className="h-8 w-20 bg-card font-mono" />
-              </div>}
-              <div className="flex items-center gap-2">
-                <Checkbox id="auto" checked={auto} onCheckedChange={(v) => setAuto(v === true)} />
-                <Label htmlFor="auto" className="font-normal">Approve irreversible steps in advance</Label>
-              </div>
-              <Button onClick={start} disabled={!!busy || !row.code} title={row.code ? undefined : "Build the rules first"}>
-                {busy === "run" ? <LoaderCircle className="animate-spin" /> : <Play className="fill-current" />}{isRows ? "Run on these rows" : isOnce ? "Run it now" : "Run on the list"}
+              ) : <span className="text-[13px] text-muted-foreground">Build it before it can run</span>}
+              <Button variant={row.code ? "outline" : "default"} className="rounded-full" onClick={build} disabled={!!busy}>
+                {busy === "build" ? <><LoaderCircle className="animate-spin" />Writing and testing the code</> : row.code ? "Build again" : "Build the rules into code"}
               </Button>
             </div>
-            {isRows ? (
-              <div className="basis-full">
-                <Label htmlFor="rows" className="text-[13px] font-semibold">One {item} per line <span className="font-normal text-muted-foreground">CSV: keep the header, paste from a spreadsheet, or type</span></Label>
-                <Textarea id="rows" value={rowsValue} onChange={(e) => setRowsText(e.target.value)} spellCheck={false} rows={Math.min(8, Math.max(3, rowsValue.split("\n").length + 1))} className="mt-1.5 bg-card font-mono text-[12.5px]" />
-              </div>
-            ) : null}
           </div>
+          {versions.length > 1 ? (
+            <div className="mt-4 flex flex-wrap gap-0.5" aria-label="Versions">
+              {[...versions].reverse().map((x) => <Revision key={x.id} v={x.version} href={`#/spec/${x.id}`} active={x.id === id} />)}
+            </div>
+          ) : null}
         </div>
       </div>
 
