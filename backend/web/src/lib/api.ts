@@ -6,7 +6,7 @@ export type Step = { id: string; do: string; describe: string; target?: Target; 
 export type Variable = { name: string; kind: string; description: string; question?: string; demoValue?: unknown; candidate?: boolean };
 export type Rule = { if: string; then: string; said?: string; learned?: boolean };
 export type Spec = {
-  goal: string; scope: string; scopeTypes?: string[];
+  title?: string; goal: string; scope: string; scopeTypes?: string[];
   inputs: { source?: "list" | "rows" | "once"; listUrl?: string; itemName?: string; columns?: { name: string; describe: string; demoValue: string }[] };
   variables: Variable[]; steps: Step[]; rules: Rule[];
   outcomes: Record<string, { describe: string; steps: Step[]; reply?: string; demonstrated: boolean }>;
@@ -30,7 +30,7 @@ export type Pending =
 export type Run = {
   id: string; specId: number; status: "starting" | "running" | "done" | "failed" | "stopped";
   items: Item[]; current: number; pending: Pending | null; autoApprove: boolean;
-  startedAt: number; endedAt?: number; error?: string; shot?: string; newSpecId?: number;
+  startedAt: number; endedAt?: number; error?: string; shot?: string; newSpecId?: number; visible?: boolean; trigger?: "you" | "schedule";
   heals: { step: string; from: string; to: string }[];
   learned: { requestType: string; outcome: string; note?: string }[];
   score?: { matched: number; total: number };

@@ -249,13 +249,14 @@ setInterval(async () => {
   }
 }, 30_000).unref();
 
-async function startRun(specId: number, opts: { limit?: number; autoApprove?: boolean; rows?: Record<string, string>[]; scheduled?: boolean }) {
+async function startRun(specId: number, opts: { limit?: number; autoApprove?: boolean; rows?: Record<string, string>[]; scheduled?: boolean; watch?: boolean }) {
   if (active && !["done", "failed", "stopped"].includes(active.run.status)) throw new HttpError(409, "a run is already going");
   const row = specRow(specId);
   if (!row.code) throw new HttpError(400, "build the rules first");
   // Both use the one Chrome profile, which only one window can hold.
   if (signIn) { await signIn.close().catch(() => {}); signIn = null; }
-  const run: Run = { id: randomUUID(), specId, status: "starting", items: [], current: 0, pending: null, autoApprove: !!opts.autoApprove, startedAt: Date.now(), heals: [], learned: [], rows: opts.rows };
+  const run: Run = { id: randomUUID(), specId, status: "starting", items: [], current: 0, pending: null, autoApprove: !!opts.autoApprove, startedAt: Date.now(), heals: [], learned: [], rows: opts.rows,
+    visible: !!opts.watch && !opts.scheduled, trigger: opts.scheduled ? "schedule" : "you" };
   let last = 0;
   let asked = "";
   const link = `http://127.0.0.1:${PORT}/#/run/${run.id}`;
@@ -493,7 +494,7 @@ async function route(req: IncomingMessage, res: ServerResponse) {
     if (m === "POST" && p[3] === "runs") {
       const opts = await json(req);
       const rows = Array.isArray(opts.rows) ? opts.rows.filter((r: unknown) => r && typeof r === "object").map((r: Record<string, unknown>) => Object.fromEntries(Object.entries(r).map(([k, v]) => [String(k), String(v ?? "")]))) : undefined;
-      return send(res, 201, await startRun(sid, { limit: opts.limit ? Number(opts.limit) : undefined, autoApprove: !!opts.autoApprove, rows }));
+      return send(res, 201, await startRun(sid, { limit: opts.limit ? Number(opts.limit) : undefined, autoApprove: !!opts.autoApprove, rows, watch: !!opts.watch }));
     }
   }
 

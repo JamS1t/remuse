@@ -8,10 +8,10 @@ import { useAction } from "@/components/bits";
 import { parseCsv } from "@/pages/spec";
 import { api, type Task } from "@/lib/api";
 
-type Mode = "normal" | "unattended";
+type Mode = "normal" | "unattended" | "watch";
 
 /** Starting a run: asks only for what the task needs (a list, or how many), then opens the live run.
- *  `open("unattended")` runs without stopping for approvals, after a confirmation. */
+ *  `open("unattended")` runs without stopping for approvals, after a confirmation; `open("watch")` shows the browser. */
 export function useRunTask(task: Task): { open: (mode: Mode) => void; busy: boolean; dialog: ReactNode } {
   const [ask, setAsk] = useState<Mode | null>(null);
   const [rows, setRows] = useState([task.columns.map((c) => c.name).join(","), task.columns.map((c) => c.demoValue).join(",")].join("\n"));
@@ -23,7 +23,7 @@ export function useRunTask(task: Task): { open: (mode: Mode) => void; busy: bool
   const start = (mode: Mode) => run("run", async () => {
     const body = task.source === "rows" ? { rows: parseCsv(rows) } : task.source === "list" ? { limit: count ? Number(count) : undefined } : {};
     if (task.source === "rows" && !("rows" in body && body.rows?.length)) throw new Error(`Add at least one ${item} under the header line.`);
-    const r = await api<{ id: string }>(`/specs/${task.specId}/runs`, "POST", { ...body, autoApprove: mode === "unattended" });
+    const r = await api<{ id: string }>(`/specs/${task.specId}/runs`, "POST", { ...body, autoApprove: mode === "unattended", watch: mode === "watch" });
     setAsk(null);
     location.hash = `#/run/${r.id}`;
   });

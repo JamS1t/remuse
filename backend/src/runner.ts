@@ -28,6 +28,8 @@ export type Run = {
   id: string; specId: number; status: "starting" | "running" | "done" | "failed" | "stopped";
   items: Item[]; current: number; pending: Pending | null; autoApprove: boolean;
   rows?: Record<string, string>[];
+  // Runs work hidden in the background unless the person chose to watch; who started it.
+  visible?: boolean; trigger?: "you" | "schedule";
   startedAt: number; endedAt?: number; error?: string; shot?: string;
   heals: { step: string; from: string; to: string }[];
   learned: { requestType: string; outcome: string; note?: string; reply?: string }[];
@@ -40,11 +42,23 @@ const IRREVERSIBLE = /\b(refund|replace|send|pay|submit|ship|confirm|delete|plac
 const PROFILE = fileURLToPath(new URL("../data/browser", import.meta.url));
 
 /** The Remuse browser: the person's installed Chrome with its own profile, so sign-ins stick between runs. */
+// Hidden Chrome calls itself "HeadlessChrome", which sites like Google treat as a bot. Learn the real
+// user agent once and present that instead, so a hidden run looks like the person's normal Chrome.
+let realUA: string | null = null;
+const launch = async (opts: Parameters<typeof chromium.launchPersistentContext>[1]) => {
+  try { return await chromium.launchPersistentContext(PROFILE, { ...opts, channel: "chrome" }); }
+  catch { return chromium.launchPersistentContext(PROFILE, opts); } // ponytail: no Chrome installed, bundled Chromium
+};
+
 export async function openBrowser(headless: boolean): Promise<BrowserContext> {
   const opts = { headless, viewport: VIEW, args: headless ? [] : [`--window-size=${VIEW.width},${VIEW.height + 120}`] };
-  let ctx: BrowserContext;
-  try { ctx = await chromium.launchPersistentContext(PROFILE, { ...opts, channel: "chrome" }); }
-  catch { ctx = await chromium.launchPersistentContext(PROFILE, opts); } // ponytail: no Chrome installed, bundled Chromium
+  if (headless && !realUA) {
+    const probe = await launch(opts);
+    const ua = await (probe.pages()[0] ?? (await probe.newPage())).evaluate(() => navigator.userAgent).catch(() => "");
+    await probe.close();
+    realUA = ua.replace("HeadlessChrome", "Chrome") || null;
+  }
+  const ctx = await launch(headless && realUA ? { ...opts, userAgent: realUA } : opts);
   // See the WebMCP tools pages register (same script the extension uses while recording).
   await ctx.addInitScript({ path: fileURLToPath(new URL("../../extension/webmcp.js", import.meta.url)) });
   // The person's logins for connected sites, shared by the Chrome helper.
@@ -113,7 +127,7 @@ export class Runner {
   }
 
   async start(limit?: number) {
-    const headless = process.env.HEADLESS === "1";
+    const headless = process.env.HEADLESS === "1" || !this.run.visible;
     const browser = await openBrowser(headless);
     try {
       this.page = browser.pages()[0] ?? (await browser.newPage());
@@ -237,7 +251,8 @@ export class Runner {
     for (;;) {
       try { await this.exec(s); return true; }
       catch (e) {
-        if (this.stopped || process.env.HEADLESS === "1") throw e;
+        // A hidden run has no window to hand over: the item fails and says why instead of waiting forever.
+        if (this.stopped || process.env.HEADLESS === "1" || !this.run.visible) throw e;
         const { file } = await this.shot();
         const it = this.item;
         this.log(`Stuck on "${s.describe}": ${(e as Error).message}`, "warn", file);

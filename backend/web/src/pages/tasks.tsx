@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { toast } from "sonner";
-import { CalendarClock, Check, ChevronRight, CircleAlert, Code2, Ellipsis, Hand, LoaderCircle, Mic, RotateCcw, ShieldAlert, Trash2 } from "lucide-react";
+import { CalendarClock, Check, Eye, ChevronRight, CircleAlert, Code2, Ellipsis, Hand, LoaderCircle, Mic, RotateCcw, ShieldAlert, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
@@ -288,7 +288,8 @@ function TaskMenu({ t, hasSchedule, onSchedule, onRelearn, onDelete, busy }: { t
       <DropdownMenu>
         <DropdownMenuTrigger asChild><Button variant="ghost" size="icon" className="rounded-full" aria-label="More"><Ellipsis /></Button></DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="w-60">
-          {t.built ? <DropdownMenuItem onSelect={() => runner.open("unattended")}><ShieldAlert />Run without asking me</DropdownMenuItem> : null}
+      {t.built ? <DropdownMenuItem onSelect={() => runner.open("watch")}><Eye />Run and watch it work</DropdownMenuItem> : null}
+      {t.built ? <DropdownMenuItem onSelect={() => runner.open("unattended")}><ShieldAlert />Run without asking me</DropdownMenuItem> : null}
           <DropdownMenuItem onSelect={() => onSchedule()}><CalendarClock />{hasSchedule ? "Change schedule" : "Repeat by itself…"}</DropdownMenuItem>
           <DropdownMenuItem onSelect={onRelearn} disabled={busy}><RotateCcw />Learn again from the recording</DropdownMenuItem>
           {t.specId ? <DropdownMenuItem onSelect={() => { location.hash = `#/spec/${t.specId}`; }}><Code2 />Advanced editor</DropdownMenuItem> : null}

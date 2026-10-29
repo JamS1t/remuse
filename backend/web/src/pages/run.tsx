@@ -7,15 +7,18 @@ import { Kbd } from "@/components/ui/kbd";
 import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Textarea } from "@/components/ui/textarea";
-import { Crumb, ErrorNote, ItemLabel, Orb, Page, Shot, Status, useAction } from "@/components/bits";
+import { ErrorNote, ItemLabel, Orb, Shot, Status, useAction } from "@/components/bits";
+import { Content, PageHead } from "@/components/shell";
 import { Loading } from "@/pages/lists";
-import { api, fmtSecs, fmtWhen, isLive, timecode, useApi, type Candidate, type Item, type Pending, type Run, type SpecRow } from "@/lib/api";
+import { ago, api, fmtSecs, isLive, timecode, useApi, type Candidate, type Item, type Pending, type Run, type SpecRow } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 const settled = (i: Item) => ["done", "skipped", "failed"].includes(i.status);
 const dur = (i: Item, now: number) => (i.log.length ? (settled(i) ? i.log[i.log.length - 1].at : now) - i.log[0].at : 0);
 const matches = (i: Item) => (i.expected === "ask" ? i.decidedBy !== "rules" : i.outcome === i.expected);
 const words = (s?: string) => s?.replaceAll("_", " ");
+// "avg_view_duration" -> "Avg view duration", with short forms in capitals ("ctr" -> "CTR").
+const nice = (name: string) => name.split("_").map((w, i) => (/^(ctr|avd|url|id|sku|rpm|cpm)$/i.test(w) ? w.toUpperCase() : i ? w : w[0].toUpperCase() + w.slice(1))).join(" ");
 const clean = (s: string) => s.replace(/^[\u2713\u2714]\s*/, "");
 
 export function RunPage({ id }: { id: string }) {
@@ -23,139 +26,164 @@ export function RunPage({ id }: { id: string }) {
   const [sel, setSel] = useState<number | null>(null);
   const { busy, run } = useAction();
   const { data: spec } = useApi<SpecRow>(r ? `/specs/${r.specId}` : null);
-  if (error) return <Page><ErrorNote>{error}</ErrorNote></Page>;
-  if (!r) return <Page><Loading /></Page>;
+  if (error) return <Content><ErrorNote>{error}</ErrorNote></Content>;
+  if (!r) return <Content><Loading /></Content>;
 
   const live = isLive(r.status);
   const now = live ? Date.now() : r.endedAt ?? Date.now();
   const done = r.items.filter(settled).length;
-  const shown = sel ?? Math.min(r.current, r.items.length - 1);
+  const single = r.items.length <= 1;
+  const shown = sel ?? Math.min(r.current, Math.max(0, r.items.length - 1));
   const it = r.items[shown];
   const file = (f: string) => `/api/runs/${id}/files/${f}`;
   const scale = Math.max(1, ...r.items.map((i) => dur(i, now)));
   const stop = () => run("stop", async () => { await api(`/runs/${id}/stop`, "POST"); reload(); });
   const answer = (body: object) => run("answer", async () => { await api(`/runs/${id}/answer`, "POST", body); reload(); });
+  // A decision is worth showing only when there was a real choice (several outcomes) or you made it.
+  const choices = spec ? Object.keys(spec.spec.outcomes).length : 2;
+  const title = spec?.spec.title ?? spec?.spec.goal ?? "Run";
+  const took = (r.endedAt ?? now) - r.startedAt;
 
   return (
-    <Page>
-      <div className="flex flex-wrap items-center gap-2">
-        <Crumb href={spec ? `#/task/${spec.sessionId}/activity` : "#/activity"}>{spec ? "Back to the task" : "Activity"}</Crumb>
-      </div>
-      <div className="mt-3 flex flex-wrap items-end justify-between gap-x-8 gap-y-3">
-        <div>
-          <h1 className="text-[22px] font-semibold">Run of {fmtWhen(r.startedAt)}</h1>
-          <p className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-muted-foreground">
-            <Status s={r.status} />
-            <span><span className="font-mono text-[13px] text-foreground">{done} of {r.items.length}</span> items finished</span>
-            {r.autoApprove ? <span>· approving in advance</span> : null}
-            {r.newSpecId ? <span>· <a href={`#/spec/${r.newSpecId}`}>New spec version from this run</a></span> : null}
-          </p>
-        </div>
-        <div className="flex items-center gap-5">
-          {r.score ? (
-            <p className="text-right leading-tight">
-              <span className="font-mono text-[22px] font-semibold">{r.score.matched}<span className="text-muted-foreground"> / {r.score.total}</span></span>
-              <span className="block text-[12px] text-muted-foreground">match the right answer</span>
-            </p>
-          ) : null}
-          {live ? <Button variant="outline" onClick={stop} disabled={!!busy}><Square className="fill-current" />Stop</Button> : null}
-        </div>
-      </div>
-      {r.error ? <div className="mt-4"><ErrorNote>{r.error}</ErrorNote></div> : null}
+    <Content wide={!single}>
+      <PageHead
+        back={spec ? { href: `#/task/${spec.sessionId}/activity`, label: "Back to the task" } : { href: "#/activity", label: "Activity" }}
+        title={title}
+        sub={
+          <span className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
+            <Status s={r.pending ? "approval" : r.status} />
+            <span>·</span><span>{r.trigger === "schedule" ? "Started by its schedule" : "Started by you"} {ago(r.startedAt)}</span>
+            <span>·</span><span className="font-mono text-[13px]">{fmtSecs(took)}</span>
+            {!single ? <><span>·</span><span>{done} of {r.items.length} done</span></> : null}
+            {r.autoApprove ? <><span>·</span><span className="text-warn">without asking you</span></> : null}
+          </span>
+        }
+        actions={
+          <>
+            {r.score ? <span className="mr-2 font-mono text-[15px]">{r.score.matched}<span className="text-muted-foreground"> / {r.score.total} right</span></span> : null}
+            {live ? <Button variant="outline" className="rounded-full" onClick={stop} disabled={!!busy}><Square className="fill-current" />Stop</Button> : null}
+          </>
+        }
+      />
+      {r.error ? <div className="mb-6"><ErrorNote>{r.error}</ErrorNote></div> : null}
+      {r.pending ? <div className="mb-6"><PendingCard key={`${r.pending.kind}-${r.pending.item}-${r.pending.shot}`} p={r.pending} r={r} file={file} busy={!!busy} answer={answer} /></div> : null}
+      {r.heals.length || r.learned.length ? (
+        <section className="glass mb-6 rounded-2xl px-5 py-4">
+          <h2 className="text-[13px] font-medium">Learned during this run</h2>
+          <ul className="mt-1.5 space-y-1 text-[13.5px] text-muted-foreground">
+            {[...new Set(r.heals.map((h) => `“${h.from}” is now “${h.to}”`)), ...r.learned.map((l) => `${words(l.requestType)} → ${words(l.outcome)}${l.note ? `. ${l.note}` : ""}`)].map((t) => <li key={t}>{t}</li>)}
+          </ul>
+          {r.newSpecId ? <p className="mt-2 text-[13px]"><a href={`#/spec/${r.newSpecId}`}>Saved as a new version</a></p> : null}
+        </section>
+      ) : null}
 
-      <div className="mt-6 grid items-start gap-6 min-[900px]:grid-cols-[minmax(340px,420px)_minmax(0,1fr)] min-[1280px]:grid-cols-[460px_minmax(0,1fr)]">
-        {/* The rundown: items in order, each with its time drawn to one shared scale. */}
-        <div className="overflow-hidden rounded-lg border bg-card max-[899px]:order-2">
-          <div className="grid grid-cols-[32px_1fr_104px] gap-2 border-b bg-muted/50 px-3 py-2 text-[12px] font-medium text-muted-foreground">
-            <span className="text-right">No.</span><span>Item and outcome</span><span className="flex justify-between">Time<span className="font-mono font-normal">0–{fmtSecs(scale)}</span></span>
-          </div>
-          <ol>
-            {r.items.map((i, n) => {
-              const d = dur(i, now);
-              const isLiveRow = live && n === r.current && !settled(i);
-              return (
-                <li key={i.url}>
-                  <button type="button" onClick={() => setSel(n)} aria-current={n === shown}
-                    className={cn("grid w-full grid-cols-[32px_1fr_104px] items-start gap-2 border-b border-rule px-3 py-2.5 text-left transition-colors last:border-b-0 hover:bg-muted/60", n === shown && "bg-muted")}>
-                    <span className="pt-px text-right font-mono text-[12px] text-muted-foreground">{n + 1}</span>
-                    <span className="min-w-0">
-                      <span className="line-clamp-2 font-medium leading-snug" title={i.label}><ItemLabel text={i.label} /></span>
-                      <span className="mt-0.5 flex flex-wrap items-center gap-x-1.5 text-[12.5px] text-muted-foreground">
-                        <Status s={i.status} word={i.status !== "done" || !i.outcome} />
-                        {i.outcome ? <span className="text-foreground capitalize">{i.status !== "done" ? "· " : ""}{words(i.outcome)}</span> : null}
-                        {i.decidedBy && i.decidedBy !== "rules" ? <span>· {i.decidedBy === "you" ? "you decided" : "learned"}</span> : null}
-                        {i.expected && i.outcome && !matches(i) ? <span className="text-destructive">· expected {words(i.expected)}</span> : null}
+      {single ? (
+        it ? <ItemDetail it={it} file={file} choices={choices} live={live && !settled(it)} latest={r.shot} /> : <p className="text-muted-foreground">Starting…</p>
+      ) : (
+        <div className="grid items-start gap-6 min-[900px]:grid-cols-[minmax(320px,400px)_minmax(0,1fr)]">
+          {/* Every item in order, each with its time drawn to one shared scale. */}
+          <div className="glass overflow-hidden rounded-2xl max-[899px]:order-2">
+            <div className="grid grid-cols-[28px_1fr_96px] gap-2 border-b border-rule px-4 py-2.5 text-[12px] text-muted-foreground">
+              <span className="text-right">#</span><span>Item</span><span className="text-right">Time</span>
+            </div>
+            <ol>
+              {r.items.map((i, n) => {
+                const d = dur(i, now);
+                const isLiveRow = live && n === r.current && !settled(i);
+                return (
+                  <li key={i.url || n}>
+                    <button type="button" onClick={() => setSel(n)} aria-current={n === shown}
+                      className={cn("grid w-full grid-cols-[28px_1fr_96px] items-start gap-2 border-b border-rule px-4 py-3 text-left transition-colors last:border-b-0 hover:bg-white/[0.04]", n === shown && "bg-white/[0.06]")}>
+                      <span className="pt-px text-right font-mono text-[12px] text-muted-foreground">{n + 1}</span>
+                      <span className="min-w-0">
+                        <span className="line-clamp-2 leading-snug" title={i.label}><ItemLabel text={i.label} /></span>
+                        <span className="mt-0.5 flex flex-wrap items-center gap-x-1.5 text-[12.5px] text-muted-foreground">
+                          <Status s={i.status} word={i.status !== "done" || !i.outcome} />
+                          {i.outcome ? <span className="text-foreground capitalize">{words(i.outcome)}</span> : null}
+                          {i.expected && i.outcome && !matches(i) ? <span className="text-destructive">· expected {words(i.expected)}</span> : null}
+                        </span>
                       </span>
-                    </span>
-                    <span className="pt-1">
-                      <span className="block h-1.5 w-full">
-                        <span className={cn("block h-full", isLiveRow ? "live-bar bg-tally" : i.status === "failed" ? "bg-destructive/40" : i.status === "skipped" ? "bg-muted-foreground/40" : "bg-foreground/75")}
-                          style={{ width: `${d ? Math.max(3, (d / scale) * 100) : 0}%` }} />
+                      <span className="pt-1">
+                        <span className="block h-1 w-full rounded-full bg-white/[0.06]">
+                          <span className={cn("block h-full rounded-full", isLiveRow ? "live-bar bg-live" : i.status === "failed" ? "bg-destructive/60" : "bg-foreground/60")}
+                            style={{ width: `${d ? Math.max(4, (d / scale) * 100) : 0}%` }} />
+                        </span>
+                        <span className="mt-1 block text-right font-mono text-[11.5px] text-muted-foreground">{d ? fmtSecs(d) : "–"}</span>
                       </span>
-                      <span className={cn("mt-1 block font-mono text-[11.5px]", isLiveRow ? "text-tally" : "text-muted-foreground")}>{d ? fmtSecs(d) : "–"}</span>
-                    </span>
-                  </button>
-                </li>
-              );
-            })}
-          </ol>
-        </div>
-
-        <div className="min-w-0 space-y-6 max-[899px]:order-1">
-          {r.pending ? <PendingCard key={`${r.pending.kind}-${r.pending.item}-${r.pending.shot}`} p={r.pending} r={r} file={file} busy={!!busy} answer={answer} /> : null}
-
-          {r.heals.length || r.learned.length ? (
-            <section className="rounded-lg border bg-card px-4 py-3">
-              <h2 className="text-[13px] font-semibold">Changed during this run</h2>
-              <ul className="mt-1.5 space-y-1">
-                {[...new Set(r.heals.map((h) => `“${h.from}” is now “${h.to}”`)), ...r.learned.map((l) => `Learned: ${words(l.requestType)} → ${words(l.outcome)}${l.note ? `. ${l.note}` : ""}`)].map((t) => (
-                  <li key={t} className="grid grid-cols-[1fr_16px] gap-2"><span>{t}</span><span className="font-mono font-semibold" aria-label="changed">*</span></li>
-                ))}
-              </ul>
-              <p className="mt-1.5 text-[12.5px] text-muted-foreground">These go into the next spec version when the run ends.</p>
-            </section>
-          ) : null}
-
-          {!r.pending && it ? (
-            <section>
-              <div className="flex items-baseline justify-between gap-3">
-                <h2 className="truncate text-[15px] font-semibold"><span className="mr-2 font-mono text-[13px] text-muted-foreground">{shown + 1}</span><ItemLabel text={it.label} /></h2>
-                <Status s={it.status} />
-              </div>
-              {it.because ? <p className="mt-1.5">Decision: <span className="font-semibold capitalize">{words(it.outcome)}</span>, because {words(it.because)}</p> : null}
-              {it.report ? (
-                <div className="glass mt-3 rounded-2xl px-4 py-3">
-                  <p className="text-[12.5px] text-muted-foreground">Update</p>
-                  <p className="mt-1 text-[16px] leading-snug whitespace-pre-wrap">{it.report}</p>
-                </div>
-              ) : null}
-              {it.candidates?.length ? <Compared list={it.candidates} file={file} /> : null}
-              {it.log.some((l) => l.shot) ? (
-                <div className="mt-4">
-                  <h3 className="mb-2 text-[13px] font-semibold">Screens checked</h3>
-                  <div className="grid gap-3 sm:grid-cols-2">
-                    {it.log.filter((l) => l.shot).map((l, k) => <Shot key={k} src={file(l.shot!)} alt={clean(l.msg)} caption={clean(l.msg)} />)}
-                  </div>
-                </div>
-              ) : null}
-              <h3 className="mt-5 text-[13px] font-semibold">Step by step</h3>
-              <ol className="mt-2 rounded-lg border bg-card px-4">
-                {it.log.length ? it.log.map((l, k) => (
-                  <li key={k} className="grid grid-cols-[44px_1fr] gap-2 border-b border-rule py-1.5 text-[13px] last:border-b-0">
-                    <span className="pt-px font-mono text-[11.5px] text-muted-foreground">{timecode(l.at - it.log[0].at)}</span>
-                    <span className={cn(l.level === "warn" && "text-warn", l.level === "error" && "text-destructive")}>
-                      {l.level === "warn" || l.level === "error" ? <CircleAlert className="mr-1 inline size-3.5 align-[-2px]" /> : l.level === "ok" ? <Check className="mr-1 inline size-3.5 align-[-2px] text-ok" /> : null}
-                      {clean(l.msg)}
-                    </span>
+                    </button>
                   </li>
-                )) : <li className="py-3 text-muted-foreground">Not started yet.</li>}
-              </ol>
-              {live && r.shot && shown === r.current ? <div className="mt-4"><Shot src={file(r.shot)} alt="Latest screen" caption="Latest screen" /></div> : null}
-            </section>
-          ) : null}
+                );
+              })}
+            </ol>
+          </div>
+          <div className="min-w-0 max-[899px]:order-1">
+            {it ? (
+              <>
+                <div className="mb-4 flex items-baseline justify-between gap-3">
+                  <h2 className="truncate text-[16px] font-medium"><ItemLabel text={it.label} /></h2>
+                  <Status s={it.status} />
+                </div>
+                <ItemDetail it={it} file={file} choices={choices} live={live && shown === r.current && !settled(it)} latest={r.shot} />
+              </>
+            ) : null}
+          </div>
         </div>
-      </div>
-    </Page>
+      )}
+    </Content>
+  );
+}
+
+/** One item: its update, its decision (when there was one), what it compared, its steps and screens. */
+function ItemDetail({ it, file, choices, live, latest }: { it: Item; file: (f: string) => string; choices: number; live: boolean; latest?: string }) {
+  const showDecision = !!it.because && (choices > 1 || it.decidedBy !== "rules");
+  const shots = it.log.filter((l) => l.shot);
+  return (
+    <div className="space-y-6">
+      {it.report ? (
+        <section className="glass rounded-2xl px-6 py-5">
+          <p className="text-[12.5px] text-muted-foreground">Update</p>
+          <p className="mt-1.5 text-[20px] leading-snug font-medium tracking-[-0.01em] whitespace-pre-wrap">{it.report}</p>
+        </section>
+      ) : null}
+      {showDecision ? (
+        <p className="text-[15px]">Decided to <span className="font-medium">{words(it.outcome)}</span>{it.decidedBy === "you" ? ", as you said" : it.decidedBy === "learned" ? ", as you showed earlier" : ""}. <span className="text-muted-foreground">{words(it.because)}</span></p>
+      ) : null}
+      {it.candidates?.length ? <Compared list={it.candidates} file={file} /> : null}
+      {live && latest ? <Shot src={file(latest)} alt="What Remuse sees now" caption="What Remuse sees now" /> : null}
+
+      <section>
+        <h3 className="mb-2 text-[13px] font-medium text-muted-foreground">Steps</h3>
+        <ol className="glass divide-y divide-rule overflow-hidden rounded-2xl">
+          {it.log.length ? it.log.map((l, k) => {
+            const msg = clean(l.msg);
+            if (msg.startsWith("Update: ") || (!showDecision && msg.startsWith("Decision: "))) return null;
+            const read = /^(\w+) = (.+?)( \(computed\))?(: .*)?$/.exec(msg);
+            const label = msg.replace(/ \(checked on screen: .*\)$/, "");
+            return (
+              <li key={k} className="grid grid-cols-[20px_minmax(0,1fr)_48px] items-start gap-3 px-5 py-2.5 text-[13.5px]">
+                <span className="pt-0.5">
+                  {l.level === "warn" || l.level === "error" ? <CircleAlert className={cn("size-3.5", l.level === "error" ? "text-destructive" : "text-warn")} />
+                    : l.level === "ok" ? <Check className="size-3.5 text-ok" /> : <span className="mt-1.5 ml-1 block size-1 rounded-full bg-muted-foreground/60" />}
+                </span>
+                {read ? (
+                  <span className="min-w-0"><span className="text-muted-foreground">{nice(read[1])}</span> <span className="ml-1 font-mono text-[13px]">{JSON.parse(JSON.stringify(read[2])).replace(/^"|"$/g, "")}</span></span>
+                ) : <span className={cn("min-w-0", l.level === "error" && "text-destructive", l.level === "warn" && "text-warn")}>{label}</span>}
+                <span className="pt-0.5 text-right font-mono text-[11.5px] text-muted-foreground">{timecode(l.at - it.log[0].at)}</span>
+              </li>
+            );
+          }) : <li className="px-5 py-4 text-muted-foreground">Not started yet.</li>}
+        </ol>
+      </section>
+
+      {shots.length ? (
+        <section>
+          <h3 className="mb-2 text-[13px] font-medium text-muted-foreground">Screens it checked</h3>
+          <div className="grid grid-cols-2 gap-3 lg:grid-cols-3">
+            {shots.map((l, k) => <Shot key={k} src={file(l.shot!)} alt={clean(l.msg)} caption={clean(l.msg).replace(/ \(checked on screen: .*\)$/, "")} />)}
+          </div>
+        </section>
+      ) : null}
+    </div>
   );
 }
 
