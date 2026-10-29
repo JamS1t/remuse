@@ -1,4 +1,4 @@
-// Windows notifications, so an approval reaches the person even when no Showrun page is open.
+// Windows notifications, so an approval reaches the person even when no Remuse page is open.
 // Clicking one opens the run in the default browser.
 import { spawn } from "node:child_process";
 

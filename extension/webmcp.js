@@ -1,7 +1,7 @@
 // WebMCP capture, run in the page itself before its scripts. Sites register "tools" for agents through
 // navigator.modelContext (Chrome's early preview; newer builds use document.modelContext). This keeps a
-// copy of every registered tool so Showrun can see and call them, and stands in where Chrome has no API.
-// Shared by the Showrun extension (while recording) and the Agent's browser (while running).
+// copy of every registered tool so Remuse can see and call them, and stands in where Chrome has no API.
+// Shared by the Remuse extension (while recording) and the Agent's browser (while running).
 (() => {
   if (window.__showrunTools) return;
   const tools = new Map();

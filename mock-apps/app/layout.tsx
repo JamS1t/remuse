@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import "./globals.css";
 
-export const metadata: Metadata = { title: "Showrun mock apps" };
+export const metadata: Metadata = { title: "Remuse mock apps" };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (

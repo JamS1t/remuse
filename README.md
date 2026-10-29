@@ -1,8 +1,8 @@
-# Showrun
+# Remuse
 
 Show it once, it does it forever, and it knows when to stop and ask.
 
-Showrun learns a browser task by watching you do it once (screen, clicks, voice), turns it into an editable Task Spec, then repeats it on new items with a check after every step. Anything irreversible (pay, check out, send, refund, submit) waits for your approval.
+Remuse learns a browser task by watching you do it once (screen, clicks, voice), turns it into an editable Task Spec, then repeats it on new items with a check after every step. Anything irreversible (pay, check out, send, refund, submit) waits for your approval.
 
 It works on the sites you already use, with the logins you already have, and keeps working when Chrome is closed.
 
@@ -10,8 +10,8 @@ Built for the Meta developer hackathon, Indie Developer track. All code in this 
 
 ## Two parts
 
-- **Showrun Agent** (`backend/`): a small program on your PC that starts with Windows. It keeps your tasks and schedules, runs them in its own browser, and asks you through Windows notifications when it needs an OK. It runs whether Chrome is open or not.
-- **Showrun in Chrome** (`extension/`): the Showrun button in the toolbar opens a sidebar:
+- **Remuse Agent** (`backend/`): a small program on your PC that starts with Windows. It keeps your tasks and schedules, runs them in its own browser, and asks you through Windows notifications when it needs an OK. It runs whether Chrome is open or not.
+- **Remuse in Chrome** (`extension/`): the Remuse button in the toolbar opens a sidebar:
   - **Watch me** records a task in any tab, voice included.
   - **Again** repeats a saved task now, or on a schedule.
   - **Connected sites** shares your existing login for the sites you choose with the Agent. It stays on your PC, so you never sign in twice.
@@ -29,10 +29,10 @@ Built for the Meta developer hackathon, Indie Developer track. All code in this 
    - **Checks:** what the screen should look like after every step.
    - **Compare:** if you opened several results and picked one, a step that opens the top results, reads the same values on each and keeps the best.
 3. **Review.** You check the spec and edit it if needed. Each save is a new version.
-4. **Build.** Muse Spark writes the rules, the data extraction and the ranking as JavaScript. Showrun runs that code against your demo (it must read the same values and reach the same decision you did) plus tests Muse Spark writes for each rule. Dates, thresholds, prices per unit and rule order are computed in code, not guessed.
+4. **Build.** Muse Spark writes the rules, the data extraction and the ranking as JavaScript. Remuse runs that code against your demo (it must read the same values and reach the same decision you did) plus tests Muse Spark writes for each rule. Dates, thresholds, prices per unit and rule order are computed in code, not guessed.
 5. **Run.** The Agent repeats the task:
    - **Finding things:** it looks for elements by role and name first, then by the recorded selector. If the page was redesigned, Muse Spark finds the element on a screenshot, SAM 3.1 snaps the click to the exact element, and the spec is updated.
-   - **WebMCP:** if the page offers the action as a WebMCP tool, Showrun calls the tool instead of clicking.
+   - **WebMCP:** if the page offers the action as a WebMCP tool, Remuse calls the tool instead of clicking.
    - **Checks:** every step is checked against the page, and Muse Spark looks at the screen after every irreversible action.
    - **Approvals:** it stops for your OK before paying, checking out, sending and similar steps.
    - **Questions:** it asks when an item is outside your rules or a value can't be read. Your answer is remembered and saved into the next spec version.
@@ -44,9 +44,9 @@ Needs Node.js 24+ and Google Chrome.
 
 1. Right-click `scripts\install-windows.ps1` and choose **Run with PowerShell**. It installs the Agent, makes it start with Windows, starts it, and opens `chrome://extensions`.
 2. On that page, turn on **Developer mode**, click **Load unpacked** and pick the `extension` folder.
-3. Click the Showrun icon in the Chrome toolbar. The first recording asks for the microphone once.
+3. Click the Remuse icon in the Chrome toolbar. The first recording asks for the microphone once.
 
-Model calls go through the Showrun proxy (`proxy/`, hosted at showrun.sitsit.dev), so there is no API key to set up. To use your own key instead, put `MODEL_API_KEY=...` in `.env` at the repo root.
+Model calls go through the Remuse proxy (`proxy/`, hosted at showrun.sitsit.dev), so there is no API key to set up. To use your own key instead, put `MODEL_API_KEY=...` in `.env` at the repo root.
 
 For development: `cd backend && npm start` runs the Agent in a terminal (http://127.0.0.1:3200), and `HEADLESS=1` hides its browser. The full-page UI is a React + shadcn/ui app in `backend/web`; a built copy is committed in `backend/public`. After changing it, run `cd backend/web && npm install && npm run build`.
 
@@ -71,7 +71,7 @@ The 15 emails split as follows; `npm run check` confirms the seed matches the ru
 | Refund | 4 |
 | Lost (refund and apologize) | 3 |
 | Decline (over 30 days, one with a damage photo) | 2 |
-| Wrong item, not covered by the rules, so Showrun has to ask | 2 |
+| Wrong item, not covered by the rules, so Remuse has to ask | 2 |
 
 ## Meta models
 

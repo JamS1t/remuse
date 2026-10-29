@@ -1,4 +1,4 @@
-// Showrun model proxy: holds the Meta API key so people who install Showrun never handle one.
+// Remuse model proxy: holds the Meta API key so people who install Remuse never handle one.
 // Forwards only the two endpoints the Agent uses, with per-address limits so the key can't be drained.
 // Env: META_API_KEY (required), PROXY_TOKEN (default "showrun-demo"), PORT (default 8787),
 //      PER_MINUTE (default 60), PER_DAY (default 1500).
@@ -32,9 +32,9 @@ createServer(async (req, res) => {
   try {
     if (req.method === "GET" && req.url === "/health") return fail(res, 200, null);
     if (req.method !== "POST" || !ROUTES.has(req.url)) return fail(res, 404, "not found");
-    if (req.headers.authorization !== `Bearer ${TOKEN}`) return fail(res, 401, "not a Showrun Agent");
+    if (req.headers.authorization !== `Bearer ${TOKEN}`) return fail(res, 401, "not a Remuse Agent");
     const ip = String(req.headers["x-forwarded-for"] ?? req.socket.remoteAddress ?? "").split(",")[0].trim();
-    if (!allowed(ip)) return fail(res, 429, "Showrun's shared model allowance is used up for now. Try again later, or add your own MODEL_API_KEY.");
+    if (!allowed(ip)) return fail(res, 429, "Remuse's shared model allowance is used up for now. Try again later, or add your own MODEL_API_KEY.");
 
     const chunks = []; let size = 0;
     for await (const c of req) { size += c.length; if (size > MAX_BODY) return fail(res, 413, "request too large"); chunks.push(c); }
@@ -49,4 +49,4 @@ createServer(async (req, res) => {
     console.error(e);
     if (!res.headersSent) fail(res, 502, "the model service didn't answer");
   }
-}).listen(PORT, "127.0.0.1", () => console.log(`Showrun proxy on 127.0.0.1:${PORT}`));
+}).listen(PORT, "127.0.0.1", () => console.log(`Remuse proxy on 127.0.0.1:${PORT}`));

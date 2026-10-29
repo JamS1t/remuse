@@ -27,13 +27,14 @@ export type Inputs = {
   columns?: { name: string; describe: string; demoValue: string }[];
 };
 export type Spec = {
-  goal: string; scope: string;
+  title?: string; goal: string; scope: string;
   inputs: Inputs;
   scopeTypes: string[]; variables: Variable[]; steps: Step[]; rules: Rule[];
   outcomes: Record<string, { describe: string; steps: Step[]; reply?: string; demonstrated: boolean }>;
 };
 
 const SCHEMA = `{
+  "title": "a short name for this task, 2-5 words, like a to-do item (e.g. \"Office supply run\", \"Answer refund requests\")",
   "goal": "one sentence",
   "scope": "which kinds of items these rules are meant for. Anything outside this must be asked about, not guessed.",
   "scopeTypes": ["the item_type options the rules are meant for; [] when items don't vary in kind"],
@@ -75,7 +76,7 @@ const SCHEMA = `{
   }
 }`;
 
-const INSTRUCTIONS = `You are Showrun. A person recorded themselves doing a browser task once, on any website, while explaining their reasoning out loud. Turn the recording into a Task Spec that a browser robot will repeat on new items.
+const INSTRUCTIONS = `You are Remuse. A person recorded themselves doing a browser task once, on any website, while explaining their reasoning out loud. Turn the recording into a Task Spec that a browser robot will repeat on new items.
 
 Where items come from ("inputs.source"):
 - "list": the person opened one item from a list on a page (emails, orders, tickets, listings) and the robot should do the same for every item in that list. Set listUrl and itemEvent.

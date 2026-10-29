@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Check, CircleAlert, Hand, LoaderCircle, MessageCircleQuestion, MousePointerClick, Square } from "lucide-react";
+import { Check, CircleAlert, LoaderCircle, Square } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
@@ -7,7 +7,7 @@ import { Kbd } from "@/components/ui/kbd";
 import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Textarea } from "@/components/ui/textarea";
-import { Crumb, ErrorNote, ItemLabel, Page, Revision, Shot, Status, useAction } from "@/components/bits";
+import { Crumb, ErrorNote, ItemLabel, Orb, Page, Revision, Shot, Status, useAction } from "@/components/bits";
 import { Loading } from "@/pages/lists";
 import { api, fmtSecs, fmtWhen, isLive, timecode, useApi, type Candidate, type Item, type Pending, type Run, type SpecRow } from "@/lib/api";
 import { cn } from "@/lib/utils";
@@ -174,19 +174,19 @@ export function PendingCard({ p, r, file, busy, answer }: { p: Pending; r: Run; 
   }, [p, busy, answer]);
 
   if (p.kind === "handoff") return (
-    <section className="animate-in fade-in slide-in-from-top-2 overflow-hidden rounded-lg border border-foreground/80 bg-card shadow-[0_6px_24px_-12px_rgba(23,24,27,.35)] duration-300 ease-out" aria-live="assertive">
-      <div className="flex items-center gap-2 bg-foreground px-4 py-2.5 text-background">
-        <MousePointerClick className="size-4" /><h2 className="text-[14px] font-semibold">Your turn in the browser</h2>
-        <span className="ml-auto font-mono text-[12px] text-background/70">Item {p.item + 1}</span>
+    <section className="animate-in fade-in slide-in-from-top-2 glass overflow-hidden rounded-2xl duration-300 ease-out" aria-live="assertive">
+      <div className="flex items-center gap-2.5 border-b border-rule px-4 py-3">
+        <Orb state="waiting" size={20} /><h2 className="text-[14px] font-semibold">Your turn in the browser</h2>
+        <span className="ml-auto font-mono text-[12px] text-muted-foreground">Item {p.item + 1}</span>
       </div>
       <div className="grid gap-4 p-4">
         <div>
           <p className="text-muted-foreground"><ItemLabel text={label ?? ""} /></p>
           <p className="mt-1 text-[16px] leading-snug">I got stuck on <span className="font-semibold">{p.step.replace(/^./, (c) => c.toLowerCase())}</span>.</p>
           <p className="mt-1.5 text-muted-foreground">{p.problem}</p>
-          <p className="mt-1.5">If a sign-in page, a security check or a popup is in the way, deal with it in the Showrun browser window, then try again.</p>
+          <p className="mt-1.5">If a sign-in page, a security check or a popup is in the way, deal with it in the Remuse browser window, then try again.</p>
         </div>
-        <Shot src={file(p.shot)} alt="The screen where Showrun got stuck" />
+        <Shot src={file(p.shot)} alt="The screen where Remuse got stuck" />
         <div className="flex flex-wrap items-center gap-2">
           <Button size="lg" onClick={() => answer({ decision: "retry" })} disabled={busy}>Try again</Button>
           <Button size="lg" variant="ghost" className="ml-auto" onClick={() => answer({ decision: "skip" })} disabled={busy}>Skip this one</Button>
@@ -196,15 +196,15 @@ export function PendingCard({ p, r, file, busy, answer }: { p: Pending; r: Run; 
   );
 
   const head = (icon: React.ReactNode, title: string) => (
-    <div className="flex items-center gap-2 bg-foreground px-4 py-2.5 text-background">
+    <div className="flex items-center gap-2.5 border-b border-rule px-4 py-3">
       {icon}<h2 className="text-[14px] font-semibold">{title}</h2>
-      <span className="ml-auto font-mono text-[12px] text-background/70">Item {p.item + 1}</span>
+      <span className="ml-auto font-mono text-[12px] text-muted-foreground">Item {p.item + 1}</span>
     </div>
   );
 
   if (p.kind === "approval") return (
-    <section className="animate-in fade-in slide-in-from-top-2 overflow-hidden rounded-lg border border-foreground/80 bg-card shadow-[0_6px_24px_-12px_rgba(23,24,27,.35)] duration-300 ease-out" aria-live="assertive">
-      {head(<Hand className="size-4" />, "Waiting for your OK")}
+    <section className="animate-in fade-in slide-in-from-top-2 glass overflow-hidden rounded-2xl duration-300 ease-out" aria-live="assertive">
+      {head(<Orb state="waiting" size={20} />, "Waiting for your OK")}
       <div className="grid gap-4 p-4">
         <div>
           <p className="text-muted-foreground"><ItemLabel text={label ?? ""} /></p>
@@ -225,8 +225,8 @@ export function PendingCard({ p, r, file, busy, answer }: { p: Pending; r: Run; 
   );
 
   return (
-    <section className="animate-in fade-in slide-in-from-top-2 overflow-hidden rounded-lg border border-foreground/80 bg-card shadow-[0_6px_24px_-12px_rgba(23,24,27,.35)] duration-300 ease-out" aria-live="assertive">
-      {head(<MessageCircleQuestion className="size-4" />, "Showrun has a question")}
+    <section className="animate-in fade-in slide-in-from-top-2 glass overflow-hidden rounded-2xl duration-300 ease-out" aria-live="assertive">
+      {head(<Orb state="waiting" size={20} />, "Remuse has a question")}
       <div className="grid gap-5 p-4">
         <div>
           <p className="text-muted-foreground"><ItemLabel text={label ?? ""} /></p>
@@ -243,7 +243,7 @@ export function PendingCard({ p, r, file, busy, answer }: { p: Pending; r: Run; 
           </RadioGroup>
         </div>
         <div className="grid gap-1.5">
-          <Label htmlFor="note" className="text-[13px] font-semibold">Why <span className="font-normal text-muted-foreground">Showrun remembers this</span></Label>
+          <Label htmlFor="note" className="text-[13px] font-semibold">Why <span className="font-normal text-muted-foreground">Remuse remembers this</span></Label>
           <Input id="note" value={note} onChange={(e) => setNote(e.target.value)} placeholder="Wrong item sent: ship the right one" />
         </div>
         <div className="grid gap-1.5">
@@ -260,13 +260,13 @@ export function PendingCard({ p, r, file, busy, answer }: { p: Pending; r: Run; 
             {busy ? <LoaderCircle className="animate-spin" /> : null}{outcome ? "Use this answer" : "Skip it"}
           </Button>
         </div>
-        <Shot src={file(p.shot)} alt="The item Showrun is asking about" />
+        <Shot src={file(p.shot)} alt="The item Remuse is asking about" />
       </div>
     </section>
   );
 }
 
-/** Every result Showrun opened for this item, ranked by the person's rule. */
+/** Every result Remuse opened for this item, ranked by the person's rule. */
 function Compared({ list, file }: { list: Candidate[]; file: (f: string) => string }) {
   const keys = [...new Set(list.flatMap((c) => Object.keys(c.vars)))];
   const ranked = [...list].sort((a, b) => (b.score ?? -Infinity) - (a.score ?? -Infinity));

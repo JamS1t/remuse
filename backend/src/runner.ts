@@ -37,7 +37,7 @@ const MOCK = process.env.MOCK_URL ?? "http://localhost:3100";
 const IRREVERSIBLE = /\b(refund|replace|send|pay|submit|ship|confirm|delete|place order|issue|buy|checkout|check out|purchase|book|transfer|message seller)\b/i;
 const PROFILE = fileURLToPath(new URL("../data/browser", import.meta.url));
 
-/** The Showrun browser: the person's installed Chrome with its own profile, so sign-ins stick between runs. */
+/** The Remuse browser: the person's installed Chrome with its own profile, so sign-ins stick between runs. */
 export async function openBrowser(headless: boolean): Promise<BrowserContext> {
   const opts = { headless, viewport: VIEW, args: headless ? [] : [`--window-size=${VIEW.width},${VIEW.height + 120}`] };
   let ctx: BrowserContext;

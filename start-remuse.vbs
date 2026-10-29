@@ -1,4 +1,4 @@
-' Starts the Showrun Agent with no console window. Logs go to backend\data\agent.log.
+' Starts the Remuse Agent with no console window. Logs go to backend\data\agent.log.
 ' scripts\install-windows.ps1 puts a shortcut to this file in the Startup folder.
 Set fso = CreateObject("Scripting.FileSystemObject")
 Set sh = CreateObject("WScript.Shell")

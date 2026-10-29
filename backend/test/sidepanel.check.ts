@@ -1,4 +1,4 @@
-// Check: the Showrun extension's sidebar loads the Agent's remote page, and connecting a site shares
+// Check: the Remuse extension's sidebar loads the Agent's remote page, and connecting a site shares
 // that site's login with the Agent (and disconnecting removes it). Starts its own Agent on port 3200.
 // Run: node test/sidepanel.check.ts [screenshot.png]
 import { spawn } from "node:child_process";

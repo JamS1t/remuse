@@ -12,13 +12,13 @@ export function Home() {
     <Page>
       <h1 className="text-[22px] font-semibold">Recordings</h1>
       <p className="mt-1 max-w-[68ch] text-muted-foreground">
-        Do a task once in Chrome with the Showrun extension recording, and say your reasons out loud as you go.
-        Showrun turns the recording into a Task Spec you can check, then repeats it on every new item.
+        Do a task once in Chrome with the Remuse extension recording, and say your reasons out loud as you go.
+        Remuse turns the recording into a Task Spec you can check, then repeats it on every new item.
       </p>
       <div className="mt-6">
         {error ? <ErrorNote>{error}</ErrorNote> : !data ? <Loading /> : !data.length ? (
           <Empty title="No recordings yet">
-            Click the Showrun icon in Chrome, press <Kbd>Start recording</Kbd>, do the task once, then press <Kbd>Stop</Kbd>. It shows up here.
+            Click the Remuse icon in Chrome, press <Kbd>Start recording</Kbd>, do the task once, then press <Kbd>Stop</Kbd>. It shows up here.
           </Empty>
         ) : (
           <div className="rounded-lg border bg-card">

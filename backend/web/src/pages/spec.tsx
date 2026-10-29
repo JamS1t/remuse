@@ -181,7 +181,7 @@ export function SpecPage({ id }: { id: number }) {
               {s.scopeTypes?.length ? (
                 <ul className="mt-3 space-y-1">
                   {s.scopeTypes.map((t) => <li key={t} className="flex items-center gap-2"><Check className="size-3.5 text-ok" />{t.replaceAll("_", " ")}</li>)}
-                  <li className="flex items-center gap-2 text-muted-foreground"><CircleAlert className="size-3.5" />Anything else: Showrun stops and asks you</li>
+                  <li className="flex items-center gap-2 text-muted-foreground"><CircleAlert className="size-3.5" />Anything else: Remuse stops and asks you</li>
                 </ul>
               ) : null}
             </aside>

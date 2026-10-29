@@ -86,8 +86,9 @@ async function stop() {
     await chrome.offscreen.closeDocument();
   }
   await sleep(1000); // last "after" shots
-  const s = await api(`/sessions/${r.id}/finish`, "POST", { endedAt: Date.now(), audioOffsetMs: r.audioOffsetMs });
-  const result = { id: r.id, events: s.events.length, turns: s.turns.length, transcript: s.transcript, error: r.audioError ?? s.transcribe_error };
+  // The Agent learns the task on its own from here: names it, writes the spec, builds and tests it.
+  await api(`/sessions/${r.id}/finish`, "POST", { endedAt: Date.now(), audioOffsetMs: r.audioOffsetMs });
+  const result = { id: r.id, learning: true, error: r.audioError ?? null };
   await chrome.storage.local.set({ last: result });
   return result;
 }

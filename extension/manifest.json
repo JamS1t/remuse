@@ -1,12 +1,12 @@
 {
   "manifest_version": 3,
-  "name": "Showrun",
+  "name": "Remuse",
   "version": "0.2.0",
-  "description": "Show a browser task once. Showrun repeats it, asks when unsure, and waits for your OK before anything irreversible.",
+  "description": "Show a browser task once. Remuse repeats it, asks when unsure, and waits for your OK before anything irreversible.",
   "permissions": ["offscreen", "storage", "tabs", "sidePanel", "cookies"],
   "host_permissions": ["<all_urls>"],
   "background": { "service_worker": "background.js", "type": "module" },
-  "action": { "default_title": "Open Showrun" },
+  "action": { "default_title": "Open Remuse" },
   "side_panel": { "default_path": "sidepanel.html" },
   "content_scripts": [
     { "matches": ["<all_urls>"], "js": ["webmcp.js"], "run_at": "document_start", "world": "MAIN" },

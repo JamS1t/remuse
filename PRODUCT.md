@@ -8,7 +8,7 @@ web
 
 ## Stack
 
-Local web UI served by the Showrun backend (Node 24, `backend/src/server.ts`, 127.0.0.1:3200). User chose Vite + React + Tailwind + shadcn/ui for the UI (2026-10-29), replacing the plain HTML + `app.js` version.
+Local web UI served by the Remuse backend (Node 24, `backend/src/server.ts`, 127.0.0.1:3200). User chose Vite + React + Tailwind + shadcn/ui for the UI (2026-10-29), replacing the plain HTML + `app.js` version.
 
 ## Users
 
@@ -18,11 +18,11 @@ Secondary audience: hackathon judges watching a 3-minute demo video.
 
 ## Product Purpose
 
-Showrun learns a browser task from one recorded demo (screen, clicks, voice), turns it into an editable Task Spec, builds the rules into tested code, and runs it on new items. It checks after every step, asks when an item is outside the rules, and waits for approval before any refund, send, pay or submit. Success means the user records once and then only approves and answers questions.
+Remuse learns a browser task from one recorded demo (screen, clicks, voice), turns it into an editable Task Spec, builds the rules into tested code, and runs it on new items. It checks after every step, asks when an item is outside the rules, and waits for approval before any refund, send, pay or submit. Success means the user records once and then only approves and answers questions.
 
 ## Positioning
 
-Show it once, it does it forever, and it knows when to stop and ask. Unlike scripted RPA or a free-roaming browser agent, Showrun:
+Show it once, it does it forever, and it knows when to stop and ask. Unlike scripted RPA or a free-roaming browser agent, Remuse:
 - learns rules from the user's spoken words;
 - computes decisions in tested code, not by guessing;
 - gates every irreversible action behind approval;
@@ -30,8 +30,8 @@ Show it once, it does it forever, and it knows when to stop and ask. Unlike scri
 
 ## Operating Context
 
-- **Recording:** a Chrome extension records the demo. The user then opens the Showrun page to write the Task Spec, review it, build it, and run it.
-- **During a run:** the Showrun page sits on half the screen (about 960px) beside the Playwright browser window it drives. Approvals and questions appear on the run page.
+- **Recording:** a Chrome extension records the demo. The user then opens the Remuse page to write the Task Spec, review it, build it, and run it.
+- **During a run:** the Remuse page sits on half the screen (about 960px) beside the Playwright browser window it drives. Approvals and questions appear on the run page.
 - **Demo:** three mock apps (Inbox, Kalye Goods store admin, Bilis Express courier) at localhost:3100.
 
 ## Capabilities and Constraints
@@ -47,11 +47,16 @@ Show it once, it does it forever, and it knows when to stop and ask. Unlike scri
 
 ## Brand Commitments
 
-- Name: Showrun. Tagline: "Show it once, it does it forever, and it knows when to stop and ask."
-- The user requires a professional, real-product look with no AI-slop tropes:
-  - no status pills with indicator dots;
-  - no vertical accent bars marking active or heading;
-  - no gradients or decorative glow.
+- Name: Remuse (re-use + Muse, renamed from Showrun 2026-10-29). Tagline: "Show it once. Remuse does it again."
+- Look (user-pinned 2026-10-29, from two reference shots): a dark, Gemini-style agentic helper.
+  - Near-black ground with a faint dot grid.
+  - Soft glass panels with large radii.
+  - A living, glowing orb that is the agent's presence and shows its state (watching, thinking, working, waiting for you).
+  - Shimmering "Thinking…" text.
+  - A pill-shaped main control at the bottom.
+  - Applies to the sidebar and the full view. The orb glow is the one sanctioned glow.
+- Still banned (user, earlier): status pills with indicator dots, vertical accent bars marking active or heading, chat-bot framing.
+- Proactive: Remuse names tasks itself and learns end to end on Stop; the user only confirms once.
 - No real company logos and no real customer data. Only made-up mock data.
 
 ## Evidence on Hand

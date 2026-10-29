@@ -13,12 +13,12 @@ addEventListener("message", (e) => {
 });
 
 export function ext<T = any>(type: string, args?: Record<string, unknown>): Promise<T> {
-  if (!inPanel) return Promise.reject(new Error("Open Showrun from the Chrome toolbar to use this."));
+  if (!inPanel) return Promise.reject(new Error("Open Remuse from the Chrome toolbar to use this."));
   const id = ++seq;
   return new Promise<T>((resolve, reject) => {
     waiting.set(id, (r) => (r?.error ? reject(new Error(r.error)) : resolve(r)));
     window.parent.postMessage({ id, type, args }, "*"); // only types and site names go out; no secrets
-    setTimeout(() => { if (waiting.delete(id)) reject(new Error("Showrun in Chrome didn't answer.")); }, 120_000);
+    setTimeout(() => { if (waiting.delete(id)) reject(new Error("Remuse in Chrome didn't answer.")); }, 120_000);
   });
 }
 

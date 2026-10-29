@@ -20,14 +20,14 @@ export function useAction() {
   return { busy, run };
 }
 
-/** Opens the Showrun browser (its own Chrome profile) so the person can sign in to sites once. */
+/** Opens the Remuse browser (its own Chrome profile) so the person can sign in to sites once. */
 function SignIn() {
   const [open, setOpen] = useState(false);
   const [url, setUrl] = useState("https://");
   const { busy, run } = useAction();
   const go = () => run("open", async () => {
     await api(`/browser/open?url=${encodeURIComponent(url)}`, "POST");
-    toast.success("The Showrun browser is open. Sign in there, then close it.");
+    toast.success("The Remuse browser is open. Sign in there, then close it.");
     setOpen(false);
   });
   return (
@@ -38,7 +38,7 @@ function SignIn() {
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent className="sm:max-w-[460px]">
           <DialogTitle>Sign in to a site</DialogTitle>
-          <p className="text-muted-foreground">Showrun uses its own Chrome window. Sign in there once, and every run after stays signed in. Your passwords never reach Showrun.</p>
+          <p className="text-muted-foreground">Remuse uses its own Chrome window. Sign in there once, and every run after stays signed in. Your passwords never reach Remuse.</p>
           <form className="mt-1 flex gap-2" onSubmit={(e) => { e.preventDefault(); go(); }}>
             <Input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://www.lazada.com.ph" className="font-mono" aria-label="Site address" />
             <Button type="submit" disabled={!!busy}>{busy ? <LoaderCircle className="animate-spin" /> : null}Open</Button>
@@ -62,7 +62,7 @@ export function TopBar({ at }: { at: string }) {
       <div className="mx-auto flex h-12 max-w-[1240px] items-center gap-3 px-4 sm:gap-5 sm:px-5">
         <a href="#/" className="flex items-center gap-2 text-foreground no-underline">
           <Mark />
-          <span className="text-[15px] font-semibold tracking-[-0.02em]">Showrun</span>
+          <span className="text-[15px] font-semibold tracking-[-0.02em]">Remuse</span>
         </a>
         <nav className="flex items-center gap-1">
           {link("#/", "Recordings", at === "" || at === "session" || at === "spec")}
@@ -90,14 +90,22 @@ export function TopBar({ at }: { at: string }) {
   );
 }
 
-/** Showrun mark: a play cue inside a frame. */
-export function Mark() {
+/** Remuse mark: a play cue inside a frame. */
+export type OrbState = "idle" | "watching" | "thinking" | "working" | "waiting" | "done";
+
+/** Remuse's presence: a glass orb whose light shows what it's doing. */
+export function Orb({ state = "idle", size = 18, className }: { state?: OrbState; size?: number; className?: string }) {
   return (
-    <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden>
-      <rect x="0.75" y="0.75" width="16.5" height="16.5" rx="4" fill="var(--foreground)" />
-      <path d="M7 5.2v7.6l6-3.8z" fill="var(--tally)" />
-    </svg>
+    <span className={cn("orb inline-block", className)} data-state={state} style={{ ["--s" as string]: `${size}px` }} aria-hidden>
+      <span className="core"><span className="swirl" /><span className="swirl b" /></span>
+      <span className="gloss" />
+    </span>
   );
+}
+
+/** Wordmark spot until the logo lands: the idle orb. */
+export function Mark() {
+  return <Orb size={18} />;
 }
 
 export function Page({ children }: { children: ReactNode }) {
