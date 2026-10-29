@@ -5,71 +5,98 @@ import { askJson, text, png, type Part } from "./meta.ts";
 
 export type Target = { role?: string; name?: string; selector?: string; fuzzy?: boolean };
 export type Step = {
-  id: string; do: "open_item" | "goto" | "click" | "fill" | "press" | "extract";
+  id: string; do: "open_item" | "goto" | "click" | "fill" | "press" | "extract" | "compare";
   url?: string; target?: Target; value?: string; key?: string; vars?: string[];
   describe: string; expect?: { urlIncludes?: string; textIncludes?: string; looks?: string };
   irreversible?: boolean; fromEvent?: number | null; healed?: string;
+  // The page's own WebMCP tool for this action: used when the page offers it, else the robot clicks.
+  tool?: { name: string; args: Record<string, string> };
+  // compare only: open the top `max` results on this page, read `vars` on each, keep the best by the person's rule.
+  resultEvent?: number; resultSelector?: string; resultHref?: string; max?: number; said?: string;
 };
 export type Variable = {
   name: string; kind: "text" | "vision" | "judge" | "computed"; description: string;
   demoValue?: unknown; question?: string; options?: string[]; from?: string[];
+  candidate?: boolean; // read on each compared result, not on the item
 };
 export type Rule = { if: string; then: string; said?: string; learned?: boolean };
+// Where the items come from: links on a page ("list"), or rows the person gives each run ("rows").
+export type Inputs = {
+  source?: "list" | "rows"; itemName: string;
+  listUrl?: string; itemEvent?: number; itemSelector?: string;
+  columns?: { name: string; describe: string; demoValue: string }[];
+};
 export type Spec = {
-  goal: string; scope: string;
-  inputs: { listUrl: string; itemEvent: number; itemName: string; itemSelector?: string };
+  title?: string; goal: string; scope: string;
+  inputs: Inputs;
   scopeTypes: string[]; variables: Variable[]; steps: Step[]; rules: Rule[];
   outcomes: Record<string, { describe: string; steps: Step[]; reply?: string; demonstrated: boolean }>;
 };
 
 const SCHEMA = `{
+  "title": "a short name for this task, 2-5 words, like a to-do item (e.g. \"Office supply run\", \"Answer refund requests\")",
   "goal": "one sentence",
   "scope": "which kinds of items these rules are meant for. Anything outside this must be asked about, not guessed.",
-  "scopeTypes": ["the request_type options the rules are meant for"],
-  "inputs": { "listUrl": "page with the list of items", "itemEvent": <event # of the click that opened the item>, "itemName": "email" },
+  "scopeTypes": ["the item_type options the rules are meant for; [] when items don't vary in kind"],
+  "inputs": {
+    "source": "list" | "rows",
+    "itemName": "what one item is, singular: email, order, shopping list item, invoice...",
+    "listUrl": "list only: page with the list of items",
+    "itemEvent": <list only: event # of the click that opened the item>,
+    "columns": [ { "name": "rows only: snake_case", "describe": "what goes in this column", "demoValue": "the value used in the demo" } ]
+  },
   "variables": [
     { "name": "snake_case", "kind": "text" | "vision" | "judge" | "computed",
       "description": "what it is and where it is on the page",
       "demoValue": <the value in this demo>,
       "question": "vision: a yes/no question about an image on the page. judge: the question to answer from the page text",
       "options": ["judge only: the allowed answers; always include \\"other\\""],
-      "from": ["computed only: the variables it is computed from"] }
+      "from": ["computed only: the variables it is computed from"],
+      "candidate": true | false }
   ],
   "steps": [
-    { "id": "s1", "do": "open_item" | "goto" | "click" | "fill" | "press" | "extract",
+    { "id": "s1", "do": "open_item" | "goto" | "click" | "fill" | "press" | "extract" | "compare",
       "url": "goto only, may contain {{var}}",
       "target": { "role": "...", "name": "...", "selector": "..." },
       "value": "fill only, use {{var}} for anything that changes per item",
       "key": "press only, e.g. Enter",
-      "vars": ["extract only: variables to read on the current page"],
+      "vars": ["extract: variables to read on the current page. compare: the candidate variables read on each result"],
+      "resultEvent": <compare only: event # of the click that opened one result in the demo>,
+      "max": <compare only: how many results to compare, default 5>,
+      "said": "compare only: the person's own words for what makes one result better",
       "describe": "short plain sentence",
       "expect": { "urlIncludes": "optional, may use {{var}}", "textIncludes": "optional, may use {{var}}", "looks": "what the screen should show after this step" },
       "irreversible": false,
+      "tool": { "name": "optional: a WebMCP tool the page offered that does this same action", "args": { "<param>": "value or {{var}}" } },
       "fromEvent": <event # this step came from, or null> }
   ],
   "rules": [ { "if": "condition in plain words using variable names", "then": "<outcome key>", "said": "the user's own words" } ],
   "outcomes": {
-    "<outcome key>": { "describe": "...", "steps": [ <steps, same shape> ], "reply": "reply text with {{var}} placeholders", "demonstrated": true | false }
+    "<outcome key>": { "describe": "...", "steps": [ <steps, same shape> ], "reply": "optional message text with {{var}} placeholders", "demonstrated": true | false }
   }
 }`;
 
-const INSTRUCTIONS = `You are Showrun. A person recorded themselves doing a browser task once while explaining their reasoning out loud. Turn the recording into a Task Spec that a browser robot will run on every other item in the same list.
+const INSTRUCTIONS = `You are Remuse. A person recorded themselves doing a browser task once, on any website, while explaining their reasoning out loud. Turn the recording into a Task Spec that a browser robot will repeat on new items.
+
+Where items come from ("inputs.source"):
+- "list": the person opened one item from a list on a page (emails, orders, tickets, listings) and the robot should do the same for every item in that list. Set listUrl and itemEvent.
+- "rows": the task starts from values the person brought (a product to buy, a name to look up, a form to fill), so next time the robot needs a new value for each run. Make one column per value that changes per item, with what they typed in the demo as demoValue, and use {{column_name}} wherever it was typed or appeared in a URL. A shopping list, a list of names, a CSV are all "rows".
 
 Rules for the spec:
-- "steps" are what to do for EVERY item before deciding: open the item, look things up, and "extract" steps that read variables on the page they are on. Put an extract step right after the step that lands on the page holding those variables.
-- Copy each target's role, name and selector from the event log exactly. If the name or a typed value was this item's data (an order number, a tracking number, a customer name), replace it with {{variable}}.
-- Variable kinds: "text" = read from the page text by code (order numbers, dates, statuses). "vision" = yes/no about an image on the page (e.g. does the photo show damage); its value is true/false. "judge" = classify the page text into one of "options" (always include "other"). "computed" = derived in code from other variables (e.g. days_since_order from order_date and today).
-- Always add a judge variable named "request_type" on the item page, so items outside the scope can be detected and asked about. Its options: the kinds of request the rules handle, plus other kinds you can foresee for this list (for complaints: wrong_item, exchange), plus "other".
-- "scopeTypes" lists only the request_type options the person's rules are meant for: the demonstrated kind, kinds their rules name, and for an "otherwise" fallback the kind of request that fallback answers (e.g. "otherwise refund" covers plain refund requests). A request for something no rule gives (e.g. sending a different item) is out of scope. Be strict: out of scope means the robot asks the person, which is cheap; a wrong action is not.
-- "rules" come from what the person SAID, in their order; first match wins. Quote their words in "said". Write conditions with the variable names. If they gave a fallback ("otherwise ..."), make it the last rule with "if": "otherwise".
-- One outcome per distinct action in the rules, using short snake_case keys (e.g. "replace", "refund", "lost_refund", "decline"). Do not add an "ask" outcome; the robot asks by itself.
-- Outcome steps run right after the last main step, on whatever page it left open. If an outcome acts on a different page, its first step must be a "goto" to that page, with {{variables}} in the URL (like the page the person went back to in the demo).
-- Free text the person typed (notes, reasons) must work for any item: rewrite it generically, with {{variables}}.
-- Outcome steps finish the item: the demonstrated outcome copies what the person did after deciding. For outcomes NOT demonstrated, write the steps you can infer from what was visible on screen (e.g. a Refund button next to the Replace button) and set "demonstrated": false.
-- Every outcome that should answer the customer ends with steps that open the item ("open_item"), fill the reply box with "{{reply}}" and click send. "reply" is the message text for that outcome, written like the person's demo reply, with {{variables}} for names and numbers.
-- Mark "irreversible": true on any step that refunds, replaces, sends, pays, submits or deletes.
-- Built-in variables you may use: {{item_url}}, {{today}} (YYYY-MM-DD), {{reply}}.
+- "steps" are what to do for EVERY item before deciding. For "list", the first step is "open_item". For "rows", start with a "goto" to where the person started. Put an "extract" step right after the step that lands on the page holding those variables.
+- Copy each target's role, name and selector from the event log exactly. If a name or typed value was this item's data (a product name, order number, customer name), replace it with {{variable}} or {{column}}.
+- Variable kinds: "text" = read from the page text by code (numbers, prices, dates, statuses, names). "vision" = yes/no about an image on the page; its value is true/false. "judge" = classify the page text into one of "options" (always include "other"). "computed" = derived in code from other variables (e.g. days_since_order from order_date and today, price_per_unit from price and pack_size).
+- Comparing: if the person looked at several results (search results, listings, offers) and picked one, add ONE "compare" step on the results page instead of the individual clicks. Its "vars" are the variables read on each result (mark them "candidate": true; computed ones like price_per_unit may be candidates too), "resultEvent" is the click that opened a result, and "said" is how they said they choose. After a compare step the robot is on the best result's page, and every candidate variable is also available as best_<name>, plus best_url and best_title, and candidates_found (a number). Steps after it act on the chosen result.
+- Kinds of items: if the items in a "list" can be of different kinds that need different handling (types of request, categories), add a judge variable named "item_type" on the item page with the kinds the rules handle, other kinds you can foresee, and "other". "scopeTypes" lists only the kinds the rules are meant for; anything else makes the robot ask the person. Be strict: asking is cheap, a wrong action is not. Skip item_type when every item is the same kind of thing.
+- "rules" come from what the person SAID, in their order; first match wins. Quote their words in "said". Write conditions with the variable names. If they gave a fallback ("otherwise ..."), make it the last rule with "if": "otherwise". If the only decision is "do it" (e.g. buy the best one), use one rule {"if": "otherwise", "then": "<that outcome>"}; add a rule like "if candidates_found is 0 then skip" when nothing qualified.
+- One outcome per distinct action, with short snake_case keys. Do not add an "ask" outcome; the robot asks by itself. An outcome may have no steps ("skip").
+- Outcome steps run right after the last main step, on whatever page it left open. If an outcome acts on a different page, its first step is a "goto" to that page, with {{variables}} in the URL.
+- Free text the person typed (notes, messages, replies) must work for any item: rewrite it generically with {{variables}}. If an outcome sends a message, put the text in "reply" and fill it with "{{reply}}".
+- For outcomes NOT demonstrated, write the steps you can infer from what was visible on screen and set "demonstrated": false.
+- Mark "irreversible": true on any step that pays, buys, checks out, places an order, sends a message, submits, refunds, books, transfers or deletes. Adding to a cart is not irreversible; checking out is.
+- Built-in variables: {{item_url}} (list items), {{today}} (YYYY-MM-DD), {{reply}}.
 - Every step gets an "expect" so the robot can check its own work.
+- WebMCP: "tools" lines list actions a page offers to agents directly. When a step does what one of those tools does (e.g. the Refund button and a refund_order tool), keep the step as recorded and add "tool" with the tool name and its args, using {{variables}}. The robot calls the tool when the page offers it and clicks otherwise.
 
 Reply with ONLY the JSON object, in this shape:
 ${SCHEMA}`;
@@ -80,6 +107,7 @@ function eventLine(e: any, i: number) {
   const t = e.target ? ` target={role:${JSON.stringify(e.target.role)}, name:${JSON.stringify(e.target.label)}, selector:${JSON.stringify(e.target.selector)}}` : "";
   const v = e.value !== undefined ? ` value=${JSON.stringify(e.value)}` : "";
   const k = e.key ? ` key=${e.key}` : "";
+  if (e.kind === "tools") return `#${i} tools url=${e.url} offered: ${(e.tools ?? []).map((x: any) => `${x.name}(${Object.keys(x.inputSchema?.properties ?? {}).join(", ")}): ${x.description ?? ""}`).join("; ")}`;
   return `#${i} t=${(e.t / 1000).toFixed(1)}s ${e.kind} url=${e.url}${t}${v}${k}`;
 }
 
@@ -117,10 +145,25 @@ export async function understand(s: Session, dir: string): Promise<Spec> {
 
 // Fill in what code can know for sure instead of trusting the model.
 export function normalize(spec: Spec, s: Session): Spec {
-  const ev = s.events[spec.inputs?.itemEvent];
-  if (ev?.target?.selector) spec.inputs.itemSelector = ev.target.selector.replace(/:nth-of-type\(\d+\)/g, "");
-  if (ev?.url && !spec.inputs.listUrl) spec.inputs.listUrl = ev.url;
+  // The recorded selector of one clicked item, minus its position, matches all its siblings.
+  const generic = (sel?: string) => sel?.replace(/:nth-of-type\(\d+\)/g, "").replace(/:nth-child\(\d+\)/g, "");
+  spec.inputs.source ??= spec.inputs.columns?.length ? "rows" : "list";
+  if (spec.inputs.source === "list") {
+    const ev = s.events[spec.inputs.itemEvent ?? -1];
+    if (ev?.target?.selector) spec.inputs.itemSelector = generic(ev.target.selector);
+    if (ev?.url && !spec.inputs.listUrl) spec.inputs.listUrl = ev.url;
+  }
   const all = [...spec.steps, ...Object.values(spec.outcomes ?? {}).flatMap((o) => o.steps)];
-  all.forEach((st, i) => { st.id ||= `s${i + 1}`; });
+  all.forEach((st, i) => {
+    st.id ||= `s${i + 1}`;
+    if (st.do === "compare") {
+      st.max ??= 5;
+      const ev = s.events[st.resultEvent ?? -1];
+      st.resultSelector ??= generic(ev?.target?.selector);
+      // The address opened in the demo: the next page event after the click, or the link itself.
+      st.resultHref ??= ev?.target?.href ?? s.events.slice((st.resultEvent ?? 0) + 1).find((e) => e.kind === "page")?.url;
+    }
+  });
+  spec.scopeTypes ??= [];
   return spec;
 }

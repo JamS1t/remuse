@@ -1,12 +1,11 @@
 // Meta Model API client. Docs: https://dev.meta.ai/docs/models
-const BASE = "https://api.meta.ai/v1";
+// With your own MODEL_API_KEY the Agent calls Meta directly. Without one it goes through the Remuse
+// proxy, which holds the key, so people who just install Remuse never handle an API key.
+const DIRECT = !!process.env.MODEL_API_KEY;
+const BASE = DIRECT ? "https://api.meta.ai/v1" : (process.env.SHOWRUN_PROXY ?? "https://showrun.sitsit.dev/v1");
 export const SPARK = process.env.SPARK_MODEL ?? "muse-spark-1.3";
 
-function key(): string {
-  const k = process.env.MODEL_API_KEY;
-  if (!k) throw new Error("MODEL_API_KEY is not set (put it in .env at the repo root)");
-  return k;
-}
+const key = (): string => process.env.MODEL_API_KEY || process.env.SHOWRUN_TOKEN || "showrun-demo";
 
 export type Part = { type: "input_text"; text: string } | { type: "input_image"; image_url: string };
 export const text = (t: string): Part => ({ type: "input_text", text: t });

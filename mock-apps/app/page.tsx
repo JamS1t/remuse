@@ -3,7 +3,7 @@ import Link from "next/link";
 export default function Home() {
   return (
     <main className="home">
-      <h1>Showrun mock apps</h1>
+      <h1>Remuse mock apps</h1>
       <p>Three fake apps for the demo. All data is made up and lives in memory.</p>
       <ul>
         <li><Link href="/inbox">Inbox</Link>: customer emails</li>

@@ -1,4 +1,4 @@
-// Showrun backend: recordings in, Task Specs and runs out. Serves the review/run UI on the same port.
+// Remuse backend: recordings in, Task Specs and runs out. Serves the review/run UI on the same port.
 // Run: npm start   (port 3200, reads MODEL_API_KEY from ../.env)
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { DatabaseSync } from "node:sqlite";
@@ -9,7 +9,10 @@ import { fileURLToPath } from "node:url";
 import { transcribe, calls } from "./meta.ts";
 import { understand, type Spec } from "./understand.ts";
 import { build } from "./build.ts";
-import { Runner, type Run } from "./runner.ts";
+import { Runner, openBrowser, type Run } from "./runner.ts";
+import type { BrowserContext } from "playwright";
+import { SITE, listLogins, removeLogin, saveLogin } from "./logins.ts";
+import { notify } from "./notify.ts";
 
 const PORT = Number(process.env.PORT ?? 3200);
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -17,6 +20,8 @@ const DATA = process.env.DATA_DIR ?? join(HERE, "..", "data");
 const PUBLIC = join(HERE, "..", "public");
 const MOCK = process.env.MOCK_URL ?? "http://localhost:3100";
 mkdirSync(DATA, { recursive: true });
+// Vite's dev server (5173) proxies to us during UI work.
+const ALLOWED_ORIGINS = new Set([`http://127.0.0.1:${PORT}`, `http://localhost:${PORT}`, "http://localhost:5173", "http://127.0.0.1:5173"]);
 
 const db = new DatabaseSync(join(DATA, "showrun.db"));
 db.exec(`
@@ -60,7 +65,7 @@ async function body(req: IncomingMessage): Promise<Buffer> {
 }
 const json = async (req: IncomingMessage) => JSON.parse((await body(req)).toString() || "{}");
 
-const TYPES: Record<string, string> = { ".html": "text/html; charset=utf-8", ".js": "text/javascript", ".css": "text/css", ".png": "image/png", ".wav": "audio/wav", ".svg": "image/svg+xml" };
+const TYPES: Record<string, string> = { ".html": "text/html; charset=utf-8", ".js": "text/javascript", ".css": "text/css", ".png": "image/png", ".wav": "audio/wav", ".svg": "image/svg+xml", ".woff2": "font/woff2", ".woff": "font/woff" };
 function send(res: ServerResponse, status: number, data: unknown, type = "application/json") {
   res.writeHead(status, { "Content-Type": type, "Cache-Control": "no-store" });
   res.end(type === "application/json" ? JSON.stringify(data) : (data as Buffer));
@@ -114,6 +119,46 @@ function saveSpec(sessionId: string, spec: Spec, note: string, code: string | nu
   return Number(r.lastInsertRowid);
 }
 
+async function transcribeSession(id: string, offsetMs: number) {
+  const wavPath = join(sessionDir(id), "voice.wav");
+  if (!existsSync(wavPath)) return;
+  try {
+    const { transcript, turns } = await transcribe(readFileSync(wavPath));
+    db.prepare("DELETE FROM turns WHERE session_id = ?").run(id);
+    const ins = db.prepare("INSERT INTO turns (session_id, start_ms, end_ms, text) VALUES (?, ?, ?, ?)");
+    for (const t of turns) ins.run(id, t.startMs + offsetMs, t.endMs + offsetMs, t.text); // audio clock -> session clock
+    db.prepare("UPDATE sessions SET transcript = ?, transcribe_error = NULL WHERE id = ?").run(transcript, id);
+  } catch (e) {
+    db.prepare("UPDATE sessions SET transcribe_error = ? WHERE id = ?").run((e as Error).message, id);
+  }
+}
+
+// Learning a recording end to end, with no input from the person: what they said, the Task Spec (which
+// also names the task), then the rules as tested code. Each stage is saved so the sidebar can show it.
+for (const col of ["learn_stage TEXT", "learn_error TEXT"]) { try { db.exec(`ALTER TABLE sessions ADD COLUMN ${col}`); } catch { /* already there */ } }
+const stage = (id: string, s: string, err: string | null = null) => db.prepare("UPDATE sessions SET learn_stage = ?, learn_error = ? WHERE id = ?").run(s, err, id);
+// A recording that was mid-learning when the Agent stopped would show "thinking" forever.
+db.prepare("UPDATE sessions SET learn_stage = 'failed', learn_error = 'Remuse stopped while learning this. Press Try again.' WHERE learn_stage IN ('listening', 'understanding', 'building')").run();
+
+async function learn(id: string, offsetMs: number) {
+  try {
+    stage(id, "listening");
+    await transcribeSession(id, offsetMs);
+    stage(id, "understanding");
+    const spec = await understand(full(id), sessionDir(id));
+    if (spec.title && !session(id).title) db.prepare("UPDATE sessions SET title = ? WHERE id = ?").run(spec.title, id);
+    const specId = saveSpec(id, spec, "Learned by Muse Spark from your recording");
+    stage(id, "building");
+    const r = await build(spec, pagesOf(id), new Date(session(id).started_at).toLocaleDateString("en-CA", { timeZone: "Asia/Manila" }));
+    db.prepare("UPDATE specs SET code = ?, tests = ? WHERE id = ?").run(r.code, JSON.stringify(r.tests), specId);
+    stage(id, "ready");
+    notify(`Remuse learned: ${session(id).title ?? spec.goal}`, r.ok ? "Ready to do it again. Open Remuse to run or schedule it." : "Some checks failed. Open Remuse to review it.", `http://127.0.0.1:${PORT}/#/spec/${specId}`);
+  } catch (e) {
+    stage(id, "failed", (e as Error).message);
+    notify("Remuse couldn't learn that task", (e as Error).message, `http://127.0.0.1:${PORT}/#/session/${id}`);
+  }
+}
+
 // One run at a time: it drives one visible browser.
 let active: Runner | null = null;
 function saveRun(run: Run) {
@@ -121,19 +166,80 @@ function saveRun(run: Run) {
     .run(run.id, run.specId, JSON.stringify(run), Date.now());
 }
 
-async function startRun(specId: number, opts: { limit?: number; autoApprove?: boolean }) {
+// The sign-in window: the same Chrome profile runs use, opened so the person can log in to sites once.
+let signIn: BrowserContext | null = null;
+async function openSignIn(url: string) {
+  if (active && !["done", "failed", "stopped"].includes(active.run.status)) throw new HttpError(409, "wait for the run to finish first");
+  if (!signIn) {
+    signIn = await openBrowser(false);
+    signIn.on("close", () => { signIn = null; });
+  }
+  const page = signIn.pages()[0] ?? (await signIn.newPage());
+  await page.goto(url).catch(() => {});
+  await page.bringToFront();
+}
+
+// A run that was going when the Agent stopped (shutdown, crash) can't resume: mark it stopped.
+for (const r of db.prepare("SELECT id, json FROM runs").all() as any[]) {
+  const run = JSON.parse(r.json) as Run;
+  if (run.status !== "starting" && run.status !== "running") continue;
+  Object.assign(run, { status: "stopped", pending: null, endedAt: run.endedAt ?? Date.now(), error: run.error ?? "The Remuse Agent stopped during this run." });
+  saveRun(run);
+}
+
+// ---- Schedules: the Agent repeats a task by itself, Chrome open or not. ----
+db.exec(`CREATE TABLE IF NOT EXISTS schedules (
+  id INTEGER PRIMARY KEY, spec_id INTEGER NOT NULL REFERENCES specs(id), time TEXT NOT NULL, days TEXT NOT NULL,
+  rows TEXT, run_limit INTEGER, enabled INTEGER NOT NULL DEFAULT 1, last_run TEXT
+)`);
+type Schedule = { id: number; specId: number; time: string; days: string; rows: Record<string, string>[] | null; limit: number | null; enabled: boolean; lastRun: string | null };
+const schedules = (): Schedule[] => (db.prepare("SELECT * FROM schedules ORDER BY id").all() as any[]).map((s) => ({
+  id: s.id, specId: s.spec_id, time: s.time, days: s.days, rows: s.rows ? JSON.parse(s.rows) : null, limit: s.run_limit, enabled: !!s.enabled, lastRun: s.last_run,
+}));
+// Manila clock: "HH:MM", ISO weekday 1 (Mon) .. 7 (Sun), and the date.
+function manilaNow() {
+  const parts = Object.fromEntries(new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Manila", weekday: "short", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(new Date()).map((x) => [x.type, x.value]));
+  return { time: `${parts.hour}:${parts.minute}`, day: String(["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].indexOf(parts.weekday) + 1), date: today() };
+}
+setInterval(async () => {
+  const now = manilaNow();
+  for (const s of schedules()) {
+    if (!s.enabled || s.lastRun === now.date || !s.days.includes(now.day) || s.time > now.time) continue;
+    if (active && !["done", "failed", "stopped"].includes(active.run.status)) return; // try again next tick
+    db.prepare("UPDATE schedules SET last_run = ? WHERE id = ?").run(now.date, s.id);
+    try { await startRun(s.specId, { rows: s.rows ?? undefined, limit: s.limit ?? undefined, scheduled: true }); }
+    catch (e) { notify("Remuse couldn't start a scheduled task", (e as Error).message, `http://127.0.0.1:${PORT}/#/spec/${s.specId}`); }
+  }
+}, 30_000).unref();
+
+async function startRun(specId: number, opts: { limit?: number; autoApprove?: boolean; rows?: Record<string, string>[]; scheduled?: boolean }) {
   if (active && !["done", "failed", "stopped"].includes(active.run.status)) throw new HttpError(409, "a run is already going");
   const row = specRow(specId);
   if (!row.code) throw new HttpError(400, "build the rules first");
-  const run: Run = { id: randomUUID(), specId, status: "starting", items: [], current: 0, pending: null, autoApprove: !!opts.autoApprove, startedAt: Date.now(), heals: [], learned: [] };
+  // Both use the one Chrome profile, which only one window can hold.
+  if (signIn) { await signIn.close().catch(() => {}); signIn = null; }
+  const run: Run = { id: randomUUID(), specId, status: "starting", items: [], current: 0, pending: null, autoApprove: !!opts.autoApprove, startedAt: Date.now(), heals: [], learned: [], rows: opts.rows };
   let last = 0;
+  let asked = "";
+  const link = `http://127.0.0.1:${PORT}/#/run/${run.id}`;
   const runner = new Runner(run, row.spec, row.code, runDir(run.id), (r) => {
     if (Date.now() - last > 300 || ["done", "failed", "stopped"].includes(r.status)) { last = Date.now(); saveRun(r); }
+    // Anything waiting on the person becomes a Windows notification, once.
+    const p = r.pending;
+    const key = p ? `${p.kind}-${p.item}-${p.shot}` : "";
+    if (p && key !== asked) {
+      const label = r.items[p.item]?.label ?? "";
+      if (p.kind === "approval") notify("Remuse needs your OK", `${p.step}: ${label}`, link);
+      else if (p.kind === "ask") notify("Remuse has a question", p.question, link);
+      else notify("Remuse needs you in the browser", `Stuck on "${p.step}". Sign in or clear the check, then press Try again.`, link);
+    }
+    asked = key;
   });
   active = runner;
   saveRun(run);
   runner.start(opts.limit).then(() => {
     saveRun(run);
+    if (opts.scheduled) notify(`Remuse finished: ${row.spec.goal}`.slice(0, 120), `${run.items.filter((i) => i.status === "done").length} of ${run.items.length} done${run.error ? `. Problem: ${run.error}` : ""}`, link);
     // What the run learned (new labels after a redesign, answers you gave) becomes the next spec version.
     if (run.heals.length || run.learned.length) {
       const parts = [run.heals.length && `${run.heals.length} element(s) updated after a layout change`, run.learned.length && `learned: ${run.learned.map((l) => `${l.requestType} → ${l.outcome}`).join(", ")}`].filter(Boolean);
@@ -159,11 +265,65 @@ async function route(req: IncomingMessage, res: ServerResponse) {
   // UI
   if (m === "GET" && p[0] !== "api") {
     const name = p.length ? p.join("/") : "index.html";
-    if (!/^[\w.-]+$/.test(name)) throw new HttpError(404, "not found");
+    if (!/^(assets\/)?[\w-][\w.-]*$/.test(name)) throw new HttpError(404, "not found");
     return file(res, join(PUBLIC, name));
   }
 
   if (m === "GET" && url.pathname === "/api/calls") return send(res, 200, calls.slice(-200));
+  // Only the Agent's own pages and the Remuse extension may call the API; any other website is refused,
+  // so a page you visit can't read your runs or hand the Agent fake logins.
+  const origin = req.headers.origin;
+  if (origin && !ALLOWED_ORIGINS.has(origin) && !origin.startsWith("chrome-extension://")) throw new HttpError(403, "not allowed from this page");
+
+  if (url.pathname === "/api/logins" && m === "GET") return send(res, 200, listLogins());
+  if (url.pathname === "/api/schedules" && m === "GET") return send(res, 200, schedules());
+  if (url.pathname === "/api/schedules" && m === "POST") {
+    const b = await json(req);
+    const specId = Number(b.specId);
+    specRow(specId); // 404 if it doesn't exist
+    if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(b.time ?? "")) throw new HttpError(400, "time must be HH:MM");
+    const days = String(b.days ?? "1234567").replace(/[^1-7]/g, "");
+    if (!days) throw new HttpError(400, "pick at least one day");
+    const rows = Array.isArray(b.rows) ? JSON.stringify(b.rows) : null;
+    // One schedule per task: saving again replaces it.
+    db.prepare("DELETE FROM schedules WHERE spec_id IN (SELECT id FROM specs WHERE session_id = (SELECT session_id FROM specs WHERE id = ?))").run(specId);
+    db.prepare("INSERT INTO schedules (spec_id, time, days, rows, run_limit, enabled) VALUES (?, ?, ?, ?, ?, 1)").run(specId, b.time, days, rows, b.limit ? Number(b.limit) : null);
+    return send(res, 200, schedules());
+  }
+  if (p[1] === "schedules" && p[2] && m === "DELETE") { db.prepare("DELETE FROM schedules WHERE id = ?").run(Number(p[2])); return send(res, 200, schedules()); }
+  // Saved tasks for the sidebar: every recording with its latest Task Spec.
+  if (url.pathname === "/api/tasks" && m === "GET")
+    return send(res, 200, (db.prepare(`SELECT s.id AS sessionId, s.title, s.started_at AS startedAt, s.ended_at AS endedAt, s.learn_stage AS learnStage, s.learn_error AS learnError,
+      x.id AS specId, x.version, x.json, x.tests, x.code IS NOT NULL AS built
+      FROM sessions s LEFT JOIN specs x ON x.id = (SELECT MAX(id) FROM specs WHERE session_id = s.id) ORDER BY s.started_at DESC`).all() as any[])
+      .map(({ json: j, tests: tj, built, ...t }) => {
+        const spec = j ? (JSON.parse(j) as Spec) : null;
+        const tests = tj ? (JSON.parse(tj) as { ok: boolean }[]) : [];
+        return { ...t, title: t.title ?? spec?.title ?? null, built: !!built, goal: spec?.goal ?? null, itemName: spec?.inputs.itemName ?? null,
+          source: spec?.inputs.source ?? (spec ? "list" : null), columns: spec?.inputs.columns ?? [],
+          // What the "I learned" card shows: the person's own rules, what was guessed, how the checks went.
+          rules: spec?.rules.map((r) => ({ if: r.if, then: r.then, said: r.said })) ?? [],
+          guessed: spec ? Object.entries(spec.outcomes).filter(([, o]) => !o.demonstrated).map(([k]) => k) : [],
+          steps: spec?.steps.length ?? 0, compares: spec?.steps.some((s) => s.do === "compare") ?? false,
+          checks: { passed: tests.filter((x) => x.ok).length, total: tests.length } };
+      }));
+  if (url.pathname === "/api/logins" && m === "POST") {
+    const b = await json(req);
+    const site = String(b.site ?? "").toLowerCase();
+    if (!SITE.test(site) || !Array.isArray(b.cookies)) throw new HttpError(400, "send {site, cookies}");
+    saveLogin(site, b.cookies);
+    return send(res, 200, { site, cookies: b.cookies.length });
+  }
+  if (p[1] === "logins" && p[2] && m === "DELETE") { removeLogin(p[2].toLowerCase()); return send(res, 200, { ok: true }); }
+
+  if (m === "POST" && url.pathname === "/api/browser/open") {
+    const target = url.searchParams.get("url") || "https://www.google.com";
+    if (!/^https?:\/\//.test(target)) throw new HttpError(400, "give a web address starting with http");
+    await openSignIn(target);
+    return send(res, 200, { open: true });
+  }
+  if (m === "GET" && url.pathname === "/api/mock/status")
+    return send(res, 200, { up: await fetch(`${MOCK}/api/state`, { signal: AbortSignal.timeout(800) }).then((r) => r.ok, () => false) });
   if (m === "POST" && url.pathname === "/api/mock/reset") return send(res, 200, await (await fetch(`${MOCK}/api/reset`, { method: "POST" })).json());
   if (m === "POST" && url.pathname === "/api/mock/layout") return send(res, 200, await (await fetch(`${MOCK}/api/layout?v=${url.searchParams.get("v") === "v2" ? "v2" : "v1"}`, { method: "POST" })).json());
 
@@ -208,23 +368,15 @@ async function route(req: IncomingMessage, res: ServerResponse) {
       return send(res, 200, { bytes: wav.length });
     }
     if (m === "POST" && p[3] === "finish") {
-      const { endedAt, audioOffsetMs } = await json(req);
+      const { endedAt, audioOffsetMs, learn: auto } = await json(req);
       db.prepare("UPDATE sessions SET ended_at = ?, audio_offset_ms = ? WHERE id = ?").run(endedAt ?? Date.now(), audioOffsetMs ?? null, id);
-      const wavPath = join(sessionDir(id), "voice.wav");
-      if (existsSync(wavPath)) {
-        try {
-          const { transcript, turns } = await transcribe(readFileSync(wavPath));
-          db.prepare("DELETE FROM turns WHERE session_id = ?").run(id);
-          const ins = db.prepare("INSERT INTO turns (session_id, start_ms, end_ms, text) VALUES (?, ?, ?, ?)");
-          const off = audioOffsetMs ?? 0; // turn times are relative to the audio; shift onto the session clock
-          for (const t of turns) ins.run(id, t.startMs + off, t.endMs + off, t.text);
-          db.prepare("UPDATE sessions SET transcript = ?, transcribe_error = NULL WHERE id = ?").run(transcript, id);
-        } catch (e) {
-          db.prepare("UPDATE sessions SET transcribe_error = ? WHERE id = ?").run((e as Error).message, id);
-        }
-      }
+      // Proactive: learn the whole task in the background (name, spec, tested code). The sidebar follows along.
+      if (auto !== false) { learn(id, audioOffsetMs ?? 0); return send(res, 202, { id, learning: true }); }
+      await transcribeSession(id, audioOffsetMs ?? 0);
       return send(res, 200, full(id));
     }
+    // Learn again (after a failure): the same background pipeline.
+    if (m === "POST" && p[3] === "learn") { learn(id, session(id).audio_offset_ms ?? 0); return send(res, 202, { id, learning: true }); }
     // Understand: recording -> Task Spec (Muse Spark, about a minute)
     if (m === "POST" && p[3] === "spec") {
       const spec = await understand(full(id), sessionDir(id));
@@ -251,7 +403,8 @@ async function route(req: IncomingMessage, res: ServerResponse) {
     }
     if (m === "POST" && p[3] === "runs") {
       const opts = await json(req);
-      return send(res, 201, await startRun(sid, { limit: opts.limit ? Number(opts.limit) : undefined, autoApprove: !!opts.autoApprove }));
+      const rows = Array.isArray(opts.rows) ? opts.rows.filter((r: unknown) => r && typeof r === "object").map((r: Record<string, unknown>) => Object.fromEntries(Object.entries(r).map(([k, v]) => [String(k), String(v ?? "")]))) : undefined;
+      return send(res, 201, await startRun(sid, { limit: opts.limit ? Number(opts.limit) : undefined, autoApprove: !!opts.autoApprove, rows }));
     }
   }
 
@@ -278,4 +431,4 @@ createServer((req, res) => {
     if (!(e instanceof HttpError)) console.error(e);
     send(res, e instanceof HttpError ? e.status : 500, { error: e.message });
   });
-}).listen(PORT, "127.0.0.1", () => console.log(`Showrun on http://127.0.0.1:${PORT}`));
+}).listen(PORT, "127.0.0.1", () => console.log(`Remuse on http://127.0.0.1:${PORT}`));
