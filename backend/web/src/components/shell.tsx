@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { Activity, ChevronLeft, Globe, ListChecks } from "lucide-react";
+import { Activity, ChevronLeft, FolderOpen, Globe, ListChecks } from "lucide-react";
 import { DemoMenu, Lockup, Orb, SignIn } from "@/components/bits";
 import { useApi } from "@/lib/api";
 import { cn } from "@/lib/utils";
@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils";
 const NAV = [
   { href: "#/", label: "Tasks", icon: ListChecks, match: ["", "tasks", "task", "spec", "session"] },
   { href: "#/activity", label: "Activity", icon: Activity, match: ["activity", "runs", "run"] },
+  { href: "#/folders", label: "Folders", icon: FolderOpen, match: ["folders"] },
   { href: "#/sites", label: "Connected sites", icon: Globe, match: ["sites"] },
 ];
 

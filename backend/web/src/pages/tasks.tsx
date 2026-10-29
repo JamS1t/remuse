@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { toast } from "sonner";
-import { CalendarClock, Check, Eye, ChevronRight, CircleAlert, Code2, Ellipsis, Hand, LoaderCircle, Mic, RotateCcw, ShieldAlert, Trash2 } from "lucide-react";
+import { CalendarClock, Check, FolderOpen, Eye, ChevronRight, CircleAlert, Code2, Ellipsis, Hand, LoaderCircle, Mic, RotateCcw, ShieldAlert, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
@@ -10,7 +10,8 @@ import { RunButton, useRunTask } from "@/components/run-button";
 import { ScheduleEditor, describeSchedule } from "@/components/schedule";
 import { Content, PageHead } from "@/components/shell";
 import { RunsList } from "@/pages/activity";
-import { ago, api, useApi, type ScheduleRow, type SessionFull, type SpecRow, type Task } from "@/lib/api";
+import { cn } from "@/lib/utils";
+import { ago, api, useApi, type FolderRow, type ScheduleRow, type SessionFull, type SpecRow, type Task } from "@/lib/api";
 
 const LEARNING: Record<string, string> = {
   listening: "Listening back to what you said",
@@ -151,6 +152,7 @@ export function TaskPage({ id, tab = "overview" }: { id: string; tab?: string })
               <Button size="sm" variant="outline" className="mt-3 rounded-full" onClick={() => setEditing("schedule")}><CalendarClock />{schedule ? "Change" : t.askedSchedule ? `Repeat ${describeSchedule(t.askedSchedule)}` : "Repeat by itself"}</Button>
             </section>
             <Safety spec={spec} />
+            {t.specId ? <FilesCard t={t} onChange={reload} /> : null}
             <section className="glass rounded-2xl px-5 py-4 text-[13px]">
               <p className="font-medium">Checks</p>
               <p className={t.checks.total && t.checks.passed === t.checks.total ? "mt-1 inline-flex items-center gap-1.5 text-ok" : "mt-1 inline-flex items-center gap-1.5 text-warn"}>
@@ -299,5 +301,50 @@ function TaskMenu({ t, hasSchedule, onSchedule, onRelearn, onDelete, busy }: { t
       </DropdownMenu>
       {runner.dialog}
     </>
+  );
+}
+
+const PICKS = { next: "Next in line (never repeats)", newest: "Newest file", dated: "Labelled for today and now" } as const;
+const sel = "w-full rounded-lg border border-input bg-black/30 px-2.5 py-1.5 text-[13px] text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring/50";
+
+/** Which folder uploads come from (and which file), and where downloads go. Changes save a new version. */
+function FilesCard({ t, onChange }: { t: Task; onChange: () => void }) {
+  const { data: folders } = useApi<FolderRow[]>("/folders");
+  const up = t.uploads[0];
+  const { data: next } = useApi<{ folder: string | null; file: string | null }>(up ? `/specs/${t.specId}/next-file` : null, 15000, () => true);
+  const { busy, run } = useAction();
+  const save = (body: object, msg: string) => run("files", async () => { await api(`/specs/${t.specId}/files`, "POST", body); toast.success(msg); onChange(); });
+  const byName = (name: string | null) => folders?.find((f) => f.name === name)?.id ?? "";
+  if (!folders) return null;
+  return (
+    <section className="glass space-y-3 rounded-2xl px-5 py-4 text-[13px]">
+      <p className="flex items-center gap-1.5 font-medium"><FolderOpen className="size-3.5" />Files</p>
+      {!folders.length ? <p className="text-muted-foreground">Add a folder on the <a href="#/folders">Folders</a> page to upload from it or save downloads into it.</p> : (
+        <>
+          {up ? (
+            <div className="space-y-1.5">
+              <label className="block text-muted-foreground">Uploads from
+                <select className={cn(sel, "mt-1")} value={byName(up.folder)} disabled={!!busy} onChange={(e) => save({ uploadFolder: e.target.value || null }, "Upload folder saved.")}>
+                  <option value="">Choose a folder…</option>
+                  {folders.map((f) => <option key={f.id} value={f.id}>{f.name}</option>)}
+                </select>
+              </label>
+              <label className="block text-muted-foreground">Which file
+                <select className={cn(sel, "mt-1")} value={up.pick} disabled={!!busy} onChange={(e) => save({ pick: e.target.value }, "Saved.")}>
+                  {Object.entries(PICKS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+                </select>
+              </label>
+              {up.folder ? <p className="text-muted-foreground">Next upload: <span className="text-foreground">{next?.file ?? "nothing new yet"}</span></p> : <p className="text-warn">Choose a folder so it can upload.</p>}
+            </div>
+          ) : null}
+          <label className="block text-muted-foreground">Save downloads to
+            <select className={cn(sel, "mt-1")} value={byName(t.saveDownloads)} disabled={!!busy} onChange={(e) => save({ saveDownloads: e.target.value || null }, e.target.value ? "Downloads will be saved there." : "Downloads won't be kept.")}>
+              <option value="">Don't keep downloads</option>
+              {folders.map((f) => <option key={f.id} value={f.id}>{f.name}</option>)}
+            </select>
+          </label>
+        </>
+      )}
+    </section>
   );
 }

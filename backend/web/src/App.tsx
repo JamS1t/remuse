@@ -6,6 +6,7 @@ import { Remote } from "@/pages/remote";
 import { RunPage } from "@/pages/run";
 import { Session } from "@/pages/session";
 import { SitesPage } from "@/pages/sites";
+import { FoldersPage } from "@/pages/folders";
 import { SpecPage } from "@/pages/spec";
 import { TaskPage, TasksPage } from "@/pages/tasks";
 import { useHash } from "@/lib/api";
@@ -22,6 +23,7 @@ export default function App() {
     : view === "session" && id ? <Session key={id} id={id} />
     : view === "activity" || view === "runs" ? <ActivityPage />
     : view === "sites" ? <SitesPage />
+    : view === "folders" ? <FoldersPage />
     : <TasksPage />;
   return (
     <TooltipProvider>

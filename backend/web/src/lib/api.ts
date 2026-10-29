@@ -2,11 +2,11 @@ import { useCallback, useEffect, useState } from "react";
 
 // Shapes mirror backend/src (runner.ts, understand.ts, server.ts).
 export type Target = { role?: string; name?: string; selector?: string };
-export type Step = { id: string; do: string; describe: string; target?: Target; value?: string; vars?: string[]; irreversible?: boolean; healed?: string; max?: number; said?: string; message?: string; tool?: { name: string; args: Record<string, string> } };
+export type Step = { id: string; do: string; describe: string; target?: Target; value?: string; vars?: string[]; irreversible?: boolean; healed?: string; max?: number; said?: string; message?: string; file?: { folder: string | null; pick?: "next" | "newest" | "dated" }; tool?: { name: string; args: Record<string, string> } };
 export type Variable = { name: string; kind: string; description: string; question?: string; demoValue?: unknown; candidate?: boolean };
 export type Rule = { if: string; then: string; said?: string; learned?: boolean };
 export type Spec = {
-  title?: string; goal: string; scope: string; scopeTypes?: string[];
+  title?: string; goal: string; scope: string; scopeTypes?: string[]; saveDownloads?: string | null;
   inputs: { source?: "list" | "rows" | "once"; listUrl?: string; itemName?: string; columns?: { name: string; describe: string; demoValue: string }[] };
   variables: Variable[]; steps: Step[]; rules: Rule[];
   outcomes: Record<string, { describe: string; steps: Step[]; reply?: string; demonstrated: boolean }>;
@@ -89,7 +89,9 @@ export type Task = {
   rules: { if: string; then: string; said?: string }[]; guessed: string[]; steps: number; compares: boolean; checks: { passed: number; total: number };
   askedSchedule: { everyMinutes?: number; time?: string; days?: string; said?: string } | null;
   lastReport: { text: string; at: number; runId: string } | null;
+  uploads: { folder: string | null; pick: "next" | "newest" | "dated" }[]; saveDownloads: string | null;
 };
+export type FolderRow = { id: string; name: string; path: string; count: number; latest: { name: string; modified: number } | null; ok: boolean };
 export type ScheduleRow = { id: number; specId: number; sessionId: string; time: string; days: string; everyMinutes: number | null };
 /** A run as Activity lists it. */
 export type ActivityRun = {

@@ -31,7 +31,7 @@ function screenshot(windowId) {
   return shot;
 }
 
-const AFTER_DELAY = { click: 900, key: 900, page: 300 }; // let the screen settle before the "after" shot
+const AFTER_DELAY = { click: 900, key: 900, page: 300, upload: 1500 }; // let the screen settle before the "after" shot
 
 async function onEvent(ev, sender) {
   const r = await current();

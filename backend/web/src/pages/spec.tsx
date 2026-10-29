@@ -32,6 +32,7 @@ function Steps({ steps }: { steps: Step[] }) {
             {s.target?.name && s.do !== "open_item" ? <span>{s.target.role} <span className="font-medium text-foreground">“{s.target.name}”</span></span> : null}
             {s.do === "fill" && s.value ? <span>types <span className="font-mono text-foreground">{s.value}</span></span> : null}
             {s.do === "compare" ? <span className="font-medium text-foreground">Opens the top {s.max ?? 5} results and keeps the best</span> : null}
+            {s.do === "upload" ? <span>uploads the <span className="text-foreground">{({ next: "next file in line", newest: "newest file", dated: "file labelled for now" } as Record<string, string>)[s.file?.pick ?? "next"]}</span> from <span className="text-foreground">{s.file?.folder ?? "a folder you choose"}</span></span> : null}
             {s.do === "report" && s.message ? <span>tells you <span className="text-foreground">“{s.message}”</span></span> : null}
             {s.vars?.length ? <span>{s.do === "compare" ? "reads on each" : "reads"} <span className="font-mono text-foreground">{s.vars.join(", ")}</span></span> : null}
             {s.tool ? <span>uses the site's WebMCP tool <span className="font-mono text-foreground">{s.tool.name}</span> when offered</span> : null}

@@ -13,6 +13,10 @@ import { Runner, openBrowser, type Run } from "./runner.ts";
 import type { BrowserContext } from "playwright";
 import { SITE, listLogins, removeLogin, saveLogin } from "./logins.ts";
 import { notify } from "./notify.ts";
+import { addFolder, chooseFile, filesIn, findFolder, listFolders, pickFolder, removeFolder, usedFor } from "./folders.ts";
+
+// What Muse Spark sees of the allowed folders: names and their newest file names.
+const folderHints = () => listFolders().map((f) => { try { return { name: f.name, files: filesIn(f).slice(0, 8).map((x) => x.name) }; } catch { return { name: f.name, files: [] }; } });
 
 const PORT = Number(process.env.PORT ?? 3200);
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -172,7 +176,7 @@ async function learn(id: string, offsetMs: number) {
     stage(id, "listening");
     await transcribeSession(id, offsetMs);
     stage(id, "understanding");
-    const spec = await understand(full(id), sessionDir(id));
+    const spec = await understand(full(id), sessionDir(id), folderHints());
     if (spec.title && !session(id).title) db.prepare("UPDATE sessions SET title = ? WHERE id = ?").run(spec.title, id);
     const specId = saveSpec(id, spec, "Learned by Muse Spark from your recording");
     stage(id, "building");
@@ -274,6 +278,7 @@ async function startRun(specId: number, opts: { limit?: number; autoApprove?: bo
     asked = key;
   });
   runner.prev = lastValues(row.sessionId);
+  runner.taskKey = row.sessionId;
   active = runner;
   saveRun(run);
   runner.start(opts.limit).then(() => {
@@ -346,6 +351,17 @@ async function route(req: IncomingMessage, res: ServerResponse) {
   if (origin && !ALLOWED_ORIGINS.has(origin) && !origin.startsWith("chrome-extension://")) throw new HttpError(403, "not allowed from this page");
 
   if (url.pathname === "/api/logins" && m === "GET") return send(res, 200, listLogins());
+
+  // Folders the person allows: the Windows folder picker adds one; each lists its newest files.
+  if (url.pathname === "/api/folders" && m === "GET")
+    return send(res, 200, listFolders().map((f) => { try { const files = filesIn(f); return { ...f, count: files.length, latest: files[0] ?? null, ok: true }; } catch { return { ...f, count: 0, latest: null, ok: false }; } }));
+  if (url.pathname === "/api/folders/pick" && m === "POST") {
+    const path = await pickFolder();
+    if (!path) return send(res, 200, { cancelled: true });
+    return send(res, 200, addFolder(path));
+  }
+  if (url.pathname === "/api/folders" && m === "POST") { const b = await json(req); return send(res, 200, addFolder(String(b.path ?? ""), b.name)); }
+  if (p[1] === "folders" && p[2] && m === "DELETE") { removeFolder(p[2]); return send(res, 200, { ok: true }); }
   if (url.pathname === "/api/schedules" && m === "GET") return send(res, 200, schedules());
   if (url.pathname === "/api/schedules" && m === "POST") {
     const b = await json(req);
@@ -380,7 +396,9 @@ async function route(req: IncomingMessage, res: ServerResponse) {
           guessed: spec ? Object.entries(spec.outcomes).filter(([, o]) => !o.demonstrated).map(([k]) => k) : [],
           steps: spec?.steps.length ?? 0, compares: spec?.steps.some((s) => s.do === "compare") ?? false,
           checks: { passed: tests.filter((x) => x.ok).length, total: tests.length },
-          askedSchedule: spec?.schedule ?? null, lastReport: lastReport(t.sessionId) };
+          askedSchedule: spec?.schedule ?? null, lastReport: lastReport(t.sessionId),
+          uploads: spec ? [...spec.steps, ...Object.values(spec.outcomes).flatMap((o) => o.steps)].filter((x) => x.do === "upload").map((x) => ({ folder: x.file?.folder ?? null, pick: x.file?.pick ?? "next" })) : [],
+          saveDownloads: spec?.saveDownloads ?? null };
       }));
   if (url.pathname === "/api/logins" && m === "POST") {
     const b = await json(req);
@@ -469,7 +487,7 @@ async function route(req: IncomingMessage, res: ServerResponse) {
     if (m === "POST" && p[3] === "learn") { learn(id, session(id).audio_offset_ms ?? 0); return send(res, 202, { id, learning: true }); }
     // Understand: recording -> Task Spec (Muse Spark, about a minute)
     if (m === "POST" && p[3] === "spec") {
-      const spec = await understand(full(id), sessionDir(id));
+      const spec = await understand(full(id), sessionDir(id), folderHints());
       return send(res, 201, specRow(saveSpec(id, spec, "Written by Muse Spark from your recording")));
     }
     if (m === "GET" && p[3] === "files" && p[4] && /^[\w.-]+\.(png|wav)$/.test(p[4])) return file(res, join(sessionDir(id), p[4]));
@@ -484,6 +502,25 @@ async function route(req: IncomingMessage, res: ServerResponse) {
       const { spec, note } = await json(req);
       if (!spec?.steps || !spec?.rules || !spec?.outcomes) throw new HttpError(400, "spec needs steps, rules and outcomes");
       return send(res, 201, specRow(saveSpec(row.sessionId, spec, note ?? "Edited by you")));
+    }
+    // The task's file settings (which folder and rule each upload uses; where downloads go). Saved as a new
+    // version that keeps the built code, since the rules didn't change.
+    if (m === "POST" && p[3] === "files") {
+      const b = await json(req);
+      const spec = structuredClone(row.spec);
+      const steps = [...spec.steps, ...Object.values(spec.outcomes).flatMap((o) => o.steps)];
+      for (const st of steps.filter((x) => x.do === "upload")) {
+        if (b.uploadFolder !== undefined) st.file = { ...(st.file ?? { folder: null }), folder: b.uploadFolder ? findFolder(b.uploadFolder)?.name ?? null : null };
+        if (b.pick) st.file = { ...(st.file ?? { folder: null }), pick: b.pick };
+      }
+      if (b.saveDownloads !== undefined) spec.saveDownloads = b.saveDownloads ? findFolder(b.saveDownloads)?.name ?? null : null;
+      return send(res, 201, specRow(saveSpec(row.sessionId, spec, "File settings changed", row.code, row.tests)));
+    }
+    // Which file the next upload would pick, for the task page.
+    if (m === "GET" && p[3] === "next-file") {
+      const st = [...row.spec.steps, ...Object.values(row.spec.outcomes).flatMap((o) => o.steps)].find((x) => x.do === "upload");
+      const folder = findFolder(st?.file?.folder);
+      return send(res, 200, { folder: folder?.name ?? null, file: folder && st?.file ? chooseFile(folder, st.file, usedFor(row.sessionId)) : null });
     }
     // Build: rules -> tested code (Muse Spark)
     if (m === "POST" && p[3] === "build") {

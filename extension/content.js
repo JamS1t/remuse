@@ -77,7 +77,15 @@
     };
   }
 
-  const isField = (el) => el && ((el.tagName === "INPUT" && !["submit", "button", "checkbox", "radio", "hidden", "reset"].includes(el.type)) || el.tagName === "TEXTAREA" || el.tagName === "SELECT");
+  const isField = (el) => el && ((el.tagName === "INPUT" && !["submit", "button", "checkbox", "radio", "hidden", "reset", "file"].includes(el.type)) || el.tagName === "TEXTAREA" || el.tagName === "SELECT");
+
+  // Choosing a file to upload: the browser only shares the file's name, which is enough for Remuse to
+  // match it to one of your allowed folders and learn which file to pick next time.
+  addEventListener("change", (e) => {
+    const el = e.target;
+    if (el?.tagName !== "INPUT" || el.type !== "file" || !el.files?.length) return;
+    send("upload", { target: describe(el), files: [...el.files].map((f) => ({ name: f.name, size: f.size, type: f.type, modified: f.lastModified })) });
+  }, true);
   const recorded = new WeakMap();
 
   function typed(el) {
