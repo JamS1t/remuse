@@ -10,7 +10,7 @@ import { chromium } from "playwright";
 const API = "http://127.0.0.1:3200/api";
 const ext = resolve(import.meta.dirname, "../../extension");
 const agent = spawn(process.execPath, ["--env-file-if-exists=../.env", "src/server.ts"], { cwd: resolve(import.meta.dirname, ".."), stdio: "ignore" });
-const ctx = await chromium.launchPersistentContext(mkdtempSync(join(tmpdir(), "showrun-panel-")), {
+const ctx = await chromium.launchPersistentContext(mkdtempSync(join(tmpdir(), "remuse-panel-")), {
   channel: "chromium", headless: true, viewport: { width: 400, height: 900 },
   args: [`--disable-extensions-except=${ext}`, `--load-extension=${ext}`],
 });

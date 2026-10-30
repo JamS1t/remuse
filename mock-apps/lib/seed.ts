@@ -75,7 +75,7 @@ const rows: Row[] = [
     subject: "Refund please", body: "Hi, I never used the notebooks from order {order}. Can I get a refund?\n\nJoshua", expected: "decline" },
   { name: "Kristine Flores", email: "kristine.flores@example.com", product: "Clear phone case", price: 390, orderDaysAgo: 40, emailDaysAfter: 1, ship: "delivered", photo: "case-scratched.svg",
     subject: "Phone case is scratched", body: "Hi, my phone case from {order} is badly scratched, see photo. I want a new one.\n\nKristine", expected: "decline" },
-  // Outside the spoken rules: the wrong item was shipped. Showrun should stop and ask on the first one.
+  // Outside the spoken rules: the wrong item was shipped. Remuse should stop and ask on the first one.
   { name: "Mark dela Cruz", email: "mark.delacruz@example.com", product: "Over-ear headphones", price: 3200, orderDaysAgo: 5, emailDaysAfter: 1, ship: "delivered",
     subject: "WRONG ITEM. Again??", body: "I ordered HEADPHONES. Order {order}. You sent me a PLANT POT. This is ridiculous. Fix this today or I'm posting about it everywhere.\n\nMark", expected: "ask" },
   { name: "Trisha Navarro", email: "trisha.navarro@example.com", product: "Manual coffee grinder", price: 1450, orderDaysAgo: 8, emailDaysAfter: 2, ship: "delivered",

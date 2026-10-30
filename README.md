@@ -13,6 +13,18 @@ It works on the sites you already use, with the logins you already have, and kee
 
 Built for the Meta developer hackathon, Indie Developer track. All code in this repo was written during the hackathon window, with Claude Code as a coding assistant.
 
+## What it's for
+
+Anything you do in a browser the same way again and again, on real sites:
+
+- **Check numbers on a schedule.** Open YouTube Studio every hour, read a video's views, impressions and CTR, and tell you what changed.
+- **Post the same thing everywhere.** Take the next video from a folder, upload it to X, TikTok and Instagram in three tabs with its caption, and wait for one OK before posting.
+- **Move data between sites.** Read an invoice in one tab, type it into a sheet or tracker in another, then mark it done in the first.
+- **Work through an inbox.** Read each email, look up the order, and refund, replace or reply by your rules. It asks you about anything your rules don't cover.
+- **Shop or compare.** Search a store for each item on a list, open the top results, and pick the best by your rules.
+
+You teach it by doing the task once and talking through why. There's nothing to code and no workflow builder.
+
 ## Two parts
 
 - **Remuse Agent** (`backend/`): a small program on your PC that starts with Windows. It keeps your tasks and schedules, runs them in its own browser, and asks you through Windows notifications when it needs an OK. It runs whether Chrome is open or not.
@@ -42,6 +54,7 @@ Built for the Meta developer hackathon, Indie Developer track. All code in this 
    - **Approvals:** it stops for your OK before paying, checking out, sending and similar steps.
    - **Questions:** it asks when an item is outside your rules or a value can't be read. Your answer is remembered and saved into the next spec version.
    - **Your turn:** if a sign-in page, a captcha or a popup gets in the way, it hands the browser to you, then tries again.
+   - **Tabs:** a task can span several tabs (an inbox and a sheet, a store and a tracker, one tab per site you post to). Each step knows its tab; the Agent keeps every tab open as it was left, follows tabs a site opens by itself, and carries values read in one tab into the others.
    - **Files:** it uploads from folders you allowed (the next file in line, the newest, or the one labelled with today's date and time), with the caption from a `.txt` file of the same name, never posting a file twice; downloads go into a folder you choose.
 
 ## Install (Windows)
@@ -55,29 +68,6 @@ Needs Node.js 24+ and Google Chrome.
 Model calls go through the Remuse proxy (`proxy/`, hosted at showrun.sitsit.dev), so there is no API key to set up. To use your own key instead, put `MODEL_API_KEY=...` in `.env` at the repo root.
 
 For development: `cd backend && npm start` runs the Agent in a terminal (http://127.0.0.1:3200), and `HEADLESS=1` hides its browser. The full-page UI is a React + shadcn/ui app in `backend/web`; a built copy is committed in `backend/public`. After changing it, run `cd backend/web && npm install && npm run build`.
-
-## Mock apps
-
-Three fake apps in one Next.js project (`cd mock-apps && npm install && npm run build && npm start`, http://localhost:3100). All people, products, the store (Kalye Goods) and the courier (Bilis Express) are made up. State lives in memory.
-
-| URL | What it is |
-|---|---|
-| `/inbox` | 15 customer emails, some with a photo attached |
-| `/store` | Kalye Goods admin: orders, Refund / Replace. Also offers `refund_order` and `replace_order` as WebMCP tools |
-| `/courier` | Bilis Express tracker: delivered, in transit, lost |
-| `POST /api/reset` | Re-seed everything |
-| `POST /api/layout?v=v2` | Switch the store admin to the redesigned layout (new labels, new positions) |
-| `GET /api/state` | Full state plus the expected outcome per email, used to score runs |
-
-The 15 emails split as follows; `npm run check` confirms the seed matches the rules.
-
-| Kind | Count |
-|---|---|
-| Replace | 4 |
-| Refund | 4 |
-| Lost (refund and apologize) | 3 |
-| Decline (over 30 days, one with a damage photo) | 2 |
-| Wrong item, not covered by the rules, so Remuse has to ask | 2 |
 
 ## Meta models
 
@@ -93,13 +83,17 @@ The 15 emails split as follows; `npm run check` confirms the seed matches the ru
 
 | Command | What it checks |
 |---|---|
-| `cd backend && npm run test:recorder` | Loads the extension in Chromium, plays `scripts/fixtures/narration.wav` as the mic, clicks through the hero case on the mock apps and checks the recorded session |
+| `cd backend && npm run test:recorder` | Loads the extension in Chromium, plays `scripts/fixtures/narration.wav` as the mic, clicks through a support case on the test sites and checks the recorded session |
 | `cd backend && node test/sidepanel.check.ts` | The sidebar loads the Agent, and connecting a site shares its login with the Agent (disconnecting removes it) |
 | `cd backend && node test/logins.check.ts` | A shared login reaches a real site from the Agent's browser; expired cookies are dropped |
 | `cd backend && node test/folders.check.ts` | Which file an upload picks (next, newest, dated), captions, and that files never leave their folder |
 | `cd backend && node test/files.e2e.ts` | A posting task uploads the next file with its caption, saves its download, never reposts, skips when nothing is new |
+| `cd backend && node test/tabs.e2e.ts` | A task across three tabs: reads values in a tab the site opened, types them into another tab, returns to the first tab as it was left |
+| `cd backend && node test/tabs-learn.e2e.ts <narration.wav>` | Records a three-tab demo through the extension, Muse Spark learns which step happens in which tab, and the run copies new data across tabs |
 | `cd backend && node test/webmcp.check.ts` | A page's WebMCP tool is seen and called by the Agent's browser |
-| `cd mock-apps && npm run check` | The seed data agrees with the spoken rules |
+| `cd mock-apps && npm run check` | The test sites' data agrees with the spoken rules |
 | `node --env-file=.env scripts/risk-tests.mjs` | The day-1 Meta API checks |
+
+Some tests use **test sites** in `mock-apps/`: a made-up inbox, store admin (Kalye Goods) and courier tracker (Bilis Express), with invented people and orders. They exist so the hard cases (a redesigned page, an item outside the rules) can be checked the same way every time. Remuse itself doesn't need them. To run them: `cd mock-apps && npm install && npm run build && npm start` (http://localhost:3100). `POST /api/reset` re-seeds them and `POST /api/layout?v=v2` switches the store to a redesigned layout.
 
 See [docs/log.md](docs/log.md) for what was tried and what happened.

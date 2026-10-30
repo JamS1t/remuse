@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 
 // Shapes mirror backend/src (runner.ts, understand.ts, server.ts).
 export type Target = { role?: string; name?: string; selector?: string };
-export type Step = { id: string; do: string; describe: string; target?: Target; value?: string; vars?: string[]; irreversible?: boolean; healed?: string; max?: number; said?: string; message?: string; file?: { folder: string | null; pick?: "next" | "newest" | "dated" }; tool?: { name: string; args: Record<string, string> } };
+export type Step = { id: string; do: string; describe: string; tab?: string; target?: Target; value?: string; vars?: string[]; irreversible?: boolean; healed?: string; max?: number; said?: string; message?: string; file?: { folder: string | null; pick?: "next" | "newest" | "dated" }; tool?: { name: string; args: Record<string, string> } };
 export type Variable = { name: string; kind: string; description: string; question?: string; demoValue?: unknown; candidate?: boolean };
 export type Rule = { if: string; then: string; said?: string; learned?: boolean };
 export type Spec = {

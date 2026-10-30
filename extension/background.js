@@ -38,7 +38,7 @@ async function onEvent(ev, sender) {
   if (!r || !sender.tab) return;
   const { at, kind, ...data } = ev;
   const before = kind === "click" || kind === "key" ? await screenshot(sender.tab.windowId) : null;
-  const { id } = await api(`/sessions/${r.id}/events`, "POST", { t: at - r.t0, kind, ...data, before });
+  const { id } = await api(`/sessions/${r.id}/events`, "POST", { t: at - r.t0, kind, ...data, tab: sender.tab.id, before });
   if (!AFTER_DELAY[kind]) return;
   await sleep(AFTER_DELAY[kind]);
   const after = await screenshot(sender.tab.windowId);

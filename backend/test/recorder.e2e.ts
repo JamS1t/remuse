@@ -19,7 +19,7 @@ await fetch(MOCK).catch(() => { console.error("Mock apps not running on :3100. S
 await fetch(`${MOCK}/api/reset`, { method: "POST" });
 
 // DATA_DIR=data keeps the session (e.g. as a dev fixture); NARRATION picks the fake mic file.
-const data = process.env.DATA_DIR ? join(ROOT, "backend", process.env.DATA_DIR) : mkdtempSync(join(tmpdir(), "showrun-"));
+const data = process.env.DATA_DIR ? join(ROOT, "backend", process.env.DATA_DIR) : mkdtempSync(join(tmpdir(), "remuse-"));
 const narration = join(ROOT, "scripts", "fixtures", process.env.NARRATION ?? "narration.wav");
 const narrationMs = ((readFileSync(narration).length - 44) / 32000) * 1000; // 16 kHz mono 16-bit
 const backend = spawn(process.execPath, ["--env-file-if-exists=../.env", "src/server.ts"], {
@@ -30,7 +30,7 @@ for (let i = 0; i < 50 && !(await fetch(`${API}/sessions`).then((r) => r.ok, () 
 const ext = join(ROOT, "extension");
 let ctx: Awaited<ReturnType<typeof chromium.launchPersistentContext>> | undefined;
 try {
-  ctx = await chromium.launchPersistentContext(mkdtempSync(join(tmpdir(), "showrun-profile-")), {
+  ctx = await chromium.launchPersistentContext(mkdtempSync(join(tmpdir(), "remuse-profile-")), {
   channel: "chromium", // full Chromium in new headless mode; the headless shell can't load extensions
   headless: true,
   viewport: { width: 1440, height: 900 },
