@@ -11,7 +11,7 @@ import { chromium } from "playwright";
 const API = "http://127.0.0.1:3200/api";
 const ext = resolve(import.meta.dirname, "../../extension");
 if (await fetch(`${API}/sessions`).then(() => true, () => false)) { console.error("Port 3200 is busy: stop the Remuse Agent first."); process.exit(1); }
-const agent = spawn(process.execPath, ["--env-file-if-exists=../.env", "src/server.ts"], { cwd: resolve(import.meta.dirname, ".."), env: { ...process.env, DATA_DIR: mkdtempSync(join(tmpdir(), "remuse-data-")) }, stdio: "ignore" });
+const agent = spawn(process.execPath, ["--env-file-if-exists=../.env", "src/server.ts"], { cwd: resolve(import.meta.dirname, ".."), env: { ...process.env, OPEN_MODEL_KEY: "", BASETEN_API_KEY: "", DATA_DIR: mkdtempSync(join(tmpdir(), "remuse-data-")) }, stdio: "ignore" });
 const ctx = await chromium.launchPersistentContext(mkdtempSync(join(tmpdir(), "remuse-panel-")), {
   channel: "chromium", headless: true, viewport: { width: 400, height: 900 },
   args: [`--disable-extensions-except=${ext}`, `--load-extension=${ext}`],

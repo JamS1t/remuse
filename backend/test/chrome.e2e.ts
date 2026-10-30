@@ -31,7 +31,7 @@ const SITE = `http://localhost:${(site.address() as any).port}`;
 
 const data = mkdtempSync(join(tmpdir(), "remuse-chrome-"));
 const agent = spawn(process.execPath, ["--env-file-if-exists=../.env", "src/server.ts"], {
-  cwd: resolve(import.meta.dirname, ".."), env: { ...process.env, DATA_DIR: data, SHOWRUN_NO_NOTIFY: "1" }, stdio: process.env.SHOW_AGENT ? "inherit" : "ignore",
+  cwd: resolve(import.meta.dirname, ".."), env: { ...process.env, DATA_DIR: data, SHOWRUN_NO_NOTIFY: "1", OPEN_MODEL_KEY: "", BASETEN_API_KEY: "" }, stdio: process.env.SHOW_AGENT ? "inherit" : "ignore",
 });
 let ctx: Awaited<ReturnType<typeof chromium.launchPersistentContext>> | null = null;
 try {
