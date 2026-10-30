@@ -10,7 +10,7 @@ import { transcribe, calls } from "./meta.ts";
 import { revise, sortSaid, understand, type Spec } from "./understand.ts";
 import { endLive, hear, liveState } from "./live.ts";
 import { build } from "./build.ts";
-import { Runner, openBrowser, openPlainChrome, type Run } from "./runner.ts";
+import { Runner, openBrowser, openPlainChrome, plainChromeOpen, type Run } from "./runner.ts";
 import type { BrowserContext } from "playwright";
 import { GOOGLE, SITE, listLogins, removeLogin, saveLogin } from "./logins.ts";
 import { notify } from "./notify.ts";
@@ -187,6 +187,8 @@ async function learn(id: string, offsetMs: number) {
     stage(id, "ready");
     endLive(id);
     notify(`Remuse learned: ${session(id).title ?? spec.goal}`, r.ok ? "Ready to do it again. Open Remuse to run or schedule it." : "Some checks failed. Open Remuse to review it.", `http://127.0.0.1:${PORT}/#/spec/${specId}`);
+    // Then, by itself, it tries the task once on your example to show it understood.
+    autoPractice(specId);
   } catch (e) {
     stage(id, "failed", (e as Error).message);
     endLive(id);
@@ -197,13 +199,17 @@ async function learn(id: string, offsetMs: number) {
 /** Feedback in plain words (typed or said): Muse Spark updates the task as a new version and says what it
  *  changed; the rules are rebuilt and checked in the background ("thinking", like after a recording). */
 async function applyFeedback(row: ReturnType<typeof specRow>, said: string) {
-  const last = db.prepare("SELECT json FROM runs WHERE spec_id IN (SELECT id FROM specs WHERE session_id = ?) ORDER BY updated_at DESC LIMIT 1").get(row.sessionId) as any;
+  // The last real run is what the person is talking about; a practice only if there was no real run yet.
+  const last = db.prepare("SELECT json FROM runs WHERE spec_id IN (SELECT id FROM specs WHERE session_id = ?) ORDER BY json_extract(json, '$.mode') IS NULL DESC, updated_at DESC LIMIT 1").get(row.sessionId) as any;
   const lastRun = last ? (JSON.parse(last.json) as Run).items.slice(0, 3).map((it) => `${it.label}: ${it.log.map((l) => l.msg).join(" / ")}`).join("\n").slice(0, 4000) : "";
   const { spec, changes } = await revise(full(row.sessionId), row.spec, said, lastRun);
   const specId = saveSpec(row.sessionId, spec, `You said: "${said.slice(0, 140)}"`);
   stage(row.sessionId, "building");
   build(spec, pagesOf(row.sessionId), new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Manila" }))
-    .then((b) => { db.prepare("UPDATE specs SET code = ?, tests = ? WHERE id = ?").run(b.code, JSON.stringify(b.tests), specId); stage(row.sessionId, "ready"); })
+    .then((b) => {
+      db.prepare("UPDATE specs SET code = ?, tests = ? WHERE id = ?").run(b.code, JSON.stringify(b.tests), specId); stage(row.sessionId, "ready");
+      autoPractice(specId); // try the changed task once
+    })
     .catch((e) => stage(row.sessionId, "failed", (e as Error).message));
   // Schedules follow the task to its new version.
   db.prepare("UPDATE schedules SET spec_id = ? WHERE spec_id IN (SELECT id FROM specs WHERE session_id = ?)").run(specId, row.sessionId);
@@ -232,6 +238,31 @@ async function hearSaid(sessionId: string, wav: Uint8Array) {
 
 // One run at a time: it drives one visible browser.
 let active: Runner | null = null;
+let activeDone: Promise<unknown> = Promise.resolve(); // settles when the active run has closed its browser
+const busyRun = () => !!active && !["done", "failed", "stopped"].includes(active.run.status);
+
+/** Right after learning (or a change), try the task once on the person's own example, stopping before anything
+ *  irreversible, and compare with what they did. Nothing waits on them; the sidebar shows how it went. */
+async function practice(specId: number): Promise<Run> {
+  const row = specRow(specId);
+  let example: { url?: string; label?: string } | undefined;
+  if (row.spec.inputs.source === "list") {
+    // The item opened in the demo: its link, else the next page it went to, else its text.
+    const events = full(row.sessionId).events as any[];
+    const at = row.spec.inputs.itemEvent ?? -1;
+    const ev = events[at];
+    if (ev) example = { url: ev.target?.href ?? events.slice(at + 1).find((e) => e.url && e.url !== ev.url)?.url, label: ev.target?.text ?? ev.target?.label };
+  }
+  return startRun(specId, { practice: true, example });
+}
+// The automatic practice (after learning or a change) is polite: it never closes a sign-in window you're using,
+// and it waits for a real run to finish instead of being dropped.
+let practiceNext: number | null = null;
+function autoPractice(specId: number) {
+  if (signIn || plainChromeOpen()) return; // ponytail: skipped while you sign in; "Practice again" is one tap
+  if (busyRun() && active!.run.mode !== "practice") { practiceNext = specId; return; }
+  practice(specId).catch((e) => console.warn("no practice:", (e as Error).message));
+}
 function saveRun(run: Run) {
   db.prepare("INSERT INTO runs (id, spec_id, json, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET json = excluded.json, updated_at = excluded.updated_at")
     .run(run.id, run.specId, JSON.stringify(run), Date.now());
@@ -303,14 +334,21 @@ setInterval(async () => {
   }
 }, 30_000).unref();
 
-async function startRun(specId: number, opts: { limit?: number; autoApprove?: boolean; rows?: Record<string, string>[]; scheduled?: boolean; watch?: boolean }) {
-  if (active && !["done", "failed", "stopped"].includes(active.run.status)) throw new HttpError(409, "a run is already going");
+async function startRun(specId: number, opts: { limit?: number; autoApprove?: boolean; rows?: Record<string, string>[]; scheduled?: boolean; watch?: boolean; practice?: boolean; example?: { url?: string; label?: string } }) {
   const row = specRow(specId);
   if (!row.code) throw new HttpError(400, "build the rules first");
+  // A practice gives way to real work, and to a newer practice: it stops, and the new run starts once the old
+  // one has closed its browser. A real run is never interrupted.
+  // A loop: another practice may have slipped in while we waited for the last one to close.
+  for (let n = 0; n < 5 && busyRun() && active!.run.mode === "practice"; n++) { active!.stop(); await activeDone; }
+  if (!busyRun()) await activeDone;
   // Both use the one Chrome profile, which only one window can hold.
   if (signIn) { await signIn.close().catch(() => {}); signIn = null; }
+  // Checked last, after every wait, so two starts at once can't both get through (nothing below awaits).
+  if (busyRun()) throw new HttpError(409, "a run is already going");
   const run: Run = { id: randomUUID(), specId, status: "starting", items: [], current: 0, pending: null, autoApprove: !!opts.autoApprove, startedAt: Date.now(), heals: [], learned: [], rows: opts.rows,
-    visible: !!opts.watch && !opts.scheduled, trigger: opts.scheduled ? "schedule" : "you" };
+    visible: !!opts.watch && !opts.scheduled && !opts.practice, trigger: opts.scheduled ? "schedule" : "you",
+    ...(opts.practice ? { mode: "practice" as const, practice: { sameItem: false, values: [], checked: 0, ok: false } } : {}) };
   let last = 0;
   let asked = "";
   const link = `http://127.0.0.1:${PORT}/#/run/${run.id}`;
@@ -329,18 +367,25 @@ async function startRun(specId: number, opts: { limit?: number; autoApprove?: bo
   });
   runner.prev = lastValues(row.sessionId);
   runner.taskKey = row.sessionId;
+  runner.example = opts.example;
   active = runner;
   saveRun(run);
-  runner.start(opts.limit).then(() => {
+  activeDone = runner.start(opts.limit).then(() => {
     saveRun(run);
     if (opts.scheduled) notify(`Remuse finished: ${row.spec.goal}`.slice(0, 120), `${run.items.filter((i) => i.status === "done").length} of ${run.items.length} done${run.error ? `. Problem: ${run.error}` : ""}`, link);
-    // What the run learned (new labels after a redesign, answers you gave) becomes the next spec version.
-    if (run.heals.length || run.learned.length) {
+    if (run.mode === "practice") {
+      // A practice that went wrong is worth a word; one that matched shows in the sidebar.
+      // ponytail: a practice's heals aren't saved as a new version; the first real run re-finds them
+      if (run.status === "done" && run.practice && !run.practice.ok) notify(`Remuse practiced ${row.spec.title ?? "your task"}`, "Something didn't match what you did. Open Remuse to see what.", link);
+    } else if (run.heals.length || run.learned.length) {
+      // What the run learned (new labels after a redesign, answers you gave) becomes the next spec version.
       const parts = [run.heals.length && `${run.heals.length} element(s) updated after a layout change`, run.learned.length && `learned: ${run.learned.map((l) => `${l.requestType} → ${l.outcome}`).join(", ")}`].filter(Boolean);
       (run as any).newSpecId = saveSpec(row.sessionId, runner.spec, `From run: ${parts.join("; ")}`, row.code, row.tests);
       saveRun(run);
     }
-  });
+    // A practice that waited for this run goes now, on the newest version (including what this run learned).
+    if (run.mode !== "practice" && practiceNext !== null) { const next = practiceNext; practiceNext = null; autoPractice(latestSpec(next)); }
+  }).catch((e) => console.error("run ended badly:", e)); // never rejects, so whoever waits on it can go on
   return run;
 }
 
@@ -366,9 +411,17 @@ function lastReport(sessionId: string): { text: string; at: number; runId: strin
   return null;
 }
 
+/** The practice of this task's newest version, if there was one: going, or how it went. */
+function latestPractice(sessionId: string, specId: number | null) {
+  const run = recentRuns(sessionId).find((r) => r.mode === "practice" && r.specId === specId);
+  return run ? { runId: run.id, status: run.status, label: run.items[0]?.label ?? null, result: isLiveStatus(run.status) ? null : run.practice ?? null } : null;
+}
+const isLiveStatus = (s: Run["status"]) => s === "starting" || s === "running";
+
 /** The item variables of this task's most recent finished run, by item label. */
 function lastValues(sessionId: string): Record<string, Record<string, unknown>> {
   for (const run of recentRuns(sessionId)) {
+    if (run.mode === "practice") continue; // a practice reads the demo item again, not the real last values
     const done = run.items.filter((i) => i.status === "done");
     if (done.length) return Object.fromEntries(done.map((i) => [i.label, Object.fromEntries(Object.entries(i.vars).filter(([k]) => !k.startsWith("prev_")))]));
   }
@@ -448,7 +501,7 @@ async function route(req: IncomingMessage, res: ServerResponse) {
           checks: { passed: tests.filter((x) => x.ok).length, total: tests.length },
           askedSchedule: spec?.schedule ?? null, lastReport: lastReport(t.sessionId),
           uploads: spec ? [...spec.steps, ...Object.values(spec.outcomes).flatMap((o) => o.steps)].filter((x) => x.do === "upload").map((x) => ({ folder: x.file?.folder ?? null, pick: x.file?.pick ?? "next" })) : [],
-          saveDownloads: spec?.saveDownloads ?? null };
+          saveDownloads: spec?.saveDownloads ?? null, practice: latestPractice(t.sessionId, t.specId) };
       }));
   if (url.pathname === "/api/logins" && m === "POST") {
     const b = await json(req);
@@ -609,6 +662,11 @@ async function route(req: IncomingMessage, res: ServerResponse) {
       db.prepare("UPDATE specs SET code = ?, tests = ? WHERE id = ?").run(r.code, JSON.stringify(r.tests), sid);
       return send(res, 200, specRow(sid));
     }
+    // Practice again: try it once on the demo item, stopping before anything irreversible.
+    if (m === "POST" && p[3] === "practice") {
+      if (!row.code) throw new HttpError(400, "build the rules first");
+      return send(res, 201, await practice(sid));
+    }
     if (m === "POST" && p[3] === "runs") {
       const opts = await json(req);
       const rows = Array.isArray(opts.rows) ? opts.rows.filter((r: unknown) => r && typeof r === "object").map((r: Record<string, unknown>) => Object.fromEntries(Object.entries(r).map(([k, v]) => [String(k), String(v ?? "")]))) : undefined;
@@ -627,7 +685,7 @@ async function route(req: IncomingMessage, res: ServerResponse) {
       return send(res, 200, rows.map((r) => {
         const run = JSON.parse(r.json) as Run;
         const done = run.items.filter((i) => i.status === "done").length;
-        return { id: run.id, specId: run.specId, sessionId: r.session_id, task: titles.get(r.session_id) ?? null, status: run.status,
+        return { id: run.id, specId: run.specId, sessionId: r.session_id, task: titles.get(r.session_id) ?? null, status: run.status, mode: run.mode ?? null, practiceOk: run.practice?.ok ?? null,
           startedAt: run.startedAt, endedAt: run.endedAt ?? null, items: run.items.length, done, error: run.error ?? null,
           waiting: !!run.pending, report: run.items.find((i) => i.report)?.report ?? null, score: run.score };
       }));

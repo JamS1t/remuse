@@ -7,7 +7,7 @@ import { Kbd } from "@/components/ui/kbd";
 import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Textarea } from "@/components/ui/textarea";
-import { ErrorNote, ItemLabel, Orb, Shot, Status, useAction } from "@/components/bits";
+import { ErrorNote, ItemLabel, Orb, PracticeLines, Shot, Status, useAction } from "@/components/bits";
 import { Content, PageHead } from "@/components/shell";
 import { Loading } from "@/pages/lists";
 import { ago, api, fmtSecs, isLive, timecode, useApi, type Candidate, type Item, type Pending, type Run, type SpecRow } from "@/lib/api";
@@ -52,7 +52,7 @@ export function RunPage({ id }: { id: string }) {
         sub={
           <span className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
             <Status s={r.pending ? "approval" : r.status} />
-            <span>·</span><span>{r.trigger === "schedule" ? "Started by its schedule" : "Started by you"} {ago(r.startedAt)}</span>
+            <span>·</span><span>{r.mode === "practice" ? "Practice on your example, stopping before anything irreversible," : r.trigger === "schedule" ? "Started by its schedule" : "Started by you"} {ago(r.startedAt)}</span>
             <span>·</span><span className="font-mono text-[13px]">{fmtSecs(took)}</span>
             {!single ? <><span>·</span><span>{done} of {r.items.length} done</span></> : null}
             {r.browser ? <><span>·</span><span>{r.browser === "chrome" ? "In your Chrome" : "In Remuse's browser"}</span></> : null}
@@ -67,6 +67,12 @@ export function RunPage({ id }: { id: string }) {
         }
       />
       {r.error ? <div className="mb-6"><ErrorNote>{r.error}</ErrorNote></div> : null}
+      {r.mode === "practice" && !live ? (
+        <section className="glass mb-6 rounded-2xl px-5 py-4">
+          <h2 className="text-[13px] font-medium">How the practice went</h2>
+          <PracticeLines className="mt-2 text-[13.5px]" p={{ runId: r.id, status: r.status, label: r.items[0]?.label ?? null, result: r.practice ?? null }} />
+        </section>
+      ) : null}
       {r.pending ? <div className="mb-6"><PendingCard key={`${r.pending.kind}-${r.pending.item}-${r.pending.shot}`} p={r.pending} r={r} file={file} busy={!!busy} answer={answer} /></div> : null}
       {r.heals.length || r.learned.length ? (
         <section className="glass mb-6 rounded-2xl px-5 py-4">

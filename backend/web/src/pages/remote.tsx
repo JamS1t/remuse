@@ -4,10 +4,10 @@ import { CalendarClock, Check, ChevronDown, CircleAlert, ExternalLink, Globe, Lo
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import { ItemLabel, Lockup, Orb, Said, useAction, type OrbState } from "@/components/bits";
+import { ItemLabel, Lockup, Orb, PracticeLines, Said, useAction, type OrbState } from "@/components/bits";
 import { PendingCard } from "@/pages/run";
 import { parseCsv } from "@/pages/spec";
-import { api, isLive, useApi, type Run, type RunRow, type SpecRow } from "@/lib/api";
+import { api, isLive, useApi, type PracticeState, type Run, type RunRow, type SpecRow } from "@/lib/api";
 import { ext, inPanel, useTabChanges } from "@/lib/bridge";
 import { cn } from "@/lib/utils";
 
@@ -18,6 +18,7 @@ type Task = {
   rules: { if: string; then: string; said?: string }[]; guessed: string[]; steps: number; compares: boolean; checks: { passed: number; total: number };
   askedSchedule: { everyMinutes?: number; time?: string; days?: string; said?: string } | null;
   lastReport: { text: string; at: number; runId: string } | null;
+  practice: PracticeState | null;
 };
 type Rec = { recording: boolean; rec?: { id?: string; audioError?: string }; waitingForMic?: boolean };
 type Schedule = { id: number; specId: number; sessionId: string; time: string; days: string; everyMinutes: number | null };
@@ -90,7 +91,9 @@ export function Remote() {
   const dismiss = (id: string) => { markSeen(id); setTick((n) => n + 1); };
 
   const done = live ? live.items.filter((i) => ["done", "skipped", "failed"].includes(i.status)).length : 0;
+  const practicing = live?.mode === "practice";
   const head =
+    state === "working" && practicing ? { hi: "Practicing", big: "Trying it once on your example", sub: live!.items[0]?.label ?? "Nothing irreversible: I stop before it." } :
     state === "watching" ? { hi: `Watching · ${String(Math.floor(since / 60)).padStart(2, "0")}:${String(since % 60).padStart(2, "0")}`, big: "Do it once. Tell me why as you go." }
     : state === "waiting" ? { hi: `Working · ${done} of ${live!.items.length}`, big: live!.pending!.kind === "approval" ? "I need your OK" : live!.pending!.kind === "ask" ? "I have a question" : "Your turn in the browser" }
     : state === "thinking" ? { hi: learning!.title || "New task", big: "Thinking…", sub: STAGE[learning!.learnStage!] }
@@ -133,7 +136,7 @@ export function Remote() {
         ) : null}
         {live && !live.pending ? (
           <div className="flex gap-2">
-            <Button variant="outline" className="flex-1" onClick={() => open(`#/run/${live.id}`)}>See every item</Button>
+            <Button variant="outline" className="flex-1" onClick={() => open(`#/run/${live.id}`)}>{practicing ? "Watch the practice" : "See every item"}</Button>
             <Button variant="ghost" onClick={() => act("halt", () => api(`/runs/${live.id}/stop`, "POST"))}><Square className="fill-current" />Stop</Button>
           </div>
         ) : null}
@@ -239,8 +242,28 @@ function FollowAlong({ sessionId, t, recording, onDone, onRetry }: { sessionId: 
           <ul className="mt-3 space-y-1 text-[12.5px]">
             <li className={cn("flex items-center gap-1.5", ok ? "text-ok" : "text-warn")}>{ok ? <Check className="size-3.5" /> : <CircleAlert className="size-3.5" />}{t.checks.passed} of {t.checks.total} checks pass against what you did</li>
             {t.guessed.length ? <li className="flex items-center gap-1.5 text-warn"><CircleAlert className="size-3.5" />I guessed how to {t.guessed.map(words).join(", ")}; check it once</li> : null}
-            <li className="flex items-center gap-1.5 text-muted-foreground"><Check className="size-3.5" />Anything I'd pay or send for waits for your OK</li>
+            {t.practice?.result?.stoppedForOk ? null : <li className="flex items-center gap-1.5 text-muted-foreground"><Check className="size-3.5" />Anything I'd pay or send for waits for your OK</li>}
           </ul>
+          {/* By itself, right after learning: it tries the task once on your example and says how that went. */}
+          {!t.practice ? (
+            <p className="mt-3 border-t border-rule pt-3 text-[12.5px] text-muted-foreground">
+              <button type="button" className="underline-offset-2 hover:text-foreground hover:underline" disabled={!!busy}
+                onClick={() => run("practice", () => api(`/specs/${t.specId}/practice`, "POST"))}>Practice once on my example</button>
+              <span> · stops before anything it would send or pay</span>
+            </p>
+          ) : null}
+          {t.practice ? (
+            <div className="mt-3 border-t border-rule pt-3 text-[12.5px]">
+              <PracticeLines p={t.practice} />
+              {isLive(t.practice.status) ? null : (
+                <p className="mt-2 flex gap-3 text-muted-foreground">
+                  <button type="button" className="underline-offset-2 hover:text-foreground hover:underline" onClick={() => open(`#/run/${t.practice!.runId}`)}>See the practice</button>
+                  <button type="button" className="underline-offset-2 hover:text-foreground hover:underline" disabled={!!busy}
+                    onClick={() => run("practice", () => api(`/specs/${t.specId}/practice`, "POST"))}>Practice again</button>
+                </p>
+              )}
+            </div>
+          ) : null}
           {changes ? <ul className="mt-3 space-y-1 border-t border-rule pt-3 text-[13px]">{changes.map((c) => <li key={c} className="flex gap-1.5"><Check className="mt-0.5 size-3.5 shrink-0 text-ok" />{c}</li>)}</ul> : null}
           {t.askedSchedule && t.specId ? <AskedSchedule t={t} onDone={onDone} /> : null}
           <Button size="sm" className="mt-4 w-full" variant={t.askedSchedule ? "outline" : "default"} onClick={onDone}>Looks right</Button>

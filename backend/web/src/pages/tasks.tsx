@@ -6,13 +6,13 @@ import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Orb, Said, useAction } from "@/components/bits";
+import { Orb, PracticeLines, Said, useAction } from "@/components/bits";
 import { RunButton, useRunTask } from "@/components/run-button";
 import { ScheduleEditor, describeSchedule } from "@/components/schedule";
 import { Content, PageHead } from "@/components/shell";
 import { RunsList } from "@/pages/activity";
 import { cn } from "@/lib/utils";
-import { ago, api, isLive, useApi, type ActivityRun, type FolderRow, type ScheduleRow, type SessionFull, type SpecRow, type Task } from "@/lib/api";
+import { IRREVERSIBLE, ago, api, isLive, useApi, type ActivityRun, type FolderRow, type ScheduleRow, type SessionFull, type SpecRow, type Task } from "@/lib/api";
 
 const LEARNING: Record<string, string> = {
   listening: "Listening back to what you said",
@@ -169,6 +169,14 @@ export function TaskPage({ id, tab = "overview" }: { id: string; tab?: string })
                 {t.checks.passed} of {t.checks.total} pass against your demo
               </p>
               {t.guessed.length ? <p className="mt-1 text-warn">I guessed how to {t.guessed.map(words).join(", ")}. Check it under How it works.</p> : null}
+              {t.practice ? <PracticeLines className="mt-3 border-t border-rule pt-3" p={t.practice} /> : null}
+              {t.specId && !learning && !isLive(t.practice?.status ?? "done") ? (
+                <p className="mt-2 flex gap-3 text-muted-foreground">
+                  {t.practice ? <a href={`#/run/${t.practice.runId}`} className="text-muted-foreground hover:text-foreground">See the practice</a> : null}
+                  <button type="button" className="hover:text-foreground disabled:opacity-50" disabled={!!busy || !!liveRun}
+                    onClick={() => run("practice", async () => { await api(`/specs/${t.specId}/practice`, "POST"); reload(); reloadRuns(); })}>{t.practice ? "Practice again" : "Practice on my example"}</button>
+                </p>
+              ) : null}
             </section>
           </aside>
         </TabsContent>
@@ -258,7 +266,9 @@ function WhatItDoes({ spec: row }: { spec: SpecRow }) {
 
 /** What it will never do without asking. */
 function Safety({ spec }: { spec?: SpecRow | null }) {
-  const gated = spec ? [...spec.spec.steps, ...Object.values(spec.spec.outcomes).flatMap((o) => o.steps)].filter((s) => s.irreversible) : [];
+  // The same test the runner uses before it acts, so this card never says "nothing" for a task that sends.
+  const all = spec ? [...spec.spec.steps, ...Object.values(spec.spec.outcomes).flatMap((o) => o.steps)] : [];
+  const gated = [...new Map(all.filter((s) => s.irreversible || (s.do === "click" && IRREVERSIBLE.test(s.target?.name ?? "")) || (!!s.tool && IRREVERSIBLE.test(s.tool.name.replace(/_/g, " ")))).map((s) => [s.describe, s])).values()];
   return (
     <section className="glass rounded-2xl px-5 py-4 text-[13px]">
       <p className="flex items-center gap-1.5 font-medium"><Hand className="size-3.5" />Waits for your OK</p>

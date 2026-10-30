@@ -1,11 +1,11 @@
 import { useState, type ReactNode } from "react";
 import { toast } from "sonner";
-import { Check, ChevronDown, ChevronLeft, CircleDashed, Hand, KeyRound, LoaderCircle, MessageCircleQuestion, Minus, X } from "lucide-react";
+import { Check, ChevronDown, ChevronLeft, CircleAlert, CircleDashed, Hand, KeyRound, LoaderCircle, MessageCircleQuestion, Minus, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
-import { api, useApi, type ItemStatus } from "@/lib/api";
+import { api, useApi, type ItemStatus, type PracticeState } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import lockupSvg from "@/assets/lockup.svg?raw";
 import markSvg from "@/assets/mark.svg?raw";
@@ -197,4 +197,33 @@ export function ItemLabel({ text }: { text: string }) {
 /** The user's own words, set like script dialogue. */
 export function Said({ children }: { children: ReactNode }) {
   return <q className="font-script text-[13.5px] leading-snug text-foreground/85 [quotes:'“''”']">{children}</q>;
+}
+
+const asText = (v: unknown) => (v === null || v === undefined || v === "" ? "nothing" : typeof v === "string" ? v : JSON.stringify(v));
+const plain = (s?: string) => s?.replaceAll("_", " ") ?? "";
+
+/** How the practice on your example went, in plain lines: what it read, what it chose, where it stopped. */
+export function PracticeLines({ p, className }: { p: PracticeState | null | undefined; className?: string }) {
+  if (!p) return null;
+  const going = p.status === "starting" || p.status === "running";
+  if (going) return <ul className={className}><li className="shimmer">Practicing once on your example…</li></ul>;
+  const r = p.result;
+  if (!r || p.status === "stopped") return <ul className={className}><li className="flex items-center gap-1.5 text-muted-foreground"><Minus className="size-3.5" />Practice stopped before it finished</li></ul>;
+  const ok = (good: boolean, text: ReactNode, key: string) => (
+    <li key={key} className={cn("flex gap-1.5", good ? "text-ok" : "text-warn")}>
+      {good ? <Check className="mt-0.5 size-3.5 shrink-0" /> : <CircleAlert className="mt-0.5 size-3.5 shrink-0" />}<span>{text}</span>
+    </li>
+  );
+  const lines: ReactNode[] = [];
+  if (r.problem) lines.push(ok(false, <>Practice got stuck: {r.problem}</>, "problem"));
+  else {
+    if (!r.sameItem && p.label) lines.push(<li key="other" className="text-muted-foreground">Your example wasn't in the list any more, so I practiced on “{p.label}”.</li>);
+    const bad = r.values.filter((v) => !v.ok);
+    if (r.values.length && !bad.length) lines.push(ok(true, r.sameItem ? `Read the same ${r.values.length === 1 ? "value" : `${r.values.length} values`} you saw` : `Found all ${r.values.length} values`, "values"));
+    for (const v of bad.slice(0, 3)) lines.push(ok(false, v.got === null ? <>Couldn't read {plain(v.name)}</> : <>Read {plain(v.name)} as <span className="font-mono">{asText(v.got)}</span>; you saw <span className="font-mono">{asText(v.want)}</span></>, `v-${v.name}`));
+    if (r.asked) lines.push(ok(false, <>Would ask you about your own example: {r.asked}</>, "asked"));
+    else if (r.outcome && r.expected && r.sameItem) lines.push(ok(r.outcome === r.expected, r.outcome === r.expected ? <>Chose to {plain(r.outcome)}, like you did</> : <>Chose to {plain(r.outcome)}; you did {plain(r.expected)}</>, "outcome"));
+    if (r.stoppedBefore) lines.push(<li key="stop" className="flex gap-1.5 text-muted-foreground"><Hand className="mt-0.5 size-3.5 shrink-0" /><span>Stopped before “{r.stoppedBefore.replace(/^./, (c) => c.toLowerCase())}”. {r.stoppedForOk === false ? "It changes something on the site, so a practice doesn't do it." : "Real runs wait for your OK there."}</span></li>);
+  }
+  return <ul className={cn("space-y-1", className)}>{lines}</ul>;
 }

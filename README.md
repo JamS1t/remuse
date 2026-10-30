@@ -48,11 +48,12 @@ You teach it by doing the task once and talking through why. There's nothing to 
    - **Compare:** if you opened several results and picked one, a step that opens the top results, reads the same values on each and keeps the best.
 3. **Review.** You check what it will do. If something's off, say so in your own words on the task page ("the views should come from the Reach tab"): Muse Spark changes just that, tells you what it changed, and the rules are rebuilt and checked. Each change is a new version.
 4. **Build.** Muse Spark writes the rules, the data extraction and the ranking as JavaScript. Remuse runs that code against your demo (it must read the same values and reach the same decision you did) plus tests Muse Spark writes for each rule. Dates, thresholds, prices per unit and rule order are computed in code, not guessed.
+4b. **Practice.** Then, without being asked, it tries the task once on your own example (the very email or order you used), hidden, and stops before anything it would send, pay or submit. The sidebar says how that went against what you did: "Read the same 2 values you saw · Chose to refund, like you did · Stopped before 'send the reply'", or exactly what didn't match. It practices again after every change you ask for. A practice never waits on you, sends notifications or uses up files, and gives way the moment a real run starts.
 5. **Run.** The Agent repeats the task:
    - **Finding things:** it looks for elements by role and name first, then by the recorded selector. If the page was redesigned, Muse Spark finds the element on a screenshot, SAM 3.1 snaps the click to the exact element, and the spec is updated.
    - **WebMCP:** if the page offers the action as a WebMCP tool, Remuse calls the tool instead of clicking.
    - **Checks:** every step is checked against the page, and Muse Spark looks at the screen after every irreversible action.
-   - **Approvals:** it stops for your OK before paying, checking out, sending and similar steps.
+   - **Approvals:** it stops for your OK before paying, checking out, sending (including pressing Enter to send in a chat box) and similar steps.
    - **Questions:** it asks when an item is outside your rules or a value can't be read. Your answer is remembered and saved into the next spec version.
    - **Signing in:** if a run (hidden or not) lands on a sign-in page, it pauses, opens that page in a plain Chrome window on its own profile and notifies you. You sign in once and close the window; it reopens every tab where it was and carries on. Google sites are signed into this way, never by copying your login.
    - **Your turn:** if a captcha or a popup gets in the way, it hands the browser to you, then tries again.
@@ -96,7 +97,8 @@ For development: `cd backend && npm start` runs the Agent in a terminal (http://
 | `cd backend && node test/signin.e2e.ts` | A hidden run that hits a sign-in page pauses, opens it in plain Chrome for you, then carries on where it was |
 | `cd backend && node test/clicklist.e2e.ts` | A list whose items open by clicking, not links (forum posts, cards): found by role, each opened and read |
 | `cd backend && node test/chrome.e2e.ts` | With the extension linked, a run happens in your own Chrome: uses its existing login, follows a tab the site opens, closes its tabs after |
-| `cd backend && node test/feedback.e2e.ts` | Feedback in plain words updates a task: only what was asked changes, you're told what changed, the rules are rebuilt |
+| `cd backend && node test/feedback.e2e.ts` | Feedback in plain words updates a task: only what was asked changes, you're told what changed, the rules are rebuilt, and a practice of the changed task follows by itself |
+| `cd backend && node test/practice.e2e.ts` | The practice after learning: finds the very item from the demo (even when items differ only by `?id=`), reads the same values, makes the same choice, stops before sending (a button or Enter in a chat box), flags what doesn't match, never waits on you, and gives way to a real run |
 | `cd backend && node test/converse.e2e.ts <voice.wav>` | Hands-free: after learning, the sidebar listens by itself; a spoken correction is cut out by its pauses, heard, understood as a change and applied with no button; other phrases are sorted (approve, schedule, run, teach again, not meant for Remuse) |
 | `cd backend && node test/webmcp.check.ts` | A page's WebMCP tool is seen and called by the Agent's browser |
 | `cd mock-apps && npm run check` | The test sites' data agrees with the spoken rules |

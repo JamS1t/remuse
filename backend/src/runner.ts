@@ -6,7 +6,7 @@ import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { askJson, ground, sam, text, png, type Box } from "./meta.ts";
-import { load, type Rules } from "./build.ts";
+import { load, same, type Rules } from "./build.ts";
 import type { Spec, Step, Target } from "./understand.ts";
 import { applyLogins } from "./logins.ts";
 import { notify } from "./notify.ts";
@@ -15,6 +15,8 @@ import { captionFor, chooseFile, findFolder, freeName, markUsed, pathIn, usedFor
 
 /** Ends the item quietly as skipped (e.g. nothing new to upload yet), not as a failure. */
 class Skip extends Error {}
+/** A practice run reached the point where a real run would need the person (an OK or a question): it ends there. */
+class PracticeEnd extends Error {}
 
 export type LogLine = { at: number; msg: string; level: "info" | "ok" | "warn" | "error"; shot?: string };
 export type Candidate = { url: string; title: string; vars: Record<string, unknown>; score: number | null; shot?: string; best?: boolean };
@@ -41,11 +43,24 @@ export type Run = {
   heals: { step: string; from: string; to: string }[];
   learned: { requestType: string; outcome: string; note?: string; reply?: string }[];
   score?: { matched: number; total: number };
+  // "practice": right after learning, Remuse tries the task once on the person's own example and stops
+  // before anything irreversible, then compares what it read and chose with what the person did.
+  mode?: "practice";
+  practice?: Practice;
+};
+export type Practice = {
+  sameItem: boolean; // found the very item from the demo (else the first one, so values may differ)
+  outcome?: string; expected?: string; // what it chose; what the person did in the demo
+  values: { name: string; got: unknown; want: unknown; ok: boolean }[];
+  checked: number; // steps it did and checked before stopping
+  stoppedBefore?: string; stoppedForOk?: boolean; // where it stopped; whether a real run would ask you there
+  asked?: string; problem?: string;
+  ok: boolean;
 };
 
 const VIEW = { width: 1440, height: 900 };
 const MOCK = process.env.MOCK_URL ?? "http://localhost:3100";
-const IRREVERSIBLE = /\b(refund|replace|send|pay|submit|ship|confirm|delete|place order|issue|buy|checkout|check out|purchase|book|transfer|message seller|post|share|publish)\b/i;
+const IRREVERSIBLE = /\b(refund|replace|send|pay|submit|ship|confirm|delete|place order|issue|buy|checkout|check out|purchase|book|transfer|message seller|post|share|publish|approve|merge|archive|resolve)\b/i;
 export const PROFILE = fileURLToPath(new URL("../data/browser", import.meta.url));
 
 /** The Remuse browser: the person's installed Chrome with its own profile, so sign-ins stick between runs. */
@@ -143,6 +158,17 @@ export class Runner {
   // Which task this is (its recording id): uploaded files are remembered per task.
   taskKey = "";
   baseRules: Spec["rules"]; // decide() indexes these; learned rules are added to the spec, not here
+  // Practice only: the item the person opened in the demo (its link, or its text for items opened by clicking).
+  example?: { url?: string; label?: string };
+  private get practicing() { return this.run.mode === "practice"; }
+  /** A practice starts by itself, on live data, so it is stricter than a run: any click, key press or site tool
+   *  in an outcome (the part that acts) ends it, unless it only moves between pages (a link or a tab). */
+  private unsure(raw: Step) {
+    if (!this.practicing) return false;
+    if (raw.do === "upload") return true; // on many sites choosing the file is the upload
+    if (this.spec.steps.includes(raw)) return false;
+    return raw.do === "press" || !!raw.tool || (raw.do === "click" && !["link", "tab"].includes(raw.target?.role ?? ""));
+  }
   private resolve: ((a: Answer) => void) | null = null;
   private shots = 0;
   onChange: (run: Run, spec: Spec) => void;
@@ -181,6 +207,11 @@ export class Runner {
   stop() { this.stopped = true; if (this.resolve) this.answer({ decision: "reject" }); }
 
   private wait(p: Pending): Promise<Answer> {
+    // Nobody is waiting on a practice: a question it would ask ends it, and is part of what it reports.
+    if (this.practicing) {
+      if (p.kind === "ask") this.run.practice!.asked = p.question;
+      throw new PracticeEnd(p.kind === "ask" ? `In a real run I'd ask you: ${p.question}` : "");
+    }
     this.run.pending = p; this.changed();
     return new Promise((r) => { this.resolve = r; });
   }
@@ -191,13 +222,15 @@ export class Runner {
     // when Chrome is closed, and for tasks that upload or save files (the extension can't hand those over).
     const steps = [...this.spec.steps, ...Object.values(this.spec.outcomes).flatMap((o) => o.steps)];
     this.inChrome = chromeReady() && process.env.REMUSE_OWN_BROWSER !== "1" && !this.spec.saveDownloads && !steps.some((x) => x.do === "upload");
-    const browser = this.inChrome ? await openChrome() : await openBrowser(this.headless);
-    this.run.browser = this.inChrome ? "chrome" : "own"; this.changed();
     try {
+      // Inside the try: a browser that fails to open ends the run as failed, instead of leaving it "starting".
+      const browser = this.inChrome ? await openChrome() : await openBrowser(this.headless);
+      this.run.browser = this.inChrome ? "chrome" : "own"; this.changed();
       this.ctx = browser;
       this.page = browser.pages()[0] ?? (await browser.newPage());
       if (this.inChrome && this.run.visible) await this.page.bringToFront().catch(() => {});
-      const keep = findFolder(this.spec.saveDownloads ?? null);
+      // A practice keeps nothing: no downloads saved, no files marked as posted, no updates sent.
+      const keep = this.practicing ? undefined : findFolder(this.spec.saveDownloads ?? null);
       // Downloads in flight: an item (and the run) waits for them before the browser closes.
       const saving: Promise<void>[] = [];
       const settle = async () => { if (!keep) return; await this.page.waitForTimeout(1000).catch(() => {}); await Promise.allSettled(saving); };
@@ -220,8 +253,10 @@ export class Runner {
         // Nothing to go through: a check or an update that runs as one item.
         this.run.items = [{ url: "", label: (this.spec.title ?? this.spec.goal).slice(0, 90), status: "waiting", vars: {}, log: [] }];
       } else if (source === "rows") {
-        // One item per row the person gave; its columns become the item's variables.
-        const rows = (this.run.rows ?? []).slice(0, limit);
+        // One item per row the person gave; its columns become the item's variables. A practice uses the
+        // row from the demo.
+        const demoRow = Object.fromEntries((this.spec.inputs.columns ?? []).map((c) => [c.name, c.demoValue]));
+        const rows = this.practicing ? [demoRow] : (this.run.rows ?? []).slice(0, limit);
         if (!rows.length) throw new Error("this task needs rows to work on, and none were given");
         this.run.items = rows.map((r) => ({ url: "", label: Object.values(r).join(" · ").slice(0, 90), status: "waiting", vars: { ...r }, log: [] }));
       } else {
@@ -233,14 +268,37 @@ export class Runner {
           label: (el as HTMLElement).innerText.replace(/\s+/g, " ").trim().slice(0, 90), index,
         })));
         const expected = await this.expectedOutcomes();
-        this.run.items = links.slice(0, limit ?? links.length).map((l) => ({ ...l, status: "waiting", vars: {}, log: [], expected: expected[l.url.split("/").pop()!] }));
+        let pick = links.slice(0, limit ?? links.length);
+        if (this.practicing) {
+          // The very item from the demo, so what it reads can be compared with what the person saw.
+          // Whole address first (items often differ only by ?id= or #/path), then without the fragment, then by
+          // path only when that names exactly one item, then by its text.
+          const ex = this.example;
+          const noTrail = (u: string) => u.replace(/\/$/, "");
+          const unique = (f: (u: string) => string) => {
+            if (!ex?.url) return undefined;
+            const m = links.filter((l) => l.url && f(l.url) === f(ex.url!));
+            return m.length === 1 ? m[0] : undefined;
+          };
+          const text = ex?.label?.replace(/\s+/g, " ").trim().slice(0, 40);
+          // Path only when the example had no ?query: with ?id= links, a lone other email isn't the example.
+          const hit = unique(noTrail) ?? unique((u) => noTrail(u.split("#")[0])) ?? (ex?.url?.includes("?") ? undefined : unique((u) => noTrail(u.split(/[?#]/)[0])))
+            ?? (text ? links.find((l) => l.label?.includes(text)) : undefined);
+          this.run.practice!.sameItem = !!hit;
+          pick = (hit ? [hit] : links.slice(0, 1));
+        }
+        this.run.items = pick.map((l) => ({ ...l, status: "waiting", vars: {}, log: [], expected: expected[l.url.split("/").pop()!] }));
       }
+      if (this.practicing && source !== "list") this.run.practice!.sameItem = true;
       this.run.status = "running"; this.changed();
       for (this.run.current = 0; this.run.current < this.run.items.length && !this.stopped; this.run.current++) {
         const it = this.item;
         it.status = "running"; this.changed();
         try { await this.runItem(); }
-        catch (e) { it.status = "failed"; this.log(`Stopped this item: ${(e as Error).message}`, "error"); }
+        catch (e) {
+          if (e instanceof PracticeEnd) { it.status = this.run.practice?.asked ? "skipped" : "done"; if (e.message) this.log(e.message, "ok"); }
+          else { it.status = "failed"; this.log(`Stopped this item: ${(e as Error).message}`, "error"); }
+        }
         await settle();
       }
       this.run.status = this.stopped ? "stopped" : "done";
@@ -248,8 +306,9 @@ export class Runner {
     } catch (e) {
       this.run.status = "failed"; this.run.error = (e as Error).message;
     } finally {
+      if (this.practicing) this.run.practice = this.practiceResult();
       this.run.endedAt = Date.now(); this.run.pending = null; this.changed();
-      await this.ctx.close().catch(() => {}); // after a sign-in pause this is a new browser, not `browser`
+      await this.ctx?.close().catch(() => {}); // after a sign-in pause this is a new browser, not `browser`
     }
   }
 
@@ -262,6 +321,30 @@ export class Runner {
     // "ask" means the rules should not decide alone: asking you, or reusing your answer, is right.
     const right = (i: Item) => i.status === "done" && (i.expected === "ask" ? i.decidedBy !== "rules" : i.outcome === i.expected);
     if (scored.length) this.run.score = { matched: scored.filter(right).length, total: scored.length };
+  }
+
+  /** How the practice went, against the demo: same values read, same choice made, where it stopped. */
+  private practiceResult(): Practice {
+    const p = this.run.practice ?? { sameItem: false, values: [], checked: 0, ok: false };
+    const it = this.run.items[0];
+    if (!it) return { ...p, problem: this.run.error ?? "there was nothing to practice on", ok: false };
+    const shown = Object.entries(this.spec.outcomes).filter(([, o]) => o.demonstrated).map(([k]) => k);
+    const expected = shown.length === 1 ? shown[0] : undefined;
+    // Read on the same item, a value should be what the person saw. Values worked out from today's date, or
+    // read on a page that changes (a "once" check), only need to be found.
+    const exact = p.sameItem && this.spec.inputs.source !== "once";
+    const values = this.spec.variables.filter((v) => !v.candidate && v.demoValue !== undefined && v.demoValue !== null).map((v) => {
+      const got = it.vars[v.name] ?? null;
+      return { name: v.name, got, want: v.demoValue, ok: got !== null && (!exact || v.kind === "computed" || same(got, v.demoValue)) };
+    });
+    // Failed: its last error. Skipped without a question (e.g. nothing new to upload): what it said.
+    const problem = it.status === "failed" ? it.log.filter((l) => l.level === "error").at(-1)?.msg.replace(/^Stopped this item: /, "")
+      : it.status === "skipped" && !p.asked ? it.log.at(-1)?.msg ?? "it skipped your example"
+      : this.run.error;
+    const checked = it.log.filter((l) => l.msg.startsWith("✓")).length;
+    const choseRight = !expected || !p.sameItem || it.outcome === expected;
+    return { ...p, outcome: it.outcome, expected, values, checked, problem,
+      ok: !problem && !p.asked && it.status === "done" && choseRight && values.every((v) => v.ok) };
   }
 
   private async runItem() {
@@ -329,7 +412,7 @@ export class Runner {
       if (it.status === "skipped") return;
     }
     it.status = "done"; this.changed();
-    if (it.vars.file_name && this.taskKey) markUsed(this.taskKey, [String(it.vars.file_name)]);
+    if (it.vars.file_name && this.taskKey && !this.practicing) markUsed(this.taskKey, [String(it.vars.file_name)]);
   }
 
   /** Pick a file from an allowed folder by the task's rule and hand it to the page's upload control. */
@@ -392,7 +475,13 @@ export class Runner {
     for (;;) {
       try { await this.exec(s, nextTab); return true; }
       catch (e) {
+        if (e instanceof PracticeEnd) throw e;
         if (e instanceof Skip) { this.item.status = "skipped"; this.log(e.message, "info"); return false; }
+        // A practice never waits on the person: whatever is in the way is what it reports.
+        if (this.practicing) {
+          if (await this.onSignInPage()) throw new Error(`a sign-in page is in the way (${new URL(this.page.url()).hostname}); sign in there once, then practice again`);
+          throw e;
+        }
         // A sign-in page in the way: hidden or not, pause and let the person sign in once in plain Chrome.
         if (!this.stopped && !this.inChrome && (await this.onSignInPage())) {
           if (await this.signIn(s)) continue;
@@ -539,7 +628,7 @@ export class Runner {
     else if (step.do === "goto") await this.page.goto(step.url!);
     else if (step.do === "extract") return this.extract(step.vars ?? []);
     else if (step.do === "compare") return this.compare(step);
-    else if (step.do === "upload") return this.upload(raw, step);
+    else if (step.do === "upload") { if (this.unsure(raw)) await this.approve(step); return this.upload(raw, step); }
     else if (step.do === "report") {
       // Tell the person: a Windows notification, and the update is kept on the run.
       // A value that doesn't exist yet (no previous run to compare with) drops its "(… since last time)"
@@ -547,6 +636,7 @@ export class Runner {
       const NONE = "\u0000";
       const msg = (raw.message ?? step.describe).replace(/\{\{\s*(\w+)\s*\}\}/g, (_, k) => (v[k] === undefined || v[k] === null || v[k] === "" ? NONE : String(v[k])))
         .replace(/\s*\([^()]*\u0000[^()]*\)/g, "").replaceAll(NONE, "–");
+      if (this.practicing) { this.log(`Would tell you: ${msg}`, "ok"); return; }
       it.report = msg;
       this.log(`Update: ${msg}`, "ok");
       notify(this.spec.title ?? "Remuse update", msg, `http://127.0.0.1:${process.env.PORT ?? 3200}/#/run/${this.run.id}`);
@@ -554,7 +644,7 @@ export class Runner {
     }
     else if (raw.tool && (await this.hasTool(raw.tool.name))) {
       // The page offers this action as a WebMCP tool: call it directly instead of clicking. Same approval gate.
-      const gated = raw.irreversible || IRREVERSIBLE.test(step.target?.name ?? "") || IRREVERSIBLE.test(raw.tool.name.replace(/_/g, " "));
+      const gated = raw.irreversible || IRREVERSIBLE.test(step.target?.name ?? "") || IRREVERSIBLE.test(raw.tool.name.replace(/_/g, " ")) || this.unsure(raw);
       if (gated && !(await this.approve(step))) return;
       const args = Object.fromEntries(Object.entries(raw.tool.args ?? {}).map(([k, x]) => [k, render(String(x), v)]));
       const out = await this.page.evaluate(async ({ name, args }) => {
@@ -570,9 +660,11 @@ export class Runner {
         else if (found?.point) { await this.page.mouse.click(found.point.x, found.point.y); await this.page.keyboard.press("Control+A"); await this.page.keyboard.type(step.value ?? ""); }
         else if (!step.target) await this.page.keyboard.type(step.value ?? ""); // no field: type where the focus is (a spreadsheet cell, an editor)
       } else if (step.do === "press") {
+        // Enter in a chat box sends: a press the spec marks irreversible waits for the OK like a click does.
+        if ((raw.irreversible || this.unsure(raw)) && !(await this.approve(step, found?.loc))) return;
         if (found?.loc) await found.loc.press(step.key ?? "Enter"); else await this.page.keyboard.press(step.key ?? "Enter");
       } else if (step.do === "click") {
-        const gated = raw.irreversible || IRREVERSIBLE.test(step.target?.name ?? "") || IRREVERSIBLE.test(found?.healedName ?? "");
+        const gated = raw.irreversible || IRREVERSIBLE.test(step.target?.name ?? "") || IRREVERSIBLE.test(found?.healedName ?? "") || this.unsure(raw);
         if (gated && !(await this.approve(step, found?.loc, found?.healedName))) return;
         if (found?.loc) await found.loc.click(); else if (found?.point) await this.page.mouse.click(found.point.x, found.point.y);
       }
@@ -583,6 +675,15 @@ export class Runner {
 
   private async approve(step: Step, loc?: Locator, healedName?: string): Promise<boolean> {
     const it = this.item;
+    if (this.practicing) {
+      // The thing it would do, outlined on the screen, and no further.
+      const { file } = await this.shot(loc);
+      // A real run asks you here, or (a plain button in the part that acts) would just do it.
+      const asks = !!step.irreversible || IRREVERSIBLE.test(step.target?.name ?? "") || IRREVERSIBLE.test(healedName ?? "") || IRREVERSIBLE.test(step.tool?.name.replace(/_/g, " ") ?? "");
+      Object.assign(this.run.practice!, { stoppedBefore: step.describe, stoppedForOk: asks });
+      this.log(`Next I'd ${step.describe.replace(/^./, (c) => c.toLowerCase())}${healedName ? ` (“${healedName}”)` : ""}. ${asks ? "A real run waits for your OK here" : "That changes something on the site"}, so the practice stops.`, "ok", file);
+      throw new PracticeEnd("");
+    }
     if (this.run.autoApprove) { this.log(`Approved in advance: ${step.describe}`, "info"); return true; }
     const { file } = await this.shot(loc);
     it.status = "approval";
@@ -739,7 +840,7 @@ export class Runner {
       ], "check");
     }
     if (r.ok) { this.log(`✓ ${step.describe} (checked on screen: ${r.why})`, "ok", file); return; }
-    this.log(`✗ ${step.describe}: ${domOk ? r.why : why}`, "error", file);
+    this.log(`✗ ${step.describe}: ${domOk ? r.why || "the screen doesn't show that it worked" : why}`, "error", file);
     throw new Error(`step didn't work: ${step.describe}`);
   }
 }
