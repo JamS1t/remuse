@@ -1,8 +1,8 @@
 // Run: plays a Task Spec on every item in the list with Playwright. DOM first, Muse Spark + SAM 3.1 when
 // the page changed. Checks every step, pauses for approval before anything irreversible, asks when unsure.
 import { chromium, type BrowserContext, type Page, type Locator } from "playwright";
-import { execFileSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { execFileSync, spawn } from "node:child_process";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { askJson, ground, sam, text, png, type Box } from "./meta.ts";
@@ -64,6 +64,18 @@ async function closeSignInWindow() {
   for (let i = 0; i < 20 && sameProfile().length; i++) await new Promise((r) => setTimeout(r, 500));
   for (const pid of sameProfile()) try { execFileSync("taskkill", ["/F", "/PID", pid]); } catch { /* gone */ }
 }
+/** Plain Chrome on Remuse's profile, not driven by anything: Google and other sites see an ordinary browser,
+ *  so signing in works. The sign-in stays in the profile runs use. */
+const CHROME = [process.env.PROGRAMFILES, process.env["PROGRAMFILES(X86)"], process.env.LOCALAPPDATA]
+  .map((d) => d && join(d, "Google", "Chrome", "Application", "chrome.exe")).find((p) => p && existsSync(p));
+export function openPlainChrome(url: string) {
+  if (!CHROME) return false;
+  spawn(CHROME, [`--user-data-dir=${PROFILE}`, "--no-first-run", "--no-default-browser-check", url], { detached: true, stdio: "ignore" }).unref();
+  return true;
+}
+export const plainChromeOpen = () => sameProfile().length > 0;
+const SIGN_IN = /accounts\.google\.com|\/(log-?in|sign-?in|sign_in|auth|sso)\b/i;
+
 const launch = async (opts: Parameters<typeof chromium.launchPersistentContext>[1]) => {
   await closeSignInWindow();
   try { return await chromium.launchPersistentContext(PROFILE, { ...opts, channel: "chrome" }); }
@@ -71,7 +83,12 @@ const launch = async (opts: Parameters<typeof chromium.launchPersistentContext>[
 };
 
 export async function openBrowser(headless: boolean): Promise<BrowserContext> {
-  const opts = { headless, viewport: VIEW, args: headless ? [] : [`--window-size=${VIEW.width},${VIEW.height + 120}`] };
+  // Without the "controlled by automation" flags, sites that refuse automated browsers (Google's
+  // "this browser may not be secure") treat Remuse's browser like any other Chrome.
+  const opts = {
+    headless, viewport: VIEW, ignoreDefaultArgs: ["--enable-automation"],
+    args: ["--disable-blink-features=AutomationControlled", ...(headless ? [] : [`--window-size=${VIEW.width},${VIEW.height + 120}`])],
+  };
   if (headless && !realUA) {
     const probe = await launch(opts);
     const ua = await (probe.pages()[0] ?? (await probe.newPage())).evaluate(() => navigator.userAgent).catch(() => "");
@@ -104,6 +121,9 @@ export class Runner {
   // Tabs by the name the spec gives them.
   tabs = new Map<string, Page>();
   tabName = "";
+  headless = true;
+  // Re-attaches the download watcher when the browser is reopened after a sign-in pause.
+  watch: (ctx: BrowserContext) => void = () => {};
   stopped = false;
   // Variables from the previous run of this task, by item label, for {{prev_<name>}} ("change since last time").
   prev: Record<string, Record<string, unknown>> = {};
@@ -153,8 +173,8 @@ export class Runner {
   }
 
   async start(limit?: number) {
-    const headless = process.env.HEADLESS === "1" || !this.run.visible;
-    const browser = await openBrowser(headless);
+    this.headless = process.env.HEADLESS === "1" || !this.run.visible;
+    const browser = await openBrowser(this.headless);
     try {
       this.ctx = browser;
       this.page = browser.pages()[0] ?? (await browser.newPage());
@@ -173,8 +193,8 @@ export class Runner {
             } catch (e) { it?.log.push({ at: Date.now(), msg: `Couldn't save a download: ${(e as Error).message}`, level: "warn" }); this.changed(); }
           })());
         });
-        browser.pages().forEach(watch);
-        browser.on("page", watch);
+        this.watch = (ctx) => { ctx.pages().forEach(watch); ctx.on("page", watch); };
+        this.watch(browser);
       }
       const { source, listUrl, itemSelector } = this.spec.inputs;
       if (source === "once") {
@@ -205,7 +225,7 @@ export class Runner {
       this.run.status = "failed"; this.run.error = (e as Error).message;
     } finally {
       this.run.endedAt = Date.now(); this.run.pending = null; this.changed();
-      await browser.close();
+      await this.ctx.close().catch(() => {}); // after a sign-in pause this is a new browser, not `browser`
     }
   }
 
@@ -349,6 +369,11 @@ export class Runner {
       try { await this.exec(s, nextTab); return true; }
       catch (e) {
         if (e instanceof Skip) { this.item.status = "skipped"; this.log(e.message, "info"); return false; }
+        // A sign-in page in the way: hidden or not, pause and let the person sign in once in plain Chrome.
+        if (!this.stopped && (await this.onSignInPage())) {
+          if (await this.signIn(s)) continue;
+          this.item.status = "skipped"; return false;
+        }
         // A hidden run has no window to hand over: the item fails and says why instead of waiting forever.
         if (this.stopped || process.env.HEADLESS === "1" || !this.run.visible) throw e;
         const { file } = await this.shot();
@@ -361,6 +386,49 @@ export class Runner {
         this.log("Trying again.", "info");
       }
     }
+  }
+
+  private async onSignInPage() {
+    if (this.page.isClosed()) return false;
+    return SIGN_IN.test(this.page.url()) || (await this.page.locator("input[type=password]:visible").count().catch(() => 0)) > 0;
+  }
+
+  /** A sign-in page is in the way. Close the run's browser, open the same page in plain Chrome on the same
+   *  profile, and wait for the person to sign in and close that window (or answer on the run page). Then
+   *  reopen every tab where it was and carry on. Returns false if they chose to skip. */
+  private async signIn(s: Step): Promise<boolean> {
+    const url = this.page.url(), site = new URL(url).hostname.replace(/^www\./, "");
+    const { file } = await this.shot();
+    const tabs = [...this.tabs].map(([name, p]) => [name, p.isClosed() ? "" : p.url()] as const);
+    const here = this.tabName;
+    await this.ctx.close().catch(() => {});
+    if (!openPlainChrome(url)) throw new Error(`a sign-in page is in the way (${site}) and Chrome isn't installed to show it`);
+    const problem = `This needs you to sign in to ${site}. Sign in in the Chrome window that just opened, then close that window. I'll carry on by myself.`;
+    this.log(`Waiting for you to sign in to ${site}`, "warn", file);
+    notify("Remuse needs you to sign in", `Sign in to ${site} in the window that opened, then close it.`, `http://127.0.0.1:${process.env.PORT ?? 3200}/#/run/${this.run.id}`);
+    this.item.status = "asking";
+    const answer = this.wait({ kind: "handoff", item: this.run.current, step: s.describe, problem, shot: file });
+    // ponytail: polls the process list every 2 s, up to 30 min; a scheduled run waits that long at most.
+    let a: Answer | null = null;
+    answer.then((x) => { a = x; });
+    for (let i = 0; i < 900 && !a && plainChromeOpen(); i++) await new Promise((r) => setTimeout(r, 2000));
+    if (!a) { if (plainChromeOpen()) this.answer({ decision: "skip" }); else this.answer({ decision: "retry" }); }
+    const got = (await answer) as Answer;
+    this.item.status = "running";
+    // Back to work: the same browser profile, now signed in, every tab where it was.
+    this.ctx = await openBrowser(this.headless);
+    this.watch(this.ctx);
+    this.tabs = new Map();
+    for (const [name, u] of tabs) {
+      const p = this.tabs.size ? await this.ctx.newPage() : this.ctx.pages()[0] ?? (await this.ctx.newPage());
+      if (u) await p.goto(u).catch(() => {});
+      this.tabs.set(name, p);
+    }
+    this.page = this.tabs.get(here) ?? this.ctx.pages()[0] ?? (await this.ctx.newPage());
+    if (!this.tabs.size) await this.page.goto(url).catch(() => {});
+    if (got.decision !== "retry") { this.log("Skipped, as you asked.", "info"); return false; }
+    this.log(`Signed in to ${site}. Carrying on.`, "ok");
+    return true;
   }
 
   /** Open the top results on this page, read the same values on each, keep the best by the person's rule. */

@@ -53,7 +53,8 @@ You teach it by doing the task once and talking through why. There's nothing to 
    - **Checks:** every step is checked against the page, and Muse Spark looks at the screen after every irreversible action.
    - **Approvals:** it stops for your OK before paying, checking out, sending and similar steps.
    - **Questions:** it asks when an item is outside your rules or a value can't be read. Your answer is remembered and saved into the next spec version.
-   - **Your turn:** if a sign-in page, a captcha or a popup gets in the way, it hands the browser to you, then tries again.
+   - **Signing in:** if a run (hidden or not) lands on a sign-in page, it pauses, opens that page in a plain Chrome window on its own profile and notifies you. You sign in once and close the window; it reopens every tab where it was and carries on. Google sites are signed into this way, never by copying your login.
+   - **Your turn:** if a captcha or a popup gets in the way, it hands the browser to you, then tries again.
    - **Tabs:** a task can span several tabs (an inbox and a sheet, a store and a tracker, one tab per site you post to). Each step knows its tab; the Agent keeps every tab open as it was left, follows tabs a site opens by itself, and carries values read in one tab into the others.
    - **Files:** it uploads from folders you allowed (the next file in line, the newest, or the one labelled with today's date and time), with the caption from a `.txt` file of the same name, never posting a file twice; downloads go into a folder you choose.
 
@@ -91,6 +92,7 @@ For development: `cd backend && npm start` runs the Agent in a terminal (http://
 | `cd backend && node test/tabs.e2e.ts` | A task across three tabs: reads values in a tab the site opened, types them into another tab, returns to the first tab as it was left |
 | `cd backend && node test/tabs-learn.e2e.ts <narration.wav>` | Records a three-tab demo through the extension, Muse Spark learns which step happens in which tab, and the run copies new data across tabs |
 | `cd backend && node test/sheets.e2e.ts <narration.wav>` | A recording past 30 s keeps the whole voice track; pointing at something (no click) is recorded; typing in a spreadsheet grid is recorded with its cell; the runner writes a cell through the Name Box |
+| `cd backend && node test/signin.e2e.ts` | A hidden run that hits a sign-in page pauses, opens it in plain Chrome for you, then carries on where it was |
 | `cd backend && node test/webmcp.check.ts` | A page's WebMCP tool is seen and called by the Agent's browser |
 | `cd mock-apps && npm run check` | The test sites' data agrees with the spoken rules |
 | `node --env-file=.env scripts/risk-tests.mjs` | The day-1 Meta API checks |
