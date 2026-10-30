@@ -164,6 +164,10 @@ export function itemKey(i: { url: string; label: string }) {
 /** A step that waits for the person's OK in a real run: marked irreversible, a word like "refund", or such a site tool. */
 const gatedStep = (s: Step) => !!s.irreversible || (s.do === "click" && IRREVERSIBLE.test(s.target?.name ?? "")) || (!!s.tool && IRREVERSIBLE.test(s.tool.name.replace(/_/g, " ")));
 
+/** Test sites only: an outcome by what it means ("send_replacement" is "replace", "refund_lost" is "lost_refund"),
+ *  so a run can be scored whatever names the model gave the outcomes. */
+export const meaning = (o?: string) => (!o ? o : /lost/i.test(o) ? "lost_refund" : /declin/i.test(o) ? "decline" : /replac/i.test(o) ? "replace" : /refund/i.test(o) ? "refund" : o);
+
 const manila = () => new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Manila" });
 // The reply is kept as a template, so its own {{values}} are filled where it's typed (one level, reply only:
 // text read from a page is never treated as a template).
@@ -227,7 +231,10 @@ export class Runner {
 
   private async shot(highlight?: Locator): Promise<{ file: string; buf: Buffer }> {
     if (highlight) await highlight.evaluate((el: HTMLElement) => { el.dataset.showrunOutline = el.style.outline; el.style.outline = "4px solid #f59e0b"; el.style.outlineOffset = "2px"; }).catch(() => {});
-    const buf = await this.page.screenshot();
+    // A page that keeps animating can make a screenshot wait forever: animations are frozen for it, and it gives up
+    // after 15 s and tries once more.
+    const snap = () => this.page.screenshot({ timeout: 15_000, animations: "disabled" });
+    const buf = await snap().catch(async (e) => { if (this.stopped || this.page.isClosed()) throw e; await this.page.waitForTimeout(1000); return snap(); });
     if (highlight) await highlight.evaluate((el: HTMLElement) => { el.style.outline = el.dataset.showrunOutline ?? ""; }).catch(() => {});
     const file = `${++this.shots}.png`;
     writeFileSync(join(this.dir, file), buf);
@@ -245,7 +252,7 @@ export class Runner {
     const w = Math.min(vw, Math.max(560, b.width + 240)), h = Math.min(vh, Math.max(350, b.height + 160));
     const x = Math.min(Math.max(0, b.x + b.width / 2 - w / 2), vw - w), y = Math.min(Math.max(0, b.y + b.height / 2 - h / 2), vh - h);
     const was = await loc.evaluate((el: HTMLElement) => { const o = [el.style.outline, el.style.outlineOffset]; el.style.outline = "3px solid #a78bfa"; el.style.outlineOffset = "2px"; return o; }, undefined, { timeout: 1000 }).catch(() => null);
-    const buf = b.y + b.height > 0 && b.y < vh ? await this.page.screenshot({ clip: { x, y, width: w, height: h } }).catch(() => null) : null;
+    const buf = b.y + b.height > 0 && b.y < vh ? await this.page.screenshot({ clip: { x, y, width: w, height: h }, timeout: 10_000, animations: "disabled" }).catch(() => null) : null;
     if (was) await loc.evaluate((el: HTMLElement, [o, off]) => { el.style.outline = o; el.style.outlineOffset = off; }, was, { timeout: 1000 }).catch(() => {});
     if (!buf) return undefined;
     const file = `${++this.shots}.png`;
@@ -444,7 +451,7 @@ export class Runner {
   private scoreRun() {
     const scored = this.run.items.filter((i) => i.expected && i.outcome);
     // "ask" means the rules should not decide alone: asking you, or reusing your answer, is right.
-    const right = (i: Item) => i.status === "done" && (i.expected === "ask" ? i.decidedBy !== "rules" : i.outcome === i.expected);
+    const right = (i: Item) => i.status === "done" && (i.expected === "ask" ? i.decidedBy !== "rules" : meaning(i.outcome) === i.expected);
     if (scored.length) this.run.score = { matched: scored.filter(right).length, total: scored.length };
   }
 
@@ -494,58 +501,68 @@ export class Runner {
       this.log(`${v.name} = ${JSON.stringify(it.vars[v.name])} (computed)`, "info");
     }
 
-    // Decide: learned answers first, then the scope check, then the person's rules (as code).
+    // Decide. Your own rules come first: one that clearly applies (anything but the "otherwise" catch-all) decides,
+    // whatever kind of request it is. Only what would fall through to "otherwise" looks at the kind: a kind your rules
+    // were meant for takes "otherwise", one you answered for earlier in this run takes that answer, any other is asked.
     const typeVar = "item_type" in it.vars ? "item_type" : "request_type";
     const rt = it.vars[typeVar] as string | undefined;
     const learned = this.run.learned.find((l) => l.requestType === rt);
     const missing = this.spec.variables.filter((v) => v.kind !== "computed" && !v.candidate && (it.vars[v.name] === null || it.vars[v.name] === undefined)).map((v) => v.name);
     let reply: string | undefined;
-    if (missing.length && !learned) {
-      // Deciding without the facts would be a guess.
+    let d: { outcome: string; rule: number } | null = null;
+    if (!missing.length) { try { d = this.rules.decide(it.vars); } catch (e) { d = null; this.log(`My rules' code failed on this one (${(e as Error).message.slice(0, 100)}).`, "warn"); } }
+    const matched = d ? this.baseRules[d.rule] : undefined;
+    // The catch-all: worded "otherwise", or simply your last rule (the model may phrase it "photo shows no damage"), or
+    // a rule index that doesn't line up with its outcome. Misjudging this way only asks more; it never acts more.
+    const catchAll = !matched || !d || matched.then !== d.outcome || d.rule === this.baseRules.length - 1 || /^\s*(otherwise|else|default)\b/i.test(matched.if);
+    const outOfScope = !!rt && !!this.spec.scopeTypes?.length && !this.spec.scopeTypes.includes(rt);
+    const ask = async (question: string, note: string, requestType?: string) => {
       const { file } = await this.shot();
-      this.log(`I couldn't read ${missing.join(", ")}, so I won't guess.`, "warn", file);
+      this.log(note, "warn", file);
       it.status = "asking";
-      const a = await this.wait({ kind: "ask", item: this.run.current, shot: file, options: Object.keys(this.spec.outcomes),
-        question: `I couldn't read ${missing.join(", ")} for "${it.label}". What should I do?` });
+      const a = await this.wait({ kind: "ask", item: this.run.current, requestType, shot: file, options: Object.keys(this.spec.outcomes), question });
       it.status = "running";
-      if (!a.outcome || !this.spec.outcomes[a.outcome]) { it.status = "skipped"; it.byYou = !this.stopped; this.log("Skipped, as you asked.", "info"); return; }
-      it.outcome = a.outcome; reply = a.reply || undefined;
-      it.because = `You told me${a.note ? `: ${a.note}` : ""}`; it.decidedBy = "you";
-    } else if (learned) {
-      it.outcome = learned.outcome; reply = learned.reply;
-      it.decidedBy = "learned"; it.because = `You showed me what to do with "${rt}" earlier in this run${learned.note ? `: ${learned.note}` : ""}`;
-    } else if (rt && this.spec.scopeTypes?.length && !this.spec.scopeTypes.includes(rt)) {
-      const { file } = await this.shot();
-      this.log(`This looks like "${rt}". My rules don't cover it, so I'm asking.`, "warn", file);
-      it.status = "asking";
-      const a = await this.wait({ kind: "ask", item: this.run.current, requestType: rt, shot: file, options: Object.keys(this.spec.outcomes),
-        question: `"${it.label}" looks like ${rt.replace(/_/g, " ")}. Your rules don't cover that. What should I do?` });
-      it.status = "running";
-      if (!a.outcome || !this.spec.outcomes[a.outcome]) { it.status = "skipped"; it.byYou = !this.stopped; this.log("Skipped, as you asked.", "info"); return; }
-      it.outcome = a.outcome; reply = a.reply || undefined;
-      it.because = `You told me${a.note ? `: ${a.note}` : ""}`; it.decidedBy = "you";
-      if (a.learn !== false) {
-        this.run.learned.push({ requestType: rt, outcome: a.outcome, note: a.note, reply: a.reply || undefined });
-        this.spec.rules.unshift({ if: `${typeVar} is ${rt}`, then: a.outcome, said: a.note, learned: true });
-        this.spec.scopeTypes.push(rt);
-        this.log(`Learned: "${rt}" → ${a.outcome}. I'll do the same for the next one.`, "ok");
-      }
-    } else {
-      const d = this.rules.decide(it.vars);
-      it.outcome = d.outcome;
-      const rule = this.baseRules[d.rule];
-      it.decidedBy = "rules"; it.because = rule ? `${rule.if}${rule.said ? ` ("${rule.said}")` : ""}` : "rule " + d.rule;
-      // About to do something that can't be undone because of a judgement call: the checker answers the same
-      // questions on its own first. If they disagree, the person decides.
+      return a;
+    };
+    // Decided by your rules; before anything irreversible that rests on a judgement, the checker looks too.
+    const byRules = async () => {
+      it.outcome = d!.outcome;
+      it.decidedBy = "rules"; it.because = matched ? `${matched.if}${matched.said ? ` ("${matched.said}")` : ""}` : "rule " + d!.rule;
       if (checker().independent && (this.spec.outcomes[it.outcome!]?.steps ?? []).some(gatedStep)) {
         const a = await this.secondLook(it);
         if (a) {
-          if (!a.outcome || !this.spec.outcomes[a.outcome]) { it.status = "skipped"; it.byYou = !this.stopped; this.log("Skipped, as you asked.", "info"); return; }
+          if (!a.outcome || !this.spec.outcomes[a.outcome]) { it.status = "skipped"; it.byYou = !this.stopped; this.log("Skipped, as you asked.", "info"); return false; }
           it.outcome = a.outcome; reply = a.reply || undefined;
           it.because = `You decided when the two models disagreed${a.note ? `: ${a.note}` : ""}`; it.decidedBy = "you";
         }
       }
-    }
+      return true;
+    };
+    if (missing.length) {
+      // Deciding without the facts would be a guess (an answer you gave earlier for this kind included).
+      const a = await ask(`I couldn't read ${missing.join(", ")} for "${it.label}". What should I do?`, `I couldn't read ${missing.join(", ")}, so I won't guess.`);
+      if (!a.outcome || !this.spec.outcomes[a.outcome]) { it.status = "skipped"; it.byYou = !this.stopped; this.log("Skipped, as you asked.", "info"); return; }
+      it.outcome = a.outcome; reply = a.reply || undefined;
+      it.because = `You told me${a.note ? `: ${a.note}` : ""}`; it.decidedBy = "you";
+    } else if (d && !catchAll) {
+      if (!(await byRules())) return;
+    } else if (learned) {
+      it.outcome = learned.outcome; reply = learned.reply;
+      it.decidedBy = "learned"; it.because = `You showed me what to do with "${rt}" earlier in this run${learned.note ? `: ${learned.note}` : ""}`;
+    } else if (outOfScope) {
+      const a = await ask(`"${it.label}" looks like ${rt!.replace(/_/g, " ")}. None of your rules is about that. What should I do?`, `This looks like "${rt}". None of your rules is about that, so I'm asking.`, rt);
+      if (!a.outcome || !this.spec.outcomes[a.outcome]) { it.status = "skipped"; it.byYou = !this.stopped; this.log("Skipped, as you asked.", "info"); return; }
+      it.outcome = a.outcome; reply = a.reply || undefined;
+      it.because = `You told me${a.note ? `: ${a.note}` : ""}`; it.decidedBy = "you";
+      if (a.learn !== false) {
+        this.run.learned.push({ requestType: rt!, outcome: a.outcome, note: a.note, reply: a.reply || undefined });
+        this.spec.rules.unshift({ if: `${typeVar} is ${rt}`, then: a.outcome, said: a.note, learned: true });
+        this.spec.scopeTypes.push(rt!);
+        this.log(`Learned: "${rt}" → ${a.outcome}. I'll do the same for the next one (your other rules still come first).`, "ok");
+      }
+    } else if (d) {
+      if (!(await byRules())) return;
+    } else throw new Error("my rules couldn't decide this one");
     // The values it decided on, in plain words, kept with the decision.
     const read = this.spec.variables.filter((x) => !x.candidate && it.vars[x.name] !== null && it.vars[x.name] !== undefined && typeof it.vars[x.name] !== "object")
       .map((x) => `${x.name.replaceAll("_", " ")} ${short(String(it.vars[x.name]))}${it.vars[`prev_${x.name}`] != null ? ` (last time ${short(String(it.vars[`prev_${x.name}`]))})` : ""}`).join(" · ");
@@ -950,6 +967,17 @@ export class Runner {
       const inside = segs.filter((b) => cx >= b.x_min && cx <= b.x_max && cy >= b.y_min && cy <= b.y_max);
       inside.sort((a, b) => (a.x_max - a.x_min) * (a.y_max - a.y_min) - (b.x_max - b.x_min) * (b.y_max - b.y_min));
       if (inside[0]) { use = inside[0]; snapped = true; }
+      else {
+        // Muse Spark's box a little off: the SAM 3.1 element that overlaps it most (at least a third, by area), or,
+        // failing that, one that is very close and clearly the nearest. Otherwise its own box stands.
+        const area = (b: Box) => Math.max(0, b.x_max - b.x_min) * Math.max(0, b.y_max - b.y_min);
+        const iou = (b: Box) => { const i = area({ x_min: Math.max(b.x_min, box.x_min), y_min: Math.max(b.y_min, box.y_min), x_max: Math.min(b.x_max, box.x_max), y_max: Math.min(b.y_max, box.y_max) }); return i / (area(b) + area(box) - i || 1); };
+        const dist = (b: Box) => Math.hypot((b.x_min + b.x_max) / 2 - cx, (b.y_min + b.y_max) / 2 - cy);
+        const overlap = [...segs].sort((a, b) => iou(b) - iou(a))[0];
+        const [n1, n2] = [...segs].sort((a, b) => dist(a) - dist(b));
+        if (overlap && iou(overlap) >= 0.33) { use = overlap; snapped = true; }
+        else if (n1 && dist(n1) <= 25 && (!n2 || dist(n2) >= 1.5 * dist(n1))) { use = n1; snapped = true; }
+      }
     } catch (e) { this.log(`SAM 3.1 unavailable (${(e as Error).message.slice(0, 80)}); using Muse Spark's box.`, "warn"); }
     // The page's real size (your Chrome's window can differ from Remuse's own browser), as the screenshot was.
     const [vw, vh] = await this.page.evaluate(() => [innerWidth, innerHeight]).catch(() => [VIEW.width, VIEW.height]);
@@ -1040,9 +1068,15 @@ export class Runner {
     // One Muse Spark call per page for everything that needs judgement or eyes.
     const imgs = await this.page.locator("main img, article img, figure img").all();
     const photos: Buffer[] = [];
-    for (const img of imgs.slice(0, 3)) if (await img.isVisible()) photos.push(await img.screenshot());
+    let missed = 0; // photos on the page it couldn't capture
+    for (const img of imgs.slice(0, 3)) {
+      if (!(await img.isVisible().catch(() => false))) continue;
+      const pic = await img.screenshot({ timeout: 5000 }).catch(() => img.screenshot({ timeout: 5000, animations: "disabled" })).catch(() => null);
+      if (pic) photos.push(pic); else missed++;
+    }
     const ask: Record<string, unknown> = {};
     for (const v of looks) {
+      if (v.kind === "vision" && missed) { bag[v.name] = null; this.log(`${v.name}: a photo on the page couldn't be captured, so I won't guess.`, "warn"); continue; }
       if (v.kind === "vision" && !photos.length) { bag[v.name] = false; this.log(`${v.name} = false (no photo on the page)`, "info"); continue; }
       ask[v.name] = v.kind === "vision" ? { question: v.question, answer: "true or false" } : { question: v.question, answer: `one of ${JSON.stringify(v.options)}` };
     }

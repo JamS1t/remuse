@@ -1,0 +1,607 @@
+{
+  "learnedAt": "2026-10-30T16:33:09.210Z",
+  "transcript": "I'm handling a customer complaint email. I open the email and read the order number. Now I look it up in the store admin and check the order date. Then I check the parcel on the courier site. It says delivered. My rules are if the courier says the parcel is lost refund the order and apologize. If the order is more than 30 days old politely decline. If the customer customer sent a photo that shows damage send a replacement. Otherwise refund the order. this order is six days old and the photo photo shows the mug is cracked so I send a replacement then I reply to the the customer to tell them",
+  "checks": [
+    {
+      "name": "extract order_number",
+      "ok": true,
+      "detail": "got \"KG-10401\", demo showed \"KG-10401\""
+    },
+    {
+      "name": "extract customer_name",
+      "ok": true,
+      "detail": "got \"Maria Santos\", demo showed \"Maria Santos\""
+    },
+    {
+      "name": "extract order_date",
+      "ok": true,
+      "detail": "got \"2026-10-25\", demo showed \"2026-10-25\""
+    },
+    {
+      "name": "extract tracking_number",
+      "ok": true,
+      "detail": "got \"BX782137PH\", demo showed \"BX782137PH\""
+    },
+    {
+      "name": "extract courier_status",
+      "ok": true,
+      "detail": "got \"Delivered\", demo showed \"Delivered\""
+    },
+    {
+      "name": "compute days_since_order",
+      "ok": true,
+      "detail": "got 6, demo had 6"
+    },
+    {
+      "name": "demo case decides like the person did",
+      "ok": true,
+      "detail": "decide() said send_replacement, the person did send_replacement"
+    },
+    {
+      "name": "rule test: lost parcel",
+      "ok": true,
+      "detail": "expected refund, got refund"
+    },
+    {
+      "name": "rule test: old order declines even with damage photo",
+      "ok": true,
+      "detail": "expected decline, got decline"
+    },
+    {
+      "name": "rule test: damaged photo sends replacement",
+      "ok": true,
+      "detail": "expected send_replacement, got send_replacement"
+    },
+    {
+      "name": "rule test: otherwise refund",
+      "ok": true,
+      "detail": "expected refund, got refund"
+    },
+    {
+      "name": "rule test: exactly 30 days is not more than 30",
+      "ok": true,
+      "detail": "expected refund, got refund"
+    },
+    {
+      "name": "rule test: missing values fall through to refund",
+      "ok": true,
+      "detail": "expected refund, got refund"
+    },
+    {
+      "name": "rule test: lost case-insensitive with spaces",
+      "ok": true,
+      "detail": "expected refund, got refund"
+    }
+  ],
+  "spec": {
+    "title": "Resolve a complaint",
+    "goal": "Resolve each customer complaint by checking the order and parcel status then replacing, refunding or declining with a reply.",
+    "scope": "Damaged-item and lost-parcel complaints; other complaint kinds must be asked about.",
+    "scopeTypes": [
+      "damaged item",
+      "lost parcel"
+    ],
+    "saveDownloads": null,
+    "schedule": null,
+    "inputs": {
+      "source": "list",
+      "itemName": "email",
+      "listUrl": "http://localhost:3100/inbox",
+      "itemEvent": 1,
+      "columns": [],
+      "itemSelector": "body > div > ul > li > a"
+    },
+    "variables": [
+      {
+        "name": "item_type",
+        "kind": "judge",
+        "description": "Kind of complaint in the email text",
+        "demoValue": "damaged item",
+        "question": "What kind of complaint is this email?",
+        "options": [
+          "damaged item",
+          "lost parcel",
+          "wrong item received",
+          "late delivery",
+          "change of mind",
+          "other"
+        ]
+      },
+      {
+        "name": "order_number",
+        "kind": "text",
+        "description": "Order number mentioned in the email",
+        "demoValue": "KG-10401"
+      },
+      {
+        "name": "customer_name",
+        "kind": "text",
+        "description": "Customer name from the email and order",
+        "demoValue": "Maria Santos"
+      },
+      {
+        "name": "photo_shows_damage",
+        "kind": "vision",
+        "description": "Whether the attached photo shows a damaged item",
+        "demoValue": true,
+        "question": "Does the attached photo show a damaged item?"
+      },
+      {
+        "name": "order_date",
+        "kind": "text",
+        "description": "Order date on the store order page",
+        "demoValue": "2026-10-25"
+      },
+      {
+        "name": "tracking_number",
+        "kind": "text",
+        "description": "Tracking number on the store order page",
+        "demoValue": "BX782137PH"
+      },
+      {
+        "name": "days_since_order",
+        "kind": "computed",
+        "description": "Days from order_date to today",
+        "demoValue": 6,
+        "from": [
+          "order_date"
+        ]
+      },
+      {
+        "name": "courier_status",
+        "kind": "text",
+        "description": "Parcel status on the courier site, e.g. Delivered or Lost",
+        "demoValue": "Delivered"
+      }
+    ],
+    "steps": [
+      {
+        "id": "s1",
+        "do": "open_item",
+        "describe": "Open the complaint email from the inbox list",
+        "expect": {
+          "looks": "complaint email with order number, message and photo"
+        },
+        "irreversible": false,
+        "fromEvent": 1
+      },
+      {
+        "id": "s2",
+        "do": "extract",
+        "vars": [
+          "item_type",
+          "order_number",
+          "customer_name",
+          "photo_shows_damage"
+        ],
+        "describe": "Read complaint type, order number, customer and whether photo shows damage",
+        "expect": {
+          "textIncludes": "{{order_number}}",
+          "looks": "order number, customer and cracked item photo visible"
+        },
+        "irreversible": false,
+        "fromEvent": 3
+      },
+      {
+        "id": "s3",
+        "do": "goto",
+        "url": "http://localhost:3100/store",
+        "describe": "Go to store orders to look up the order",
+        "expect": {
+          "looks": "orders list with search box"
+        },
+        "irreversible": false,
+        "fromEvent": 4
+      },
+      {
+        "id": "s4",
+        "do": "fill",
+        "target": {
+          "role": "textbox",
+          "name": "Search orders",
+          "selector": "body > div:nth-of-type(2) > main > form > input"
+        },
+        "value": "{{order_number}}",
+        "describe": "Search for order {{order_number}}",
+        "expect": {
+          "looks": "order number in search box"
+        },
+        "irreversible": false,
+        "fromEvent": 5
+      },
+      {
+        "id": "s5",
+        "do": "press",
+        "target": {
+          "role": "textbox",
+          "name": "Search orders",
+          "selector": "body > div:nth-of-type(2) > main > form > input"
+        },
+        "key": "Enter",
+        "describe": "Submit order search",
+        "expect": {
+          "textIncludes": "{{order_number}}",
+          "looks": "filtered to one order"
+        },
+        "irreversible": false,
+        "fromEvent": 6
+      },
+      {
+        "id": "s6",
+        "do": "click",
+        "target": {
+          "role": "link",
+          "name": "{{order_number}}",
+          "selector": "table > tbody > tr > td:nth-of-type(1) > a"
+        },
+        "describe": "Open order {{order_number}}",
+        "expect": {
+          "urlIncludes": "{{order_number}}",
+          "looks": "order details with date and tracking number"
+        },
+        "irreversible": false,
+        "fromEvent": 8
+      },
+      {
+        "id": "s7",
+        "do": "extract",
+        "vars": [
+          "order_date",
+          "tracking_number",
+          "days_since_order"
+        ],
+        "describe": "Read order date and tracking number and compute age",
+        "expect": {
+          "textIncludes": "{{order_date}}",
+          "looks": "order date and tracking number shown"
+        },
+        "irreversible": false,
+        "fromEvent": 10
+      },
+      {
+        "id": "s8",
+        "do": "goto",
+        "url": "http://localhost:3100/courier",
+        "describe": "Go to courier site to check parcel",
+        "expect": {
+          "looks": "parcel tracking form"
+        },
+        "irreversible": false,
+        "fromEvent": 11
+      },
+      {
+        "id": "s9",
+        "do": "fill",
+        "target": {
+          "role": "textbox",
+          "name": "Tracking number",
+          "selector": "body > div:nth-of-type(2) > main > form > input"
+        },
+        "value": "{{tracking_number}}",
+        "describe": "Enter tracking number {{tracking_number}}",
+        "expect": {
+          "looks": "tracking number in box"
+        },
+        "irreversible": false,
+        "fromEvent": 12
+      },
+      {
+        "id": "s10",
+        "do": "click",
+        "target": {
+          "role": "button",
+          "name": "Track",
+          "selector": "body > div:nth-of-type(2) > main > form > button"
+        },
+        "describe": "Track the parcel",
+        "expect": {
+          "textIncludes": "{{tracking_number}}",
+          "looks": "parcel status shown"
+        },
+        "irreversible": false,
+        "fromEvent": 13
+      },
+      {
+        "id": "s11",
+        "do": "extract",
+        "vars": [
+          "courier_status"
+        ],
+        "describe": "Read parcel delivery status",
+        "expect": {
+          "textIncludes": "{{courier_status}}",
+          "looks": "status Delivered or Lost shown"
+        },
+        "irreversible": false,
+        "fromEvent": null
+      }
+    ],
+    "rules": [
+      {
+        "if": "courier_status is Lost",
+        "then": "refund",
+        "said": "if the courier says the parcel is lost refund the order and apologize"
+      },
+      {
+        "if": "days_since_order is more than 30",
+        "then": "decline",
+        "said": "If the order is more than 30 days old politely decline"
+      },
+      {
+        "if": "photo_shows_damage is true",
+        "then": "send_replacement",
+        "said": "If the customer sent a photo that shows damage send a replacement"
+      },
+      {
+        "if": "otherwise",
+        "then": "refund",
+        "said": "Otherwise refund the order"
+      }
+    ],
+    "outcomes": {
+      "send_replacement": {
+        "describe": "Send a replacement and reply that it is on its way",
+        "reply": "Hi {{customer_name}}, sorry about the {{item_type}}. A replacement is on its way for order {{order_number}}.",
+        "demonstrated": true,
+        "steps": [
+          {
+            "id": "s1",
+            "do": "goto",
+            "url": "http://localhost:3100/store/orders/{{order_number}}",
+            "describe": "Go to order {{order_number}} to send replacement",
+            "expect": {
+              "urlIncludes": "{{order_number}}",
+              "looks": "order details with Replace action"
+            },
+            "irreversible": false,
+            "fromEvent": 15
+          },
+          {
+            "id": "s2",
+            "do": "fill",
+            "target": {
+              "role": "textbox",
+              "name": "Replacement reason",
+              "selector": "div:nth-of-type(2) > main > div > form:nth-of-type(2) > input:nth-of-type(3)"
+            },
+            "value": "{{item_type}} confirmed by photo for order {{order_number}}",
+            "describe": "Enter replacement reason for {{order_number}}",
+            "expect": {
+              "looks": "replacement reason filled"
+            },
+            "irreversible": false,
+            "fromEvent": 16
+          },
+          {
+            "id": "s3",
+            "do": "click",
+            "target": {
+              "role": "button",
+              "name": "Replace",
+              "selector": "div:nth-of-type(2) > main > div > form:nth-of-type(2) > button"
+            },
+            "describe": "Send replacement",
+            "expect": {
+              "textIncludes": "Replacement sent",
+              "looks": "replacement confirmation shown"
+            },
+            "irreversible": true,
+            "fromEvent": 17
+          },
+          {
+            "id": "s4",
+            "do": "goto",
+            "url": "{{item_url}}",
+            "describe": "Return to the complaint email",
+            "expect": {
+              "looks": "complaint email with reply box"
+            },
+            "irreversible": false,
+            "fromEvent": 19
+          },
+          {
+            "id": "s5",
+            "do": "fill",
+            "target": {
+              "role": "textbox",
+              "name": "Reply to {{customer_name}}",
+              "selector": "#reply-body"
+            },
+            "value": "{{reply}}",
+            "describe": "Write replacement reply to {{customer_name}}",
+            "expect": {
+              "looks": "reply text in box"
+            },
+            "irreversible": false,
+            "fromEvent": 20
+          },
+          {
+            "id": "s6",
+            "do": "click",
+            "target": {
+              "role": "button",
+              "name": "Send reply",
+              "selector": "body > div:nth-of-type(2) > section > form > button"
+            },
+            "describe": "Send reply",
+            "expect": {
+              "textIncludes": "Your reply",
+              "looks": "reply posted"
+            },
+            "irreversible": true,
+            "fromEvent": 21
+          }
+        ]
+      },
+      "refund": {
+        "describe": "Refund the order and apologize by reply",
+        "reply": "Hi {{customer_name}}, sorry about order {{order_number}}. Your parcel status is {{courier_status}} so we have refunded your order.",
+        "demonstrated": false,
+        "steps": [
+          {
+            "id": "s1",
+            "do": "goto",
+            "url": "http://localhost:3100/store/orders/{{order_number}}",
+            "describe": "Go to order {{order_number}} to refund",
+            "expect": {
+              "urlIncludes": "{{order_number}}",
+              "looks": "order details with Refund action"
+            },
+            "irreversible": false,
+            "fromEvent": null
+          },
+          {
+            "id": "s2",
+            "do": "fill",
+            "target": {
+              "role": "textbox",
+              "name": "Refund reason",
+              "selector": "div:nth-of-type(2) > main > div > form:nth-of-type(1) > input"
+            },
+            "value": "Order {{order_number}} {{courier_status}} - {{item_type}}",
+            "describe": "Enter refund reason for {{order_number}}",
+            "expect": {
+              "looks": "refund reason filled"
+            },
+            "irreversible": false,
+            "fromEvent": null
+          },
+          {
+            "id": "s3",
+            "do": "click",
+            "target": {
+              "role": "button",
+              "name": "Refund",
+              "selector": "div:nth-of-type(2) > main > div > form:nth-of-type(1) > button"
+            },
+            "describe": "Refund the order",
+            "expect": {
+              "textIncludes": "Refund",
+              "looks": "refund confirmation shown"
+            },
+            "irreversible": true,
+            "fromEvent": null
+          },
+          {
+            "id": "s4",
+            "do": "goto",
+            "url": "{{item_url}}",
+            "describe": "Return to the complaint email",
+            "expect": {
+              "looks": "complaint email with reply box"
+            },
+            "irreversible": false,
+            "fromEvent": null
+          },
+          {
+            "id": "s5",
+            "do": "fill",
+            "target": {
+              "role": "textbox",
+              "name": "Reply to {{customer_name}}",
+              "selector": "#reply-body"
+            },
+            "value": "{{reply}}",
+            "describe": "Write refund apology to {{customer_name}}",
+            "expect": {
+              "looks": "reply text in box"
+            },
+            "irreversible": false,
+            "fromEvent": null
+          },
+          {
+            "id": "s6",
+            "do": "click",
+            "target": {
+              "role": "button",
+              "name": "Send reply",
+              "selector": "body > div:nth-of-type(2) > section > form > button"
+            },
+            "describe": "Send reply",
+            "expect": {
+              "textIncludes": "Your reply",
+              "looks": "reply posted"
+            },
+            "irreversible": true,
+            "fromEvent": null
+          }
+        ]
+      },
+      "decline": {
+        "describe": "Politely decline an old order with a reply",
+        "reply": "Hi {{customer_name}}, sorry, order {{order_number}} from {{order_date}} is {{days_since_order}} days old, so we cannot offer a replacement or refund.",
+        "demonstrated": false,
+        "steps": [
+          {
+            "id": "s1",
+            "do": "goto",
+            "url": "{{item_url}}",
+            "describe": "Return to the complaint email",
+            "expect": {
+              "looks": "complaint email with reply box"
+            },
+            "irreversible": false,
+            "fromEvent": null
+          },
+          {
+            "id": "s2",
+            "do": "fill",
+            "target": {
+              "role": "textbox",
+              "name": "Reply to {{customer_name}}",
+              "selector": "#reply-body"
+            },
+            "value": "{{reply}}",
+            "describe": "Write polite decline to {{customer_name}}",
+            "expect": {
+              "looks": "reply text in box"
+            },
+            "irreversible": false,
+            "fromEvent": null
+          },
+          {
+            "id": "s3",
+            "do": "click",
+            "target": {
+              "role": "button",
+              "name": "Send reply",
+              "selector": "body > div:nth-of-type(2) > section > form > button"
+            },
+            "describe": "Send reply",
+            "expect": {
+              "textIncludes": "Your reply",
+              "looks": "reply posted"
+            },
+            "irreversible": true,
+            "fromEvent": null
+          }
+        ]
+      }
+    }
+  },
+  "code": "({\n  extract: {\n    order_number: (text) => text.match(/KG-\\d+/)?.[0] ?? null,\n    customer_name: (text) => {\n      const cust = text.match(/Customer\\s*[:\\t ]+([^\\n]+)/);\n      if (cust) {\n        const cand = cust[1].trim();\n        if (!/^Item\\b/i.test(cand)) {\n          const name = cand.split(\"\\t\")[0].trim();\n          if (/^[A-Za-z][A-Za-z.'\\- ]*$/.test(name) && /\\s/.test(name) && !/\\d/.test(name)) return name;\n        }\n      }\n      const from = text.match(/From\\s+([^<\\n·]+)/);\n      if (from) {\n        const name = from[1].trim();\n        if (name && /^[A-Za-z]/.test(name)) return name;\n      }\n      const row = text.match(/KG-\\d+\\s+\\d{4}-\\d{2}-\\d{2}\\s+([A-Za-z][A-Za-z.'\\-]*\\s+[A-Za-z][A-Za-z.'\\- ]*)/);\n      if (row) return row[1].trim().replace(/\\s+/g, \" \");\n      return null;\n    },\n    order_date: (text) => text.match(/Order date\\s+(\\d{4}-\\d{2}-\\d{2})/i)?.[1] ?? null,\n    tracking_number: (text) => text.match(/Tracking number\\s*([A-Z0-9]+)/i)?.[1].trim() ?? null,\n    courier_status: (text) => text.match(/Status:\\s*([A-Za-z ]+)/)?.[1].trim() ?? null\n  },\n  compute: {\n    days_since_order: (v) => {\n      if (!v.order_date || !v.today) return null;\n      const a = String(v.order_date).trim();\n      const b = String(v.today).trim();\n      if (!/^\\d{4}-\\d{2}-\\d{2}$/.test(a) || !/^\\d{4}-\\d{2}-\\d{2}$/.test(b)) return null;\n      const pa = a.split(\"-\").map(Number);\n      const pb = b.split(\"-\").map(Number);\n      const da = Date.UTC(pa[0], pa[1] - 1, pa[2]);\n      const db = Date.UTC(pb[0], pb[1] - 1, pb[2]);\n      if (isNaN(da) || isNaN(db)) return null;\n      return Math.round((db - da) / 86400000);\n    }\n  },\n  decide: (v) => {\n    const cs = v.courier_status == null ? \"\" : String(v.courier_status).trim().toLowerCase();\n    if (cs === \"lost\") return { outcome: \"refund\", rule: 0 };\n    if (typeof v.days_since_order === \"number\" && v.days_since_order > 30) return { outcome: \"decline\", rule: 1 };\n    if (v.photo_shows_damage === true) return { outcome: \"send_replacement\", rule: 2 };\n    return { outcome: \"refund\", rule: 3 };\n  },\n  tests: [\n    { name: \"lost parcel\", vars: { courier_status: \"Lost\", days_since_order: 6, photo_shows_damage: false }, expect: \"refund\" },\n    { name: \"old order declines even with damage photo\", vars: { courier_status: \"Delivered\", days_since_order: 45, photo_shows_damage: true }, expect: \"decline\" },\n    { name: \"damaged photo sends replacement\", vars: { courier_status: \"Delivered\", days_since_order: 6, photo_shows_damage: true }, expect: \"send_replacement\" },\n    { name: \"otherwise refund\", vars: { courier_status: \"Delivered\", days_since_order: 6, photo_shows_damage: false }, expect: \"refund\" },\n    { name: \"exactly 30 days is not more than 30\", vars: { courier_status: \"Delivered\", days_since_order: 30, photo_shows_damage: false }, expect: \"refund\" },\n    { name: \"missing values fall through to refund\", vars: { courier_status: null, days_since_order: null, photo_shows_damage: false }, expect: \"refund\" },\n    { name: \"lost case-insensitive with spaces\", vars: { courier_status: \"  LOST \", days_since_order: 6, photo_shows_damage: false }, expect: \"refund\" }\n  ]\n})",
+  "demo": {
+    "id": 2,
+    "t": 1114,
+    "kind": "click",
+    "url": "http://localhost:3100/inbox",
+    "title": "Showrun mock apps",
+    "target": {
+      "tag": "a",
+      "role": "link",
+      "label": "Maria Santos Mug arrived cracked 📎 2026-10-29",
+      "text": "Maria Santos Mug arrived cracked 📎 2026-10-29",
+      "selector": "body > div:nth-of-type(2) > ul > li:nth-of-type(2) > a",
+      "href": "http://localhost:3100/inbox/m001",
+      "grid": {
+        "x_min": 188,
+        "y_min": 101,
+        "x_max": 813,
+        "y_max": 149
+      }
+    },
+    "tab": 31646758,
+    "before": "2-before.png",
+    "after": "2-after.png"
+  }
+}
