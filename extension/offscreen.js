@@ -18,6 +18,7 @@ async function start(id) {
   sessionId = id; parts = []; drops = 0;
   ctx = new AudioContext();
   await ctx.resume();
+  await ctx.audioWorklet.addModule("recorder-worklet.js");
   t0 = ctx.currentTime;
   await listen();
   return { startedAt: Date.now() };
@@ -26,10 +27,9 @@ async function start(id) {
 async function listen() {
   stream = await navigator.mediaDevices.getUserMedia({ audio: true });
   const src = ctx.createMediaStreamSource(stream);
-  // ponytail: ScriptProcessor is deprecated but needs no extra worklet file; swap for an AudioWorklet if Chrome drops it.
-  node = ctx.createScriptProcessor(4096, 1, 1);
-  node.onaudioprocess = (e) => parts.push({ at: e.playbackTime - t0, pcm: e.inputBuffer.getChannelData(0).slice() });
-  src.connect(node); node.connect(ctx.destination); // must reach the output to run; it writes silence
+  node = new AudioWorkletNode(ctx, "remuse-recorder", { numberOfInputs: 1, numberOfOutputs: 0, channelCount: 1, channelCountMode: "explicit" });
+  node.port.onmessage = (e) => parts.push({ at: e.data.at - t0, pcm: e.data.pcm });
+  src.connect(node);
   stream.getAudioTracks()[0].onended = () => { if (!ctx) return; drops++; node.disconnect(); listen().catch(() => {}); };
 }
 
