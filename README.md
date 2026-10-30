@@ -37,7 +37,7 @@ You teach it by doing the task once and talking through why. There's nothing to 
 ## How it works
 
 1. **Record.** The extension captures every click and typed value, what you point at with the mouse while talking ("this number here"), a screenshot just before and just after each action, any WebMCP tools the page offers, and your voice. Muse Voice Transcribe turns the voice into timed text that lines up with the clicks.
-1b. **Follow along.** While you record, your voice goes to the Agent every few seconds: Muse Voice Transcribe hears it and Muse Spark keeps a live draft of the task in the sidebar ("I heard…", the steps so far, and a question if something is unclear, which you answer out loud). After you stop, the same card shows it checking its work, then **Looks right** or "Something's off? Tell me" right there.
+1b. **Follow along.** While you record, your voice goes to the Agent every few seconds: Muse Voice Transcribe hears it and Muse Spark keeps a live draft of the task in the sidebar ("I heard…", the steps so far, and a question if something is unclear, which you answer out loud). After you stop, the same card shows it checking its work, then **Looks right** or "Something's off? Tell me" right there, typed or said out loud (**Say it**).
 2. **Understand.** Muse Spark reads the event log, the key frames and what you said, and writes a **Task Spec**:
    - **Where items come from:** a list on a page (emails, orders), or rows you paste each time (a shopping list).
    - **Steps:** what to do for each item.
@@ -97,6 +97,7 @@ For development: `cd backend && npm start` runs the Agent in a terminal (http://
 | `cd backend && node test/clicklist.e2e.ts` | A list whose items open by clicking, not links (forum posts, cards): found by role, each opened and read |
 | `cd backend && node test/chrome.e2e.ts` | With the extension linked, a run happens in your own Chrome: uses its existing login, follows a tab the site opens, closes its tabs after |
 | `cd backend && node test/feedback.e2e.ts` | Feedback in plain words updates a task: only what was asked changes, you're told what changed, the rules are rebuilt |
+| `cd backend && node test/talk.check.ts <narration.wav>` | Feedback said out loud in the sidebar is recorded by the extension and comes back as words |
 | `cd backend && node test/webmcp.check.ts` | A page's WebMCP tool is seen and called by the Agent's browser |
 | `cd mock-apps && npm run check` | The test sites' data agrees with the spoken rules |
 | `node --env-file=.env scripts/risk-tests.mjs` | The day-1 Meta API checks |
