@@ -1,6 +1,5 @@
 // Remuse backend: recordings in, Task Specs and runs out. Serves the review/run UI on the same port.
 // Run: npm start   (port 3200, reads MODEL_API_KEY from ../.env)
-import { spawn } from "node:child_process";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { DatabaseSync } from "node:sqlite";
 import { mkdirSync, readFileSync, writeFileSync, existsSync, rmSync, statSync } from "node:fs";
@@ -10,7 +9,7 @@ import { fileURLToPath } from "node:url";
 import { transcribe, calls } from "./meta.ts";
 import { understand, type Spec } from "./understand.ts";
 import { build } from "./build.ts";
-import { PROFILE, Runner, openBrowser, type Run } from "./runner.ts";
+import { Runner, openBrowser, openPlainChrome, type Run } from "./runner.ts";
 import type { BrowserContext } from "playwright";
 import { GOOGLE, SITE, listLogins, removeLogin, saveLogin } from "./logins.ts";
 import { notify } from "./notify.ts";
@@ -213,14 +212,11 @@ async function openSignIn(url: string) {
 
 // Google sign-in: plain Chrome on Remuse's profile, not driven by anything, so Google sees an ordinary
 // browser and lets you sign in. The sign-in stays in the profile that runs use.
-const CHROME = [process.env.PROGRAMFILES, process.env["PROGRAMFILES(X86)"], process.env.LOCALAPPDATA]
-  .map((d) => d && join(d, "Google", "Chrome", "Application", "chrome.exe")).find((p) => p && existsSync(p));
 async function openGoogleSignIn(site: string) {
   if (active && !["done", "failed", "stopped"].includes(active.run.status)) throw new HttpError(409, "wait for the run to finish first");
   if (signIn) { await signIn.close().catch(() => {}); signIn = null; }
   const url = `https://accounts.google.com/ServiceLogin?continue=${encodeURIComponent(`https://www.${site}/`)}`;
-  if (!CHROME) return openSignIn(url); // ponytail: no installed Chrome, fall back to the driven window
-  spawn(CHROME, [`--user-data-dir=${PROFILE}`, "--no-first-run", "--no-default-browser-check", url], { detached: true, stdio: "ignore" }).unref();
+  if (!openPlainChrome(url)) return openSignIn(url); // ponytail: no installed Chrome, fall back to the driven window
 }
 
 // A run that was going when the Agent stopped (shutdown, crash) can't resume: mark it stopped.
