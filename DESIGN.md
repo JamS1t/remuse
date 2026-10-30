@@ -1,5 +1,5 @@
 ---
-name: Showrun
+name: Remuse
 description: A local operator console where a recorded task plays back as a live rundown, cued by the user.
 colors:
   paper-ground: "#fbfbf9"
@@ -145,7 +145,7 @@ components:
     padding: "2px 6px"
 ---
 
-# Design System: Showrun
+# Design System: Remuse
 
 ## Overview
 
