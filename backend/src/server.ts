@@ -212,10 +212,11 @@ async function openSignIn(url: string) {
 
 // Google sign-in: plain Chrome on Remuse's profile, not driven by anything, so Google sees an ordinary
 // browser and lets you sign in. The sign-in stays in the profile that runs use.
-async function openGoogleSignIn(site: string) {
+async function openGoogleSignIn(site: string, email = "") {
   if (active && !["done", "failed", "stopped"].includes(active.run.status)) throw new HttpError(409, "wait for the run to finish first");
   if (signIn) { await signIn.close().catch(() => {}); signIn = null; }
-  const url = `https://accounts.google.com/ServiceLogin?continue=${encodeURIComponent(`https://www.${site}/`)}`;
+  // login_hint fills in the account, so Google goes straight to a passkey or "tap Yes on your phone".
+  const url = `https://accounts.google.com/ServiceLogin?continue=${encodeURIComponent(`https://www.${site}/`)}${email ? `&login_hint=${encodeURIComponent(email)}` : ""}`;
   if (!openPlainChrome(url)) return openSignIn(url); // ponytail: no installed Chrome, fall back to the driven window
 }
 
@@ -422,7 +423,8 @@ async function route(req: IncomingMessage, res: ServerResponse) {
   if (m === "POST" && url.pathname === "/api/browser/google") {
     const site = (url.searchParams.get("site") ?? "google.com").toLowerCase();
     if (!GOOGLE.test(site)) throw new HttpError(400, "not a Google site");
-    await openGoogleSignIn(site);
+    const email = url.searchParams.get("email") ?? "";
+    await openGoogleSignIn(site, /^[^@\s]+@[^@\s]+$/.test(email) ? email : "");
     return send(res, 200, { open: true });
   }
   if (m === "POST" && url.pathname === "/api/browser/open") {

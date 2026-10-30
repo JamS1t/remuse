@@ -157,7 +157,12 @@ async function share(site) {
 
 async function connect(site) {
   if (!site) throw new Error("this page can't be connected");
-  if (GOOGLE.test(site)) { await api(`/browser/google?site=${encodeURIComponent(site)}`, "POST"); return { site, signin: true }; }
+  if (GOOGLE.test(site)) {
+    // The Google account this Chrome is signed in with, so the sign-in page starts at the passkey or phone prompt.
+    const email = (await chrome.identity?.getProfileUserInfo({ accountStatus: "ANY" }).catch(() => null))?.email ?? "";
+    await api(`/browser/google?site=${encodeURIComponent(site)}&email=${encodeURIComponent(email)}`, "POST");
+    return { site, signin: true };
+  }
   const list = await sites();
   if (!list.includes(site)) await chrome.storage.local.set({ sites: [...list, site] });
   return { site, cookies: await share(site) };
