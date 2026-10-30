@@ -36,7 +36,7 @@ You teach it by doing the task once and talking through why. There's nothing to 
 
 ## How it works
 
-1. **Record.** The extension captures every click and typed value, a screenshot just before and just after each action, any WebMCP tools the page offers, and your voice. Muse Voice Transcribe turns the voice into timed text that lines up with the clicks.
+1. **Record.** The extension captures every click and typed value, what you point at with the mouse while talking ("this number here"), a screenshot just before and just after each action, any WebMCP tools the page offers, and your voice. Muse Voice Transcribe turns the voice into timed text that lines up with the clicks.
 2. **Understand.** Muse Spark reads the event log, the key frames and what you said, and writes a **Task Spec**:
    - **Where items come from:** a list on a page (emails, orders), or rows you paste each time (a shopping list).
    - **Steps:** what to do for each item.
@@ -90,7 +90,7 @@ For development: `cd backend && npm start` runs the Agent in a terminal (http://
 | `cd backend && node test/files.e2e.ts` | A posting task uploads the next file with its caption, saves its download, never reposts, skips when nothing is new |
 | `cd backend && node test/tabs.e2e.ts` | A task across three tabs: reads values in a tab the site opened, types them into another tab, returns to the first tab as it was left |
 | `cd backend && node test/tabs-learn.e2e.ts <narration.wav>` | Records a three-tab demo through the extension, Muse Spark learns which step happens in which tab, and the run copies new data across tabs |
-| `cd backend && node test/sheets.e2e.ts <narration.wav>` | A recording past 30 s keeps the whole voice track; typing in a spreadsheet grid is recorded with its cell; the runner writes a cell through the Name Box |
+| `cd backend && node test/sheets.e2e.ts <narration.wav>` | A recording past 30 s keeps the whole voice track; pointing at something (no click) is recorded; typing in a spreadsheet grid is recorded with its cell; the runner writes a cell through the Name Box |
 | `cd backend && node test/webmcp.check.ts` | A page's WebMCP tool is seen and called by the Agent's browser |
 | `cd mock-apps && npm run check` | The test sites' data agrees with the spoken rules |
 | `node --env-file=.env scripts/risk-tests.mjs` | The day-1 Meta API checks |

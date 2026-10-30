@@ -119,6 +119,22 @@
   }, true);
   if (sub) return; // frames only carry typing; clicks and pages come from the page itself
 
+  // Pointing: the mouse resting on something for a moment ("this number here"). Sent once per thing, so
+  // what the person says can refer to it without a click. Remuse keeps the ones made while talking.
+  let rest = null, lastPointed = null, px = 0, py = 0;
+  addEventListener("pointermove", (e) => {
+    if (e.pointerType !== "mouse" || Math.hypot(e.clientX - px, e.clientY - py) < 6) return;
+    px = e.clientX; py = e.clientY;
+    clearTimeout(rest);
+    rest = setTimeout(() => {
+      const el = document.elementFromPoint(px, py);
+      if (!el || el === lastPointed || el === document.body || el === document.documentElement) return;
+      lastPointed = el;
+      const g = (v, max) => Math.round((v / max) * 1000);
+      send("point", { target: describe(el), spot: { x: g(px, innerWidth), y: g(py, innerHeight) } });
+    }, 700);
+  }, true);
+
   // pointerdown fires before the click lands, so the "before" screenshot still shows the old screen.
   // Typing is flushed first: change only fires on blur, which comes after pointerdown.
   addEventListener("pointerdown", (e) => {

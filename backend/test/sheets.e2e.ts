@@ -31,6 +31,7 @@ const site = createServer(async (req, res) => {
   }
   res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
   res.end(`<!doctype html><title>Stats log</title>
+    <p id="views">Views 1,830</p>
     <input id="t-name-box" aria-label="Name Box" value="A1">
     <canvas id="grid" role="application" width="600" height="300" style="border:1px solid #ccc"></canvas>
     <iframe id="keys" style="position:absolute;left:-9999px"></iframe>
@@ -71,6 +72,8 @@ try {
   await call("start", "");
   for (let i = 0; i < 30 && !((await call("status")) as any)?.recording; i++) await sleep(500);
   await page.bringToFront(); await sleep(1000);
+  const v = await page.locator("#views").boundingBox();
+  await page.mouse.move(v!.x + 5, v!.y + 5); await page.mouse.move(v!.x + 30, v!.y + 8); await sleep(1500); // point at it, no click
   await page.locator("#grid").click({ position: { x: 150, y: 45 } }); // B2
   await sleep(500);
   await page.keyboard.type("1,830"); await page.keyboard.press("Enter");
@@ -86,6 +89,8 @@ try {
   check("on the spreadsheet's own address, not the hidden frame's", typed.every((e: any) => e.url.startsWith(SITE)), typed[0]?.url);
   console.log("   stop:", JSON.stringify(stopped));
   const wavPath = join(data, "sessions", stopped.id, "voice.wav");
+  const pt = s.events.find((e: any) => e.kind === "point" && e.target?.text === "Views 1,830");
+  check("pointing at something is recorded, with a screenshot", !!pt?.before, JSON.stringify(s.events.filter((e: any) => e.kind === "point").map((e: any) => e.target?.text)));
   const wav = existsSync(wavPath) ? readFileSync(wavPath) : Buffer.alloc(44);
   const secs = (wav.length - 44) / 32000, len = (s.ended_at - s.started_at) / 1000;
   check("the whole voice track is kept", secs > len - 4, `${secs.toFixed(1)} s of voice in a ${len.toFixed(1)} s recording`);
