@@ -93,6 +93,7 @@ For development: `cd backend && npm start` runs the Agent in a terminal (http://
 | `cd backend && node test/tabs-learn.e2e.ts <narration.wav>` | Records a three-tab demo through the extension, Muse Spark learns which step happens in which tab, and the run copies new data across tabs |
 | `cd backend && node test/sheets.e2e.ts <narration.wav>` | A recording past 30 s keeps the whole voice track; pointing at something (no click) is recorded; typing in a spreadsheet grid is recorded with its cell; the runner writes a cell through the Name Box |
 | `cd backend && node test/signin.e2e.ts` | A hidden run that hits a sign-in page pauses, opens it in plain Chrome for you, then carries on where it was |
+| `cd backend && node test/clicklist.e2e.ts` | A list whose items open by clicking, not links (forum posts, cards): found by role, each opened and read |
 | `cd backend && node test/webmcp.check.ts` | A page's WebMCP tool is seen and called by the Agent's browser |
 | `cd mock-apps && npm run check` | The test sites' data agrees with the spoken rules |
 | `node --env-file=.env scripts/risk-tests.mjs` | The day-1 Meta API checks |

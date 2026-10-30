@@ -36,6 +36,9 @@ const AFTER_DELAY = { click: 900, key: 900, page: 300, upload: 1500 }; // let th
 async function onEvent(ev, sender) {
   const r = await current();
   if (!r || !sender.tab) return;
+  // Only the tab you're looking at: other open tabs load and refresh by themselves, and what's in them
+  // (your messages, other accounts) is none of the recording's business.
+  if (!sender.tab.active) return;
   const { at, kind, ...data } = ev;
   const before = kind === "click" || kind === "key" || kind === "point" ? await screenshot(sender.tab.windowId) : null;
   const { id } = await api(`/sessions/${r.id}/events`, "POST", { t: at - r.t0, kind, ...data, tab: sender.tab.id, before });
