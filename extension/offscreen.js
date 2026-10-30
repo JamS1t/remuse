@@ -1,7 +1,10 @@
 // Records the microphone while a session runs, then uploads it as WAV (16 kHz mono, 16-bit),
 // the only format Muse Voice Transcribe takes.
+// Raw samples are kept as they arrive (no MediaRecorder file to decode later), placed by the clock, so the
+// voice stays lined up with the clicks. If the microphone drops out (a headset reconnects, Windows hands
+// the mic to another app), recording picks it up again and the gap stays silent instead of losing the rest.
 const API = "http://127.0.0.1:3200/api";
-let rec, stream, chunks, sessionId;
+let ctx, stream, node, parts, t0, sessionId, drops;
 
 chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
   if (msg.target !== "offscreen") return;
@@ -12,36 +15,45 @@ chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
 });
 
 async function start(id) {
-  sessionId = id;
-  stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-  chunks = [];
-  rec = new MediaRecorder(stream);
-  rec.ondataavailable = (e) => chunks.push(e.data);
-  rec.start(1000);
+  sessionId = id; parts = []; drops = 0;
+  ctx = new AudioContext();
+  await ctx.resume();
+  t0 = ctx.currentTime;
+  await listen();
   return { startedAt: Date.now() };
 }
 
-async function stop() {
-  if (!rec) return { bytes: 0 };
-  await new Promise((r) => { rec.onstop = r; rec.stop(); });
-  stream.getTracks().forEach((t) => t.stop());
-  const wav = await toWav(new Blob(chunks));
-  const res = await fetch(`${API}/sessions/${sessionId}/audio`, { method: "PUT", body: wav });
-  if (!res.ok) throw new Error(`upload failed: HTTP ${res.status}`);
-  rec = null;
-  return { bytes: wav.size };
+async function listen() {
+  stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  const src = ctx.createMediaStreamSource(stream);
+  // ponytail: ScriptProcessor is deprecated but needs no extra worklet file; swap for an AudioWorklet if Chrome drops it.
+  node = ctx.createScriptProcessor(4096, 1, 1);
+  node.onaudioprocess = (e) => parts.push({ at: e.playbackTime - t0, pcm: e.inputBuffer.getChannelData(0).slice() });
+  src.connect(node); node.connect(ctx.destination); // must reach the output to run; it writes silence
+  stream.getAudioTracks()[0].onended = () => { if (!ctx) return; drops++; node.disconnect(); listen().catch(() => {}); };
 }
 
-async function toWav(blob, rate = 16000) {
-  const ctx = new AudioContext();
-  const decoded = await ctx.decodeAudioData(await blob.arrayBuffer());
-  ctx.close();
-  // A 1-channel offline context downmixes and resamples in one pass.
-  const off = new OfflineAudioContext(1, Math.ceil(decoded.duration * rate), rate);
+async function stop() {
+  if (!ctx) return { bytes: 0 };
+  const rate = ctx.sampleRate, total = ctx.currentTime - t0;
+  const c = ctx; ctx = null;
+  node.disconnect(); stream.getTracks().forEach((t) => t.stop()); await c.close();
+  // Lay every block at its time on one track; anything the mic missed stays silent.
+  const raw = new Float32Array(Math.ceil(total * rate));
+  for (const p of parts) { const i = Math.round(p.at * rate); if (i >= 0 && i < raw.length) raw.set(p.pcm.subarray(0, raw.length - i), i); }
+  const wav = await toWav(raw, rate);
+  const res = await fetch(`${API}/sessions/${sessionId}/audio`, { method: "PUT", body: wav });
+  if (!res.ok) throw new Error(`upload failed: HTTP ${res.status}`);
+  return { bytes: wav.size, seconds: Math.round(total), drops };
+}
+
+async function toWav(raw, from, rate = 16000) {
+  // An offline context resamples to 16 kHz in one pass.
+  const off = new OfflineAudioContext(1, Math.max(1, Math.ceil((raw.length / from) * rate)), rate);
+  const b = off.createBuffer(1, Math.max(1, raw.length), from);
+  b.copyToChannel(raw, 0);
   const src = off.createBufferSource();
-  src.buffer = decoded;
-  src.connect(off.destination);
-  src.start();
+  src.buffer = b; src.connect(off.destination); src.start();
   const pcm = (await off.startRendering()).getChannelData(0);
 
   const buf = new DataView(new ArrayBuffer(44 + pcm.length * 2));
