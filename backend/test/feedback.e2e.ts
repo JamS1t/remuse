@@ -53,6 +53,9 @@ try {
   let t: any;
   for (let i = 0; i < 60; i++) { t = (await get("/tasks")).find((x: any) => x.sessionId === s.id); if (t?.learnStage === "ready" || t?.learnStage === "failed") break; await sleep(2000); }
   check("and its rules are rebuilt", t?.learnStage === "ready" && t?.specId === r.specId, `${t?.learnStage} ${t?.learnError ?? ""}`);
+  // Then it tries the changed task once by itself, and finishes without waiting on anyone.
+  for (let i = 0; i < 60; i++) { t = (await get("/tasks")).find((x: any) => x.sessionId === s.id); if (t?.practice && !["starting", "running"].includes(t.practice.status)) break; await sleep(2000); }
+  check("a practice of the changed task follows by itself and finishes", !!t?.practice?.result && t.practice.status !== "running", JSON.stringify(t?.practice)?.slice(0, 220));
 } finally {
   agent.kill();
   const failed = results.filter(([, ok]) => !ok);

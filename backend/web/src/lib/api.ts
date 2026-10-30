@@ -34,8 +34,16 @@ export type Run = {
   heals: { step: string; from: string; to: string }[];
   learned: { requestType: string; outcome: string; note?: string }[];
   score?: { matched: number; total: number };
+  mode?: "practice"; practice?: Practice;
 };
-export type RunRow = { id: string; specId: number; status: Run["status"]; startedAt: number; items: number; score?: Run["score"] };
+/** A practice: the task tried once on the demo item, stopping before anything irreversible, compared with the demo. */
+export type Practice = {
+  sameItem: boolean; outcome?: string; expected?: string;
+  values: { name: string; got: unknown; want: unknown; ok: boolean }[];
+  checked: number; stoppedBefore?: string; stoppedForOk?: boolean; asked?: string; problem?: string; ok: boolean;
+};
+export type PracticeState = { runId: string; status: Run["status"]; label: string | null; result: Practice | null };
+export type RunRow = { id: string; specId: number; status: Run["status"]; startedAt: number; items: number; score?: Run["score"]; mode?: "practice" | null };
 
 export async function api<T = any>(path: string, method = "GET", body?: unknown): Promise<T> {
   const res = await fetch("/api" + path, { method, body: body === undefined ? undefined : JSON.stringify(body) });
@@ -44,6 +52,8 @@ export async function api<T = any>(path: string, method = "GET", body?: unknown)
   return data;
 }
 
+// Words that make a step wait for the person's OK. Same list as IRREVERSIBLE in backend/src/runner.ts.
+export const IRREVERSIBLE = /\b(refund|replace|send|pay|submit|ship|confirm|delete|place order|issue|buy|checkout|check out|purchase|book|transfer|message seller|post|share|publish|approve|merge|archive|resolve)\b/i;
 export const isLive = (s: Run["status"]) => s === "starting" || s === "running";
 
 /** Fetch, and refetch every `everyMs` while `keepPolling(data)` is true. */
@@ -91,13 +101,14 @@ export type Task = {
   askedSchedule: { everyMinutes?: number; time?: string; days?: string; said?: string } | null;
   lastReport: { text: string; at: number; runId: string } | null;
   uploads: { folder: string | null; pick: "next" | "newest" | "dated" }[]; saveDownloads: string | null;
+  practice: PracticeState | null;
 };
 export type FolderRow = { id: string; name: string; path: string; count: number; latest: { name: string; modified: number } | null; ok: boolean };
 export type ScheduleRow = { id: number; specId: number; sessionId: string; time: string; days: string; everyMinutes: number | null };
 /** A run as Activity lists it. */
 export type ActivityRun = {
   id: string; specId: number; sessionId: string; task: string | null; status: Run["status"]; startedAt: number; endedAt: number | null;
-  items: number; done: number; error: string | null; waiting: boolean; report: string | null; score?: Run["score"];
+  items: number; done: number; error: string | null; waiting: boolean; report: string | null; score?: Run["score"]; mode?: "practice" | null; practiceOk?: boolean | null;
 };
 
 export const ago = (ms: number) => {

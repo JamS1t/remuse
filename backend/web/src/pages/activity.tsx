@@ -30,7 +30,7 @@ export function RunsList({ task, limit }: { task?: string; limit?: number }) {
               <span className="min-w-0">
                 {task ? null : <span className="block truncate font-medium">{r.task ?? "Untitled task"}</span>}
                 <span className={cn("block truncate text-[13px]", task ? "text-foreground" : "text-muted-foreground")}>
-                  {r.report ?? (r.error ? r.error : r.items ? `${r.done} of ${r.items} done` : "Starting")}
+                  {r.mode === "practice" ? `Practice on your example${r.practiceOk === true ? ": matched what you did" : r.practiceOk === false && r.status === "done" ? ": something didn't match" : ""}` : r.report ?? (r.error ? r.error : r.items ? `${r.done} of ${r.items} done` : "Starting")}
                 </span>
               </span>
               <Status s={r.waiting ? "approval" : isLive(r.status) ? "running" : (state as any)} className="justify-self-end sm:justify-self-start" />

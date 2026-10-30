@@ -86,7 +86,7 @@ export function load(code: string): Rules {
   return vm.runInNewContext(code, Object.create(null), { timeout: 1000 });
 }
 
-const same = (a: unknown, b: unknown) =>
+export const same = (a: unknown, b: unknown) =>
   typeof a === "string" && typeof b === "string" ? a.trim().toLowerCase() === b.trim().toLowerCase() : JSON.stringify(a) === JSON.stringify(b);
 
 export function selfTest(spec: Spec, code: string, pages: { url: string; text: string }[], today: string): TestResult[] {
