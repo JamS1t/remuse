@@ -18,7 +18,9 @@ class Skip extends Error {}
 /** A practice run reached the point where a real run would need the person (an OK or a question): it ends there. */
 class PracticeEnd extends Error {}
 
-export type LogLine = { at: number; msg: string; level: "info" | "ok" | "warn" | "error"; shot?: string };
+// why: the reason in plain words (what it checked and found, or what a decision rested on).
+// how: "page" = checked on the page itself; "screen" = Muse Spark (and SAM 3.1) looked at a screenshot.
+export type LogLine = { at: number; msg: string; level: "info" | "ok" | "warn" | "error"; shot?: string; why?: string; how?: "page" | "screen" };
 export type Candidate = { url: string; title: string; vars: Record<string, unknown>; score: number | null; shot?: string; best?: boolean };
 export type Item = {
   url: string; label: string; index?: number; // index: position in the list, for items that open by clicking
@@ -139,6 +141,9 @@ const urlShape = (u: string) => {
   catch { return ""; }
 };
 
+// A value shown in a reason: one line, not too long.
+const short = (s?: string | null) => { const t = (s ?? "").replace(/\s+/g, " ").trim(); return t.length > 60 ? `${t.slice(0, 57)}…` : t; };
+
 const manila = () => new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Manila" });
 // The reply is kept as a template, so its own {{values}} are filled where it's typed (one level, reply only:
 // text read from a page is never treated as a template).
@@ -189,8 +194,8 @@ export class Runner {
 
   private changed() { this.onChange(this.run, this.spec); }
   private get item() { return this.run.items[this.run.current]; }
-  private log(msg: string, level: LogLine["level"] = "info", shot?: string) {
-    this.item?.log.push({ at: Date.now(), msg, level, shot });
+  private log(msg: string, level: LogLine["level"] = "info", shot?: string, more: Pick<LogLine, "why" | "how"> = {}) {
+    this.item?.log.push({ at: Date.now(), msg, level, shot, ...more });
     this.changed();
   }
 
@@ -202,6 +207,50 @@ export class Runner {
     writeFileSync(join(this.dir, file), buf);
     this.run.shot = file;
     return { file, buf };
+  }
+
+  /** A close-up of the element a step acts on, outlined, with some of the page around it: small enough to read
+   *  as a thumbnail next to the step. Not the "what Remuse sees now" picture, which stays the whole screen. */
+  private async shotNear(loc: Locator): Promise<string | undefined> {
+    await loc.scrollIntoViewIfNeeded({ timeout: 2000 }).catch(() => {});
+    const b = await loc.boundingBox({ timeout: 1000 }).catch(() => null);
+    if (!b) return undefined;
+    const [vw, vh] = await this.page.evaluate(() => [innerWidth, innerHeight]).catch(() => [VIEW.width, VIEW.height]);
+    const w = Math.min(vw, Math.max(560, b.width + 240)), h = Math.min(vh, Math.max(350, b.height + 160));
+    const x = Math.min(Math.max(0, b.x + b.width / 2 - w / 2), vw - w), y = Math.min(Math.max(0, b.y + b.height / 2 - h / 2), vh - h);
+    const was = await loc.evaluate((el: HTMLElement) => { const o = [el.style.outline, el.style.outlineOffset]; el.style.outline = "3px solid #a78bfa"; el.style.outlineOffset = "2px"; return o; }, undefined, { timeout: 1000 }).catch(() => null);
+    const buf = b.y + b.height > 0 && b.y < vh ? await this.page.screenshot({ clip: { x, y, width: w, height: h } }).catch(() => null) : null;
+    if (was) await loc.evaluate((el: HTMLElement, [o, off]) => { el.style.outline = o; el.style.outlineOffset = off; }, was, { timeout: 1000 }).catch(() => {});
+    if (!buf) return undefined;
+    const file = `${++this.shots}.png`;
+    writeFileSync(join(this.dir, file), buf);
+    return file;
+  }
+
+  /** A screenshot with boxes drawn over the page (0-1000 grid): the element it chose, and around it what
+   *  SAM 3.1 segmented and where Muse Spark pointed. The boxes are removed right after. */
+  private async marked(boxes: { box: Box; kind: "pick" | "sam" | "spark"; label?: string }[]) {
+    await this.page.evaluate((bs) => {
+      const root = document.createElement("div");
+      root.id = "__remuse_marks";
+      root.style.cssText = "position:fixed;inset:0;pointer-events:none;z-index:2147483647";
+      for (const b of bs) {
+        const d = document.createElement("div");
+        const [x, y, w, h] = [b.box.x_min / 1000 * innerWidth, b.box.y_min / 1000 * innerHeight, (b.box.x_max - b.box.x_min) / 1000 * innerWidth, (b.box.y_max - b.box.y_min) / 1000 * innerHeight];
+        const line = b.kind === "pick" ? "3px solid #a78bfa" : b.kind === "spark" ? "2px dashed #f59e0b" : "2px solid rgba(167,139,250,.85)";
+        d.style.cssText = `position:absolute;left:${x - 3}px;top:${y - 3}px;width:${w + 6}px;height:${h + 6}px;border:${line};border-radius:6px;box-sizing:border-box;${b.kind === "pick" ? "box-shadow:0 0 0 4px rgba(167,139,250,.25)" : ""}`;
+        if (b.label) {
+          const t = document.createElement("span");
+          t.textContent = b.label;
+          t.style.cssText = "position:absolute;left:-3px;top:-24px;font:600 12px/18px system-ui;padding:1px 7px;border-radius:5px;background:#a78bfa;color:#0b0b0d;white-space:nowrap";
+          d.appendChild(t);
+        }
+        root.appendChild(d);
+      }
+      document.documentElement.appendChild(root);
+    }, boxes).catch(() => {});
+    try { return await this.shot(); }
+    finally { await this.page.evaluate(() => document.getElementById("__remuse_marks")?.remove()).catch(() => {}); }
   }
 
   private heal(h: Run["heals"][number]) {
@@ -455,7 +504,10 @@ export class Runner {
       const rule = this.baseRules[d.rule];
       it.decidedBy = "rules"; it.because = rule ? `${rule.if}${rule.said ? ` ("${rule.said}")` : ""}` : "rule " + d.rule;
     }
-    this.log(`Decision: ${it.outcome}, because ${it.because}`, "ok");
+    // The values it decided on, in plain words, kept with the decision.
+    const read = this.spec.variables.filter((x) => !x.candidate && it.vars[x.name] !== null && it.vars[x.name] !== undefined && typeof it.vars[x.name] !== "object")
+      .map((x) => `${x.name.replaceAll("_", " ")} ${short(String(it.vars[x.name]))}${it.vars[`prev_${x.name}`] != null ? ` (last time ${short(String(it.vars[`prev_${x.name}`]))})` : ""}`).join(" · ");
+    this.log(`Decision: ${it.outcome}, because ${it.because}`, "ok", undefined, { why: it.decidedBy === "rules" && read ? `What it read: ${read}` : undefined });
 
     const out = this.spec.outcomes[it.outcome!];
     if (!out) throw new Error(`no steps for outcome "${it.outcome}"`);
@@ -664,6 +716,7 @@ export class Runner {
       target: raw.target && { ...raw.target, name: render(raw.target.name, v) },
       expect: raw.expect && { ...raw.expect, urlIncludes: render(raw.expect.urlIncludes, v), textIncludes: render(raw.expect.textIncludes, v) } };
     if (this.stopped) throw new Error("run stopped");
+    let aim: string | undefined;
     // A new tab whose first step isn't a "goto" is one the site opened (the previous click did it).
     if (raw.tab) await this.useTab(raw.tab, raw.do !== "goto");
 
@@ -734,8 +787,11 @@ export class Runner {
     }
     else {
       const found = step.target ? await this.locate(raw, step) : null;
+      // The picture kept with the step's check: what it pressed (taken before pressing), or the field after typing
+      // (so it shows what the check says). A healed element already has its marked-up screenshot.
+      aim = step.do === "fill" && found?.loc ? undefined : found?.shot ?? (found?.loc ? await this.shotNear(found.loc) : undefined);
       if (step.do === "fill") {
-        if (found?.loc) await found.loc.fill(step.value ?? "");
+        if (found?.loc) { await found.loc.fill(step.value ?? ""); aim ??= await this.shotNear(found.loc); }
         else if (found?.point) { await this.page.mouse.click(found.point.x, found.point.y); await this.page.keyboard.press("Control+A"); await this.page.keyboard.type(step.value ?? ""); }
         else if (!step.target) await this.page.keyboard.type(step.value ?? ""); // no field: type where the focus is (a spreadsheet cell, an editor)
       } else if (step.do === "press") {
@@ -749,7 +805,7 @@ export class Runner {
       }
     }
     await this.page.waitForLoadState("load").catch(() => {});
-    await this.check(step);
+    await this.check(step, aim);
   }
 
   private async approve(step: Step, loc?: Locator, healedName?: string): Promise<boolean> {
@@ -776,7 +832,7 @@ export class Runner {
   }
 
   // DOM first (role + name, then the recorded selector if it still points at the same thing), then vision.
-  private async locate(raw: Step, step: Step): Promise<{ loc?: Locator; point?: { x: number; y: number }; healedName?: string }> {
+  private async locate(raw: Step, step: Step): Promise<{ loc?: Locator; point?: { x: number; y: number }; healedName?: string; shot?: string }> {
     const t = step.target!;
     if (t.role && t.name) {
       const l = this.page.getByRole(t.role as any, { name: t.name, exact: !t.fuzzy });
@@ -790,6 +846,8 @@ export class Runner {
         if (!t.name || name.toLowerCase() === t.name.toLowerCase()) return { loc: l };
       }
     }
+    // Not there because a sign-in page is in the way: say so (the step pauses for sign-in) instead of searching the screen.
+    if (await this.onSignInPage()) throw new Error(`a sign-in page is in the way (${new URL(this.page.url()).hostname})`);
     return this.findByVision(raw, step);
   }
 
@@ -805,12 +863,17 @@ export class Runner {
     // SAM 3.1 gives tight boxes for every element of this kind; snap to the one under Muse Spark's box.
     const cx = (box.x_min + box.x_max) / 2, cy = (box.y_min + box.y_max) / 2;
     let use: Box = box;
+    let segs: Box[] = [];
+    let snapped = false; // SAM 3.1 gave the exact edges of the element Muse Spark pointed at
     try {
-      const inside = (await sam(buf, kind)).filter((b) => cx >= b.x_min && cx <= b.x_max && cy >= b.y_min && cy <= b.y_max);
+      segs = await sam(buf, kind);
+      const inside = segs.filter((b) => cx >= b.x_min && cx <= b.x_max && cy >= b.y_min && cy <= b.y_max);
       inside.sort((a, b) => (a.x_max - a.x_min) * (a.y_max - a.y_min) - (b.x_max - b.x_min) * (b.y_max - b.y_min));
-      if (inside[0]) use = inside[0];
+      if (inside[0]) { use = inside[0]; snapped = true; }
     } catch (e) { this.log(`SAM 3.1 unavailable (${(e as Error).message.slice(0, 80)}); using Muse Spark's box.`, "warn"); }
-    const point = { x: ((use.x_min + use.x_max) / 2 / 1000) * VIEW.width, y: ((use.y_min + use.y_max) / 2 / 1000) * VIEW.height };
+    // The page's real size (your Chrome's window can differ from Remuse's own browser), as the screenshot was.
+    const [vw, vh] = await this.page.evaluate(() => [innerWidth, innerHeight]).catch(() => [VIEW.width, VIEW.height]);
+    const point = { x: ((use.x_min + use.x_max) / 2 / 1000) * vw, y: ((use.y_min + use.y_max) / 2 / 1000) * vh };
 
     // Read what is really there, so the spec can be updated and the DOM path works next time.
     const found = await this.page.evaluate(({ x, y }) => {
@@ -821,7 +884,10 @@ export class Runner {
       const name = (el.getAttribute("aria-label") || el.getAttribute("placeholder") || el.innerText || (el as HTMLInputElement).value || "").replace(/\s+/g, " ").trim();
       return { role, name };
     }, point);
-    if (!found?.name) return { point };
+    // The evidence: every SAM 3.1 box for this kind of element, Muse Spark's pick, and the one it will use.
+    const seen = await this.marked([...segs.slice(0, 40).map((b) => ({ box: b, kind: "sam" as const })), { box, kind: "spark" }, { box: use, kind: "pick", label: snapped ? "Muse Spark + SAM 3.1" : "Muse Spark" }]);
+    const how = { how: "screen" as const, why: `Muse Spark pointed at it on a screenshot${segs.length ? `; SAM 3.1 outlined ${segs.length} ${segs.length === 1 ? kind : kind === "text box" ? "text boxes" : `${kind}s`}${snapped ? " and gave its exact edges" : ", none of them under that spot, so I went by Muse Spark's box"}` : ""}` };
+    if (!found?.name) { this.log(`Found the ${kind} by looking`, "ok", seen.file, how); return { point, shot: seen.file }; }
     const loc = this.page.getByRole(found.role as any, { name: found.name, exact: true });
     const healedName = found.name;
     // Labels with per-item data ("Issue refund (₱570.00)") are kept as their stable prefix and matched loosely.
@@ -829,8 +895,8 @@ export class Runner {
     raw.target = stable && stable !== healedName ? { role: found.role, name: stable, fuzzy: true } : { role: found.role, name: healedName };
     raw.healed = `was "${t.name}"`;
     this.heal({ step: step.describe, from: t.name ?? "", to: healedName });
-    this.log(`Found it: the ${found.role} "${healedName}". Updated the spec so the next ${this.spec.inputs.itemName ?? "item"} uses it directly.`, "ok");
-    return (await loc.count()) === 1 ? { loc, healedName } : { point, healedName };
+    this.log(`Found it: the ${found.role} “${healedName}” (was “${t.name}”). Updated the task so the next ${this.spec.inputs.itemName ?? "item"} uses it directly.`, "ok", seen.file, how);
+    return (await loc.count()) === 1 ? { loc, healedName, shot: seen.file } : { point, healedName, shot: seen.file };
   }
 
   /** Acting after a plan: before doing anything, make sure this is still the item that was planned (lists move;
@@ -913,26 +979,36 @@ export class Runner {
   }
 
   // Cheap DOM check first; Muse Spark looks at the screen for irreversible steps or when the DOM check fails.
-  private async check(step: Step) {
+  private async check(step: Step, aim?: string) {
     if (step.do === "extract") return;
     const e = step.expect ?? {};
-    let domOk = true, why = "";
+    let domOk = true, why = "", unchecked = false; // unchecked: nothing on the page could confirm it
     if (step.do === "fill" && step.value) {
       // Typed values don't show up in page text; read the field back instead.
       const val = await this.page.evaluate(() => (document.activeElement as HTMLInputElement)?.value ?? null);
-      domOk = val === null || val === step.value; why = domOk ? "" : "the field doesn't hold what I typed";
+      domOk = val === null || val === step.value;
+      why = val === null ? "typed it (this kind of field can't be read back)" : domOk ? `the field now holds “${short(step.value)}”` : "the field doesn't hold what I typed";
+      if (val === null) unchecked = true;
     } else if (e.urlIncludes || e.textIncludes) {
       const deadline = Date.now() + 5000;
       for (;;) {
         const urlOk = !e.urlIncludes || this.page.url().toLowerCase().includes(e.urlIncludes.toLowerCase());
         const textOk = !e.textIncludes || (await this.page.innerText("body").catch(() => "")).toLowerCase().includes(e.textIncludes.toLowerCase());
         domOk = urlOk && textOk;
-        if (domOk || Date.now() > deadline) { why = urlOk ? `"${e.textIncludes}" is not on the page` : `the address doesn't contain "${e.urlIncludes}"`; break; }
+        if (domOk) { why = [e.urlIncludes && `the address now has “${short(e.urlIncludes)}”`, e.textIncludes && `“${short(e.textIncludes)}” is on the page`].filter(Boolean).join(", and "); break; }
+        if (Date.now() > deadline) { why = urlOk ? `“${short(e.textIncludes)}” is not on the page` : `the address doesn't have “${short(e.urlIncludes)}”`; break; }
         await this.page.waitForTimeout(250);
       }
     }
+    else if (step.do === "goto" && step.url) {
+      const bare = (u: string) => u.split(/[?#]/)[0].replace(/\/$/, "").toLowerCase();
+      if (bare(this.page.url()) === bare(step.url)) why = "the address is the one it opened";
+      else { why = `it opened, and landed on ${short(this.page.url())}`; unchecked = true; }
+    }
+    else if (step.do === "goto" || step.do === "open_item") { why = "the page opened"; unchecked = true; }
+    else { why = "no error came up; there was nothing specific to look for"; unchecked = true; }
     const gated = step.irreversible || (step.do === "click" && IRREVERSIBLE.test(step.target?.name ?? ""));
-    if (domOk && !gated) { this.log(`✓ ${step.describe}`, "ok"); return; }
+    if (domOk && !gated) { this.log(`✓ ${step.describe}`, "ok", aim, { why, how: unchecked ? undefined : "page" }); return; }
 
     let r: { ok: boolean; why: string } = { ok: false, why: "" }, file = "";
     for (let look = 0; look < 2 && !r.ok; look++) {
@@ -946,8 +1022,8 @@ export class Runner {
         png(shot.buf),
       ], "check");
     }
-    if (r.ok) { this.log(`✓ ${step.describe} (checked on screen: ${r.why})`, "ok", file); return; }
-    this.log(`✗ ${step.describe}: ${domOk ? r.why || "the screen doesn't show that it worked" : why}`, "error", file);
+    if (r.ok) { this.log(`✓ ${step.describe}`, "ok", file, { why: r.why || "the screen shows it worked", how: "screen" }); return; }
+    this.log(`✗ ${step.describe}`, "error", file, { why: domOk ? r.why || "the screen doesn't show that it worked" : why, how: domOk ? "screen" : "page" });
     throw new Error(`step didn't work: ${step.describe}`);
   }
 }

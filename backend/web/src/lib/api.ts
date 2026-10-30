@@ -19,7 +19,7 @@ export type SessionFull = {
   turns: { startMs: number; endMs: number; text: string }[];
   specs: { id: number; version: number; note?: string }[];
 };
-export type LogLine = { at: number; msg: string; level: "info" | "ok" | "warn" | "error"; shot?: string };
+export type LogLine = { at: number; msg: string; level: "info" | "ok" | "warn" | "error"; shot?: string; why?: string; how?: "page" | "screen" };
 export type ItemStatus = "waiting" | "running" | "approval" | "asking" | "planned" | "done" | "skipped" | "failed";
 export type Candidate = { url: string; title: string; vars: Record<string, unknown>; score: number | null; shot?: string; best?: boolean };
 export type Item = { url: string; label: string; status: ItemStatus; outcome?: string; because?: string; expected?: string; decidedBy?: "rules" | "you" | "learned"; log: LogLine[]; candidates?: Candidate[]; report?: string };
