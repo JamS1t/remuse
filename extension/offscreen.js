@@ -4,7 +4,7 @@
 // voice stays lined up with the clicks. If the microphone drops out (a headset reconnects, Windows hands
 // the mic to another app), recording picks it up again and the gap stays silent instead of losing the rest.
 const API = "http://127.0.0.1:3200/api";
-let ctx, stream, node, parts, t0, sessionId, drops;
+let ctx, stream, node, parts, t0, sessionId, drops, sent, ticker;
 
 chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
   if (msg.target !== "offscreen") return;
@@ -15,12 +15,13 @@ chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
 });
 
 async function start(id) {
-  sessionId = id; parts = []; drops = 0;
+  sessionId = id; parts = []; drops = 0; sent = 0;
   ctx = new AudioContext();
   await ctx.resume();
   await ctx.audioWorklet.addModule("recorder-worklet.js");
   t0 = ctx.currentTime;
   await listen();
+  ticker = setInterval(sendPiece, 8000);
   return { startedAt: Date.now() };
 }
 
@@ -33,8 +34,21 @@ async function listen() {
   stream.getAudioTracks()[0].onended = () => { if (!ctx) return; drops++; node.disconnect(); listen().catch(() => {}); };
 }
 
+// Every few seconds, the voice since last time goes to the Agent, so the sidebar can follow along live.
+async function sendPiece() {
+  const piece = parts.slice(sent);
+  if (!ctx || !piece.length) return;
+  sent += piece.length;
+  const raw = new Float32Array(piece.reduce((n, p) => n + p.pcm.length, 0));
+  let o = 0; for (const p of piece) { raw.set(p.pcm, o); o += p.pcm.length; }
+  if (raw.length < ctx.sampleRate) return; // under a second: nothing worth hearing
+  const wav = await toWav(raw, ctx.sampleRate);
+  fetch(`${API}/sessions/${sessionId}/live?at=${Math.round(piece[0].at * 1000)}`, { method: "POST", body: wav }).catch(() => {});
+}
+
 async function stop() {
   if (!ctx) return { bytes: 0 };
+  clearInterval(ticker);
   const rate = ctx.sampleRate, total = ctx.currentTime - t0;
   const c = ctx; ctx = null;
   node.disconnect(); stream.getTracks().forEach((t) => t.stop()); await c.close();
