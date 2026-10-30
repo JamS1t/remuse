@@ -10,6 +10,7 @@ import { load, type Rules } from "./build.ts";
 import type { Spec, Step, Target } from "./understand.ts";
 import { applyLogins } from "./logins.ts";
 import { notify } from "./notify.ts";
+import { chromeReady, relayUrl } from "./chrome.ts";
 import { captionFor, chooseFile, findFolder, freeName, markUsed, pathIn, usedFor } from "./folders.ts";
 
 /** Ends the item quietly as skipped (e.g. nothing new to upload yet), not as a failure. */
@@ -32,6 +33,7 @@ export type Answer = { decision?: "approve" | "reject" | "approve_all" | "retry"
 export type Run = {
   id: string; specId: number; status: "starting" | "running" | "done" | "failed" | "stopped";
   items: Item[]; current: number; pending: Pending | null; autoApprove: boolean;
+  browser?: "chrome" | "own"; // your Chrome (through the extension) or Remuse's own browser
   rows?: Record<string, string>[];
   // Runs work hidden in the background unless the person chose to watch; who started it.
   visible?: boolean; trigger?: "you" | "schedule";
@@ -82,6 +84,16 @@ const launch = async (opts: Parameters<typeof chromium.launchPersistentContext>[
   catch { return chromium.launchPersistentContext(PROFILE, opts); } // ponytail: no Chrome installed, bundled Chromium
 };
 
+/** The person's own Chrome, through the extension (see chrome.ts). */
+export async function openChrome(): Promise<BrowserContext> {
+  const browser = await chromium.connectOverCDP(relayUrl(Number(process.env.PORT ?? 3200)));
+  const ctx = browser.contexts()[0];
+  // ponytail: a CDP-connected default context can't be closed; letting go of Chrome closes Remuse's tabs (relay).
+  ctx.close = () => browser.close();
+  await ctx.addInitScript({ path: fileURLToPath(new URL("../../extension/webmcp.js", import.meta.url)) });
+  return ctx;
+}
+
 export async function openBrowser(headless: boolean): Promise<BrowserContext> {
   // Without the "controlled by automation" flags, sites that refuse automated browsers (Google's
   // "this browser may not be secure") treat Remuse's browser like any other Chrome.
@@ -122,6 +134,7 @@ export class Runner {
   tabs = new Map<string, Page>();
   tabName = "";
   headless = true;
+  inChrome = false; // running in the person's own Chrome through the extension
   // Re-attaches the download watcher when the browser is reopened after a sign-in pause.
   watch: (ctx: BrowserContext) => void = () => {};
   stopped = false;
@@ -174,10 +187,16 @@ export class Runner {
 
   async start(limit?: number) {
     this.headless = process.env.HEADLESS === "1" || !this.run.visible;
-    const browser = await openBrowser(this.headless);
+    // Your own Chrome when the extension is linked: your real logins, nothing copied. Remuse's own browser
+    // when Chrome is closed, and for tasks that upload or save files (the extension can't hand those over).
+    const steps = [...this.spec.steps, ...Object.values(this.spec.outcomes).flatMap((o) => o.steps)];
+    this.inChrome = chromeReady() && process.env.REMUSE_OWN_BROWSER !== "1" && !this.spec.saveDownloads && !steps.some((x) => x.do === "upload");
+    const browser = this.inChrome ? await openChrome() : await openBrowser(this.headless);
+    this.run.browser = this.inChrome ? "chrome" : "own"; this.changed();
     try {
       this.ctx = browser;
       this.page = browser.pages()[0] ?? (await browser.newPage());
+      if (this.inChrome && this.run.visible) await this.page.bringToFront().catch(() => {});
       const keep = findFolder(this.spec.saveDownloads ?? null);
       // Downloads in flight: an item (and the run) waits for them before the browser closes.
       const saving: Promise<void>[] = [];
@@ -375,12 +394,14 @@ export class Runner {
       catch (e) {
         if (e instanceof Skip) { this.item.status = "skipped"; this.log(e.message, "info"); return false; }
         // A sign-in page in the way: hidden or not, pause and let the person sign in once in plain Chrome.
-        if (!this.stopped && (await this.onSignInPage())) {
+        if (!this.stopped && !this.inChrome && (await this.onSignInPage())) {
           if (await this.signIn(s)) continue;
           this.item.status = "skipped"; return false;
         }
         // A hidden run has no window to hand over: the item fails and says why instead of waiting forever.
-        if (this.stopped || process.env.HEADLESS === "1" || !this.run.visible) throw e;
+        // In your Chrome there's always a window to hand over; in Remuse's hidden browser there isn't.
+        if (this.stopped || (!this.inChrome && (process.env.HEADLESS === "1" || !this.run.visible))) throw e;
+        if (this.inChrome) await this.page.bringToFront().catch(() => {});
         const { file } = await this.shot();
         const it = this.item;
         this.log(`Stuck on "${s.describe}": ${(e as Error).message}`, "warn", file);

@@ -11,7 +11,11 @@
     "cookies",
     "scripting",
     "identity",
-    "identity.email"
+    "identity.email",
+    "debugger",
+    "alarms",
+    "notifications",
+    "background"
   ],
   "host_permissions": [
     "<all_urls>"

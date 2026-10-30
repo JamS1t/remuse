@@ -13,6 +13,7 @@ import { Runner, openBrowser, openPlainChrome, type Run } from "./runner.ts";
 import type { BrowserContext } from "playwright";
 import { GOOGLE, SITE, listLogins, removeLogin, saveLogin } from "./logins.ts";
 import { notify } from "./notify.ts";
+import { chromeReady, upgrade as chromeUpgrade } from "./chrome.ts";
 import { addFolder, chooseFile, filesIn, findFolder, listFolders, pickFolder, removeFolder, usedFor } from "./folders.ts";
 
 // What Muse Spark sees of the allowed folders: names and their newest file names.
@@ -582,10 +583,14 @@ async function route(req: IncomingMessage, res: ServerResponse) {
   throw new HttpError(404, "not found");
 }
 
+// One broken page or browser link must not take the whole Agent (and every schedule) down with it.
+process.on("uncaughtException", (e) => console.error("uncaught:", e));
+
 // ponytail: no auth; bound to 127.0.0.1 for local demo use only.
 createServer((req, res) => {
   route(req, res).catch((e) => {
     if (!(e instanceof HttpError)) console.error(e);
     send(res, e instanceof HttpError ? e.status : 500, { error: e.message });
   });
-}).listen(PORT, "127.0.0.1", () => console.log(`Remuse on http://127.0.0.1:${PORT}`));
+}).on("upgrade", (req, socket, head) => { if (!chromeUpgrade(req, socket, head)) socket.destroy(); })
+  .listen(PORT, "127.0.0.1", () => console.log(`Remuse on http://127.0.0.1:${PORT}`));
