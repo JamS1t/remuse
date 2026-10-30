@@ -177,7 +177,7 @@ function Learned({ t, onDone, onRetry }: { t: Task; onDone: () => void; onRetry:
       {t.askedSchedule && t.specId ? <AskedSchedule t={t} onDone={onDone} /> : null}
       <div className="mt-4 flex gap-2">
         <Button size="sm" className="flex-1" variant={t.askedSchedule ? "outline" : "default"} onClick={onDone}>Looks right</Button>
-        <Button size="sm" variant="outline" onClick={() => open(`#/spec/${t.specId}`)}>Review</Button>
+        <Button size="sm" variant="outline" onClick={() => open(`#/task/${t.sessionId}`)}>Review</Button>
       </div>
     </section>
   );

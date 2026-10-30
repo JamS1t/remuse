@@ -7,7 +7,7 @@ import { join, dirname, extname } from "node:path";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { transcribe, calls } from "./meta.ts";
-import { understand, type Spec } from "./understand.ts";
+import { revise, understand, type Spec } from "./understand.ts";
 import { build } from "./build.ts";
 import { Runner, openBrowser, openPlainChrome, type Run } from "./runner.ts";
 import type { BrowserContext } from "playwright";
@@ -521,6 +521,23 @@ async function route(req: IncomingMessage, res: ServerResponse) {
       const { spec, note } = await json(req);
       if (!spec?.steps || !spec?.rules || !spec?.outcomes) throw new HttpError(400, "spec needs steps, rules and outcomes");
       return send(res, 201, specRow(saveSpec(row.sessionId, spec, note ?? "Edited by you")));
+    }
+    // Feedback in plain words: Muse Spark updates the task (a new version) and says what it changed; the
+    // rules are then rebuilt and checked in the background, shown as "thinking" like after a recording.
+    if (m === "POST" && p[3] === "feedback") {
+      const said = String((await json(req)).text ?? "").trim().slice(0, 2000);
+      if (!said) throw new HttpError(400, "say what should change");
+      const last = db.prepare("SELECT json FROM runs WHERE spec_id IN (SELECT id FROM specs WHERE session_id = ?) ORDER BY updated_at DESC LIMIT 1").get(row.sessionId) as any;
+      const lastRun = last ? (JSON.parse(last.json) as Run).items.slice(0, 3).map((it) => `${it.label}: ${it.log.map((l) => l.msg).join(" / ")}`).join("\n").slice(0, 4000) : "";
+      const { spec, changes } = await revise(full(row.sessionId), row.spec, said, lastRun);
+      const specId = saveSpec(row.sessionId, spec, `You said: "${said.slice(0, 140)}"`);
+      stage(row.sessionId, "building");
+      build(spec, pagesOf(row.sessionId), new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Manila" }))
+        .then((b) => { db.prepare("UPDATE specs SET code = ?, tests = ? WHERE id = ?").run(b.code, JSON.stringify(b.tests), specId); stage(row.sessionId, "ready"); })
+        .catch((e) => stage(row.sessionId, "failed", (e as Error).message));
+      // Schedules follow the task to its new version.
+      db.prepare("UPDATE schedules SET spec_id = ? WHERE spec_id IN (SELECT id FROM specs WHERE session_id = ?)").run(specId, row.sessionId);
+      return send(res, 201, { specId, changes });
     }
     // The task's file settings (which folder and rule each upload uses; where downloads go). Saved as a new
     // version that keeps the built code, since the rules didn't change.

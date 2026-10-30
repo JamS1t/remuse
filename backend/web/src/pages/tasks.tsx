@@ -2,6 +2,7 @@ import { useState } from "react";
 import { toast } from "sonner";
 import { Square, CalendarClock, Check, FolderOpen, Eye, ChevronRight, CircleAlert, Code2, Ellipsis, Hand, LoaderCircle, Mic, RotateCcw, ShieldAlert, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -130,6 +131,7 @@ export function TaskPage({ id, tab = "overview" }: { id: string; tab?: string })
               </section>
             ) : null}
             {spec ? <WhatItDoes spec={spec} /> : null}
+            {spec && !learning ? <Feedback specId={spec.id} onDone={reload} /> : null}
             {t.rules.length ? (
               <section>
                 <h2 className="mb-2 text-[13px] font-medium text-muted-foreground">Your rules, in your words</h2>
@@ -200,6 +202,36 @@ export function TaskPage({ id, tab = "overview" }: { id: string; tab?: string })
 }
 
 /** The task in plain words: where it starts, what it does each time, how it ends. */
+/** "Something not right?": say it in your own words; Muse Spark updates the task and says what changed. */
+function Feedback({ specId, onDone }: { specId: number; onDone: () => void }) {
+  const [text, setText] = useState("");
+  const [changes, setChanges] = useState<string[] | null>(null);
+  const { busy, run } = useAction();
+  const send = () => run("send", async () => {
+    const r = await api<{ changes: string[] }>(`/specs/${specId}/feedback`, "POST", { text });
+    setChanges(r.changes.length ? r.changes : ["I updated the task."]); setText(""); onDone();
+  });
+  return (
+    <section className="glass rounded-2xl p-5">
+      <h2 className="text-[15px] font-medium">Something not right?</h2>
+      <p className="mt-1 text-[13.5px] text-muted-foreground">Tell me in your own words, like you would a person. I'll change just that and check it again.</p>
+      <Textarea className="mt-3 min-h-20 text-[14px]" value={text} onChange={(e) => setText(e.target.value)} disabled={busy === "send"}
+        placeholder={"e.g. “The views should come from the Reach tab” or “Only do posts from today”"}
+        onKeyDown={(e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && text.trim()) send(); }} />
+      <div className="mt-3 flex items-center gap-3">
+        <Button className="rounded-full px-4" onClick={send} disabled={!text.trim() || !!busy}>{busy === "send" ? <><LoaderCircle className="animate-spin" />Updating the task…</> : "Change it"}</Button>
+        {busy === "send" ? <span className="text-[13px] text-muted-foreground">This takes about half a minute.</span> : null}
+      </div>
+      {changes ? (
+        <div className="mt-4 border-t border-rule pt-3">
+          <p className="text-[13px] text-muted-foreground">What I changed</p>
+          <ul className="mt-1.5 space-y-1 text-[14px]">{changes.map((c) => <li key={c} className="flex gap-2"><Check className="mt-0.5 size-4 shrink-0 text-ok" />{c}</li>)}</ul>
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
 function WhatItDoes({ spec: row }: { spec: SpecRow }) {
   const s = row.spec;
   const outcomes = Object.entries(s.outcomes);

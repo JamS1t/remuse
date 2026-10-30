@@ -45,7 +45,7 @@ You teach it by doing the task once and talking through why. There's nothing to 
    - **Outcomes:** what each decision does.
    - **Checks:** what the screen should look like after every step.
    - **Compare:** if you opened several results and picked one, a step that opens the top results, reads the same values on each and keeps the best.
-3. **Review.** You check the spec and edit it if needed. Each save is a new version.
+3. **Review.** You check what it will do. If something's off, say so in your own words on the task page ("the views should come from the Reach tab"): Muse Spark changes just that, tells you what it changed, and the rules are rebuilt and checked. Each change is a new version.
 4. **Build.** Muse Spark writes the rules, the data extraction and the ranking as JavaScript. Remuse runs that code against your demo (it must read the same values and reach the same decision you did) plus tests Muse Spark writes for each rule. Dates, thresholds, prices per unit and rule order are computed in code, not guessed.
 5. **Run.** The Agent repeats the task:
    - **Finding things:** it looks for elements by role and name first, then by the recorded selector. If the page was redesigned, Muse Spark finds the element on a screenshot, SAM 3.1 snaps the click to the exact element, and the spec is updated.
@@ -95,6 +95,7 @@ For development: `cd backend && npm start` runs the Agent in a terminal (http://
 | `cd backend && node test/signin.e2e.ts` | A hidden run that hits a sign-in page pauses, opens it in plain Chrome for you, then carries on where it was |
 | `cd backend && node test/clicklist.e2e.ts` | A list whose items open by clicking, not links (forum posts, cards): found by role, each opened and read |
 | `cd backend && node test/chrome.e2e.ts` | With the extension linked, a run happens in your own Chrome: uses its existing login, follows a tab the site opens, closes its tabs after |
+| `cd backend && node test/feedback.e2e.ts` | Feedback in plain words updates a task: only what was asked changes, you're told what changed, the rules are rebuilt |
 | `cd backend && node test/webmcp.check.ts` | A page's WebMCP tool is seen and called by the Agent's browser |
 | `cd mock-apps && npm run check` | The test sites' data agrees with the spoken rules |
 | `node --env-file=.env scripts/risk-tests.mjs` | The day-1 Meta API checks |
