@@ -23,7 +23,7 @@ export function useRunTask(task: Task): { open: (mode: Mode) => void; busy: bool
   const start = (mode: Mode) => run("run", async () => {
     const body = task.source === "rows" ? { rows: parseCsv(rows) } : task.source === "list" ? { limit: count ? Number(count) : undefined } : {};
     if (task.source === "rows" && !("rows" in body && body.rows?.length)) throw new Error(`Add at least one ${item} under the header line.`);
-    const r = await api<{ id: string }>(`/specs/${task.specId}/runs`, "POST", { ...body, autoApprove: mode === "unattended", watch: mode === "watch" });
+    const r = await api<{ id: string }>(`/specs/${task.specId}/runs`, "POST", { ...body, autoApprove: mode === "unattended", watch: mode === "watch", plan: true });
     setAsk(null);
     location.hash = `#/run/${r.id}`;
   });

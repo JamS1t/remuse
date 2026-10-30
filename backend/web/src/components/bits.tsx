@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from "react";
 import { toast } from "sonner";
-import { Check, ChevronDown, ChevronLeft, CircleAlert, CircleDashed, Hand, KeyRound, LoaderCircle, MessageCircleQuestion, Minus, X } from "lucide-react";
+import { Check, ChevronDown, ChevronLeft, CircleAlert, CircleDashed, Hand, ListChecks, KeyRound, LoaderCircle, MessageCircleQuestion, Minus, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
@@ -134,6 +134,7 @@ const STATUS: Record<ItemStatus | "starting" | "stopped", { icon: typeof Check; 
   running: { icon: LoaderCircle, word: "Running", cls: "text-tally" },
   approval: { icon: Hand, word: "Needs your OK", cls: "text-foreground" },
   asking: { icon: MessageCircleQuestion, word: "Has a question", cls: "text-foreground" },
+  planned: { icon: ListChecks, word: "Planned", cls: "text-foreground" },
   done: { icon: Check, word: "Done", cls: "text-ok" },
   skipped: { icon: Minus, word: "Skipped", cls: "text-muted-foreground" },
   failed: { icon: X, word: "Failed", cls: "text-destructive" },

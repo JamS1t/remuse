@@ -14,7 +14,14 @@ import { ago, api, fmtSecs, isLive, timecode, useApi, type Candidate, type Item,
 import { cn } from "@/lib/utils";
 
 const settled = (i: Item) => ["done", "skipped", "failed"].includes(i.status);
-const dur = (i: Item, now: number) => (i.log.length ? (settled(i) ? i.log[i.log.length - 1].at : now) - i.log[0].at : 0);
+// A planned item's clock stops while it waits for Go.
+const dur = (i: Item, now: number) => {
+  if (!i.log.length) return 0;
+  const end = settled(i) || i.status === "planned" ? i.log[i.log.length - 1].at : now;
+  // Acted after a plan: looking time plus doing time, not the wait for Go in between.
+  const k = i.log.findIndex((l) => l.msg.startsWith("Doing it now"));
+  return k > 0 ? i.log[k - 1].at - i.log[0].at + (end - i.log[k].at) : end - i.log[0].at;
+};
 const matches = (i: Item) => (i.expected === "ask" ? i.decidedBy !== "rules" : i.outcome === i.expected);
 const words = (s?: string) => s?.replaceAll("_", " ");
 // "avg_view_duration" -> "Avg view duration", with short forms in capitals ("ctr" -> "CTR").
@@ -57,6 +64,7 @@ export function RunPage({ id }: { id: string }) {
             {!single ? <><span>·</span><span>{done} of {r.items.length} done</span></> : null}
             {r.browser ? <><span>·</span><span>{r.browser === "chrome" ? "In your Chrome" : "In Remuse's browser"}</span></> : null}
             {r.autoApprove ? <><span>·</span><span className="text-warn">without asking you</span></> : null}
+            {live && r.phase === "plan" && !r.pending ? <><span>·</span><span className="shimmer">Looking at every item first</span></> : null}
           </span>
         }
         actions={
@@ -234,6 +242,41 @@ export function PendingCard({ p, r, file, busy, answer }: { p: Pending; r: Run; 
       </div>
     </section>
   );
+
+  // Every item read and decided, nothing done yet: the plan, and your Go.
+  if (p.kind === "plan") {
+    const planned = r.items.map((it, n) => ({ it, n })).filter(({ it }) => it.status === "planned");
+    return (
+      <section className="animate-in fade-in slide-in-from-top-2 glass overflow-hidden rounded-2xl duration-300 ease-out" aria-live="assertive">
+        <div className="flex items-center gap-2.5 border-b border-rule px-4 py-3">
+          <Orb state="waiting" size={20} /><h2 className="text-[14px] font-semibold">My plan for {planned.length} {planned.length === 1 ? "item" : "items"}</h2>
+        </div>
+        <div className="grid gap-4 p-4">
+          <div>
+            <p className="text-[16px] leading-snug">{Object.entries(p.counts).sort((a, b) => b[1] - a[1]).map(([o, n]) => `${n} ${words(o)}`).join(" · ")}</p>
+            {p.skipped || p.failed ? <p className="mt-1 text-[13px] text-muted-foreground">{[p.skipped && `${p.skipped} skipped`, p.failed && `${p.failed} I couldn't read`].filter(Boolean).join(", ")}; I'll leave those.</p> : null}
+          </div>
+          <ol className="max-h-72 divide-y divide-rule overflow-y-auto rounded-xl bg-white/[0.03]">
+            {planned.map(({ it, n }) => (
+              <li key={n} className="grid grid-cols-[minmax(0,1fr)_auto] gap-x-3 px-3 py-2 text-[13px]">
+                <span className="truncate"><ItemLabel text={it.label} /></span>
+                <span className="font-medium capitalize">{words(it.outcome)}</span>
+                {it.because ? <span className="col-span-2 line-clamp-1 text-[12px] text-muted-foreground">{it.decidedBy === "you" ? "You said so" : it.because === "otherwise" ? "None of your other rules fit" : words(it.because)}</span> : null}
+              </li>
+            ))}
+          </ol>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button size="lg" onClick={() => answer({ decision: "approve" })} disabled={busy}>Go</Button>
+            {p.needsOk ? <Button size="lg" variant="outline" onClick={() => answer({ decision: "approve_all" })} disabled={busy}>Approve all {p.needsOk} and go</Button> : null}
+            <Button size="lg" variant="ghost" className="ml-auto" onClick={() => answer({ decision: "reject" })} disabled={busy}>Cancel</Button>
+          </div>
+          <p className="text-[12.5px] text-muted-foreground">
+            {p.needsOk ? `With Go I still ask before each of the ${p.needsOk} that send, pay or submit. Nothing has been done yet.` : "None of these send, pay or submit. Nothing has been done yet."}
+          </p>
+        </div>
+      </section>
+    );
+  }
 
   const head = (icon: React.ReactNode, title: string) => (
     <div className="flex items-center gap-2.5 border-b border-rule px-4 py-3">
