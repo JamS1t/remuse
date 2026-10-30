@@ -12,7 +12,7 @@ import { ScheduleEditor, describeSchedule } from "@/components/schedule";
 import { Content, PageHead } from "@/components/shell";
 import { RunsList } from "@/pages/activity";
 import { cn } from "@/lib/utils";
-import { IRREVERSIBLE, ago, api, isLive, useApi, type ActivityRun, type FolderRow, type ScheduleRow, type SessionFull, type SpecRow, type Task } from "@/lib/api";
+import { IRREVERSIBLE, ago, api, isLive, saved, useApi, type ActivityRun, type FolderRow, type ScheduleRow, type SessionFull, type SpecRow, type Task } from "@/lib/api";
 
 const LEARNING: Record<string, string> = {
   listening: "Listening back to what you said",
@@ -27,7 +27,11 @@ export function TasksPage() {
   const { data: sched } = useApi<ScheduleRow[]>("/schedules", 5000, () => true);
   return (
     <Content>
-      <PageHead title="Tasks" sub="Show Remuse a task once from the Chrome sidebar. It learns it and shows up here, ready to do again." />
+      <PageHead title="Tasks" sub={(() => {
+        const total = (tasks ?? []).reduce((s, t) => s + (t.savedMs ?? 0), 0);
+        const n = (tasks ?? []).reduce((s, t) => s + (t.savedMs ? t.doneCount : 0), 0);
+        return total >= 60_000 ? `By an estimate, Remuse has saved you ${saved(total)} so far, doing ${n} ${n === 1 ? "thing" : "things"} you showed it once.` : "Show Remuse a task once from the Chrome sidebar. It learns it and shows up here, ready to do again.";
+      })()} />
       {error ? <p className="text-destructive">{error}</p> : !tasks ? <div className="h-28 animate-pulse rounded-2xl bg-muted" /> : !tasks.length ? (
         <div className="glass flex flex-col items-center rounded-2xl px-6 py-14 text-center">
           <Orb size={64} />
@@ -62,6 +66,7 @@ function TaskCard({ t, schedule, onChange }: { t: Task; schedule: ScheduleRow | 
             <span className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1 text-[12.5px] text-muted-foreground">
               <span className="inline-flex items-center gap-1.5"><CalendarClock className="size-3.5" />{schedule ? `Repeats ${describeSchedule(schedule)}` : "Runs when you ask"}</span>
               {t.lastReport ? <span>Last update {ago(t.lastReport.at)}</span> : null}
+              {t.savedMs && t.savedMs >= 60_000 ? <span>Saved you {saved(t.savedMs)}</span> : null}
             </span>
           ) : null}
         </a>
@@ -168,6 +173,13 @@ export function TaskPage({ id, tab = "overview" }: { id: string; tab?: string })
               ) : null}
               <Button size="sm" variant="outline" className="mt-3 rounded-full" onClick={() => setEditing("schedule")}><CalendarClock />{schedule ? "Change" : t.askedSchedule ? `Repeat ${describeSchedule(t.askedSchedule)}` : "Repeat by itself"}</Button>
             </section>
+            {t.savedMs && t.doneCount ? (
+              <section className="glass rounded-2xl px-5 py-4 text-[13px]">
+                <p className="font-medium">Time saved</p>
+                <p className="mt-1 text-[17px]">{saved(t.savedMs)}</p>
+                <p className="mt-1 text-muted-foreground">An estimate: {t.doneCount} {t.itemName ?? "item"}{t.doneCount === 1 ? "" : "s"} done for you (each counted once a day), times how long your demo took ({saved(t.demoMs!).replace(/^about /, "about ")}, talking included).</p>
+              </section>
+            ) : null}
             <Safety spec={spec} />
             {t.specId ? <FilesCard t={t} onChange={reload} /> : null}
             <section className="glass rounded-2xl px-5 py-4 text-[13px]">
