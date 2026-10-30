@@ -55,7 +55,8 @@ export function useApi<T>(path: string | null, everyMs = 0, keepPolling: (d: T) 
   useEffect(() => {
     let alive = true;
     let timer: ReturnType<typeof setTimeout>;
-    if (!path) return;
+    // Nothing to load (e.g. no live run anymore): drop the old answer instead of showing it forever.
+    if (!path) { setData(null); return; }
     const load = () => api<T>(path).then(
       (d) => { if (!alive) return; setData(d); setError(null); if (everyMs && keepPolling(d)) timer = setTimeout(load, everyMs); },
       (e) => { if (alive) setError(e.message); },
