@@ -55,6 +55,7 @@ export function RunPage({ id }: { id: string }) {
             <span>·</span><span>{r.trigger === "schedule" ? "Started by its schedule" : "Started by you"} {ago(r.startedAt)}</span>
             <span>·</span><span className="font-mono text-[13px]">{fmtSecs(took)}</span>
             {!single ? <><span>·</span><span>{done} of {r.items.length} done</span></> : null}
+            {r.browser ? <><span>·</span><span>{r.browser === "chrome" ? "In your Chrome" : "In Remuse's browser"}</span></> : null}
             {r.autoApprove ? <><span>·</span><span className="text-warn">without asking you</span></> : null}
           </span>
         }

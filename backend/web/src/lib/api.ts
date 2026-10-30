@@ -28,7 +28,7 @@ export type Pending =
   | { kind: "ask"; item: number; question: string; options: string[]; shot: string }
   | { kind: "handoff"; item: number; step: string; problem: string; shot: string };
 export type Run = {
-  id: string; specId: number; status: "starting" | "running" | "done" | "failed" | "stopped";
+  id: string; specId: number; status: "starting" | "running" | "done" | "failed" | "stopped"; browser?: "chrome" | "own";
   items: Item[]; current: number; pending: Pending | null; autoApprove: boolean;
   startedAt: number; endedAt?: number; error?: string; shot?: string; newSpecId?: number; visible?: boolean; trigger?: "you" | "schedule";
   heals: { step: string; from: string; to: string }[];

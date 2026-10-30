@@ -1,4 +1,5 @@
 // Recording controller: owns the session, takes screenshots, forwards events to the backend.
+import "./drive.js"; // runs tasks in this Chrome for the Agent
 const API = "http://127.0.0.1:3200/api";
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 

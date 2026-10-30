@@ -28,7 +28,7 @@ You teach it by doing the task once and talking through why. There's nothing to 
 ## Two parts
 
 - **Remuse Agent** (`backend/`): a small program on your PC that starts with Windows. It keeps your tasks and schedules, runs them in its own browser, and asks you through Windows notifications when it needs an OK. It runs whether Chrome is open or not.
-- **Remuse in Chrome** (`extension/`): the Remuse button in the toolbar opens a sidebar:
+- **Remuse in Chrome** (`extension/`): runs your tasks in your own Chrome, with the logins you already have (nothing is copied). Its tabs open in a window of their own that doesn't take focus, and Chrome keeps running in the background after you close it so schedules still run. When Chrome is fully quit, the Agent uses its own browser. The Remuse button in the toolbar opens a sidebar:
   - **Watch me** records a task in any tab, voice included.
   - **Again** repeats a saved task now, or on a schedule.
   - **Connected sites** shares your existing login for the sites you choose with the Agent. It stays on your PC, so you never sign in twice.
@@ -94,6 +94,7 @@ For development: `cd backend && npm start` runs the Agent in a terminal (http://
 | `cd backend && node test/sheets.e2e.ts <narration.wav>` | A recording past 30 s keeps the whole voice track; pointing at something (no click) is recorded; typing in a spreadsheet grid is recorded with its cell; the runner writes a cell through the Name Box |
 | `cd backend && node test/signin.e2e.ts` | A hidden run that hits a sign-in page pauses, opens it in plain Chrome for you, then carries on where it was |
 | `cd backend && node test/clicklist.e2e.ts` | A list whose items open by clicking, not links (forum posts, cards): found by role, each opened and read |
+| `cd backend && node test/chrome.e2e.ts` | With the extension linked, a run happens in your own Chrome: uses its existing login, follows a tab the site opens, closes its tabs after |
 | `cd backend && node test/webmcp.check.ts` | A page's WebMCP tool is seen and called by the Agent's browser |
 | `cd mock-apps && npm run check` | The test sites' data agrees with the spoken rules |
 | `node --env-file=.env scripts/risk-tests.mjs` | The day-1 Meta API checks |
