@@ -4,24 +4,26 @@
 // voice stays lined up with the clicks. If the microphone drops out (a headset reconnects, Windows hands
 // the mic to another app), recording picks it up again and the gap stays silent instead of losing the rest.
 const API = "http://127.0.0.1:3200/api";
-let ctx, stream, node, parts, t0, sessionId, drops, sent, ticker;
+let ctx, stream, node, parts, t0, sessionId, drops, sent, ticker, converse = false;
 
 chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
   if (msg.target !== "offscreen") return;
   const job = msg.type === "mic" ? navigator.permissions.query({ name: "microphone" }).then((p) => ({ state: p.state }))
-    : msg.type === "start" ? start(msg.sessionId) : stop();
+    : msg.type === "start" ? start(msg.sessionId) : msg.type === "converse" ? start(msg.sessionId, true)
+    : msg.type === "unlisten" ? (converse ? stop() : Promise.resolve({ ok: true })) : stop();
   job.then(reply, (e) => reply({ error: `${e.name}: ${e.message}` }));
   return true;
 });
 
-async function start(id) {
-  sessionId = id; parts = []; drops = 0; sent = 0;
+async function start(id, talk = false) {
+  if (ctx) await stop().catch(() => {}); // one microphone user at a time: a new recording ends the conversation
+  sessionId = id; parts = []; drops = 0; sent = 0; converse = talk; speaking = false; loud = 0; quiet = 0;
   ctx = new AudioContext();
   await ctx.resume();
   await ctx.audioWorklet.addModule("recorder-worklet.js");
   t0 = ctx.currentTime;
   await listen();
-  if (id) ticker = setInterval(sendPiece, 8000); // a spoken note has no session to follow along
+  if (!talk) ticker = setInterval(sendPiece, 8000); // a conversation isn't a recording to follow along
   return { startedAt: Date.now() };
 }
 
@@ -29,7 +31,7 @@ async function listen() {
   stream = await navigator.mediaDevices.getUserMedia({ audio: true });
   const src = ctx.createMediaStreamSource(stream);
   node = new AudioWorkletNode(ctx, "remuse-recorder", { numberOfInputs: 1, numberOfOutputs: 0, channelCount: 1, channelCountMode: "explicit" });
-  node.port.onmessage = (e) => parts.push({ at: e.data.at - t0, pcm: e.data.pcm });
+  node.port.onmessage = (e) => { const p = { at: e.data.at - t0, pcm: e.data.pcm }; parts.push(p); if (converse) hearing(p); };
   src.connect(node);
   stream.getAudioTracks()[0].onended = () => { if (!ctx) return; drops++; node.disconnect(); listen().catch(() => {}); };
 }
@@ -46,8 +48,35 @@ async function sendPiece() {
   fetch(`${API}/sessions/${sessionId}/live?at=${Math.round(piece[0].at * 1000)}`, { method: "POST", body: wav }).catch(() => {});
 }
 
+// Conversation: after a task is learned the sidebar keeps listening, hands-free. Each thing you say is cut
+// out by the pauses around it (talking = louder than the room for a moment; done = quiet for 1.2 s) and sent
+// to the Agent, which works out what you meant. Nothing is kept between things you say.
+let speaking = false, loud = 0, quiet = 0, noise = 0.004, from = 0;
+function hearing(p) {
+  let sum = 0; for (const v of p.pcm) sum += v * v;
+  const rms = Math.sqrt(sum / p.pcm.length), dt = p.pcm.length / ctx.sampleRate, block = Math.ceil(0.4 / dt);
+  // The room's level: drops at once to anything quieter, creeps up over seconds, so a voice never becomes "the room".
+  if (!speaking) noise += (rms - noise) * (rms < noise ? 0.05 : 0.0005);
+  const voice = rms > Math.max(0.012, noise * 3);
+  // Speech has tiny gaps between sounds: they only wear the count down, they don't reset it.
+  if (voice) { loud += dt; quiet = 0; } else { quiet += dt; if (!speaking) loud = Math.max(0, loud - dt); }
+  if (!speaking && loud > 0.15) { speaking = true; from = Math.max(0, parts.length - block - Math.ceil(loud / dt)); }
+  else if (speaking && quiet > 1.2) {
+    speaking = false; loud = 0;
+    const said = parts.slice(from); parts = [];
+    send(said).catch(() => {});
+  } else if (!speaking && parts.length > block * 4) parts.splice(0, parts.length - block); // keep just a moment before you speak
+}
+async function send(said) {
+  const raw = new Float32Array(said.reduce((n, p) => n + p.pcm.length, 0));
+  let o = 0; for (const p of said) { raw.set(p.pcm, o); o += p.pcm.length; }
+  if (!ctx || raw.length < ctx.sampleRate * 0.6) return; // a cough, a click
+  await fetch(`${API}/sessions/${sessionId}/say`, { method: "POST", body: await toWav(raw, ctx.sampleRate) });
+}
+
 async function stop() {
   if (!ctx) return { bytes: 0 };
+  if (converse) { converse = false; const c = ctx; ctx = null; node.disconnect(); stream.getTracks().forEach((t) => t.stop()); await c.close(); return { ok: true }; }
   clearInterval(ticker);
   const rate = ctx.sampleRate, total = ctx.currentTime - t0;
   const c = ctx; ctx = null;
@@ -56,12 +85,6 @@ async function stop() {
   const raw = new Float32Array(Math.ceil(total * rate));
   for (const p of parts) { const i = Math.round(p.at * rate); if (i >= 0 && i < raw.length) raw.set(p.pcm.subarray(0, raw.length - i), i); }
   const wav = await toWav(raw, rate);
-  // A spoken note (feedback in the sidebar), not a recording: just turn it into words.
-  if (!sessionId) {
-    const r = await fetch(`${API}/transcribe`, { method: "POST", body: wav });
-    if (!r.ok) throw new Error(`couldn't hear that: HTTP ${r.status}`);
-    return r.json();
-  }
   const res = await fetch(`${API}/sessions/${sessionId}/audio`, { method: "PUT", body: wav });
   if (!res.ok) throw new Error(`upload failed: HTTP ${res.status}`);
   return { bytes: wav.size, seconds: Math.round(total), drops };

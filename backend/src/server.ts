@@ -7,7 +7,7 @@ import { join, dirname, extname } from "node:path";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { transcribe, calls } from "./meta.ts";
-import { revise, understand, type Spec } from "./understand.ts";
+import { revise, sortSaid, understand, type Spec } from "./understand.ts";
 import { endLive, hear, liveState } from "./live.ts";
 import { build } from "./build.ts";
 import { Runner, openBrowser, openPlainChrome, type Run } from "./runner.ts";
@@ -194,6 +194,42 @@ async function learn(id: string, offsetMs: number) {
   }
 }
 
+/** Feedback in plain words (typed or said): Muse Spark updates the task as a new version and says what it
+ *  changed; the rules are rebuilt and checked in the background ("thinking", like after a recording). */
+async function applyFeedback(row: ReturnType<typeof specRow>, said: string) {
+  const last = db.prepare("SELECT json FROM runs WHERE spec_id IN (SELECT id FROM specs WHERE session_id = ?) ORDER BY updated_at DESC LIMIT 1").get(row.sessionId) as any;
+  const lastRun = last ? (JSON.parse(last.json) as Run).items.slice(0, 3).map((it) => `${it.label}: ${it.log.map((l) => l.msg).join(" / ")}`).join("\n").slice(0, 4000) : "";
+  const { spec, changes } = await revise(full(row.sessionId), row.spec, said, lastRun);
+  const specId = saveSpec(row.sessionId, spec, `You said: "${said.slice(0, 140)}"`);
+  stage(row.sessionId, "building");
+  build(spec, pagesOf(row.sessionId), new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Manila" }))
+    .then((b) => { db.prepare("UPDATE specs SET code = ?, tests = ? WHERE id = ?").run(b.code, JSON.stringify(b.tests), specId); stage(row.sessionId, "ready"); })
+    .catch((e) => stage(row.sessionId, "failed", (e as Error).message));
+  // Schedules follow the task to its new version.
+  db.prepare("UPDATE schedules SET spec_id = ? WHERE spec_id IN (SELECT id FROM specs WHERE session_id = ?)").run(specId, row.sessionId);
+  return { specId, changes };
+}
+
+// Hands-free conversation about a learned task (the sidebar keeps listening after it's learned). Each thing
+// the person says is heard, sorted (a change, "looks right", a schedule, "do it now", "let me show you
+// again", or not meant for Remuse) and acted on; the sidebar shows the latest and does the rest.
+type Heard = { n: number; at: number; text: string; intent: string; changes?: string[]; schedule?: { everyMinutes?: number; time?: string; days?: string }; error?: string };
+const heard = new Map<string, Heard>();
+async function hearSaid(sessionId: string, wav: Uint8Array) {
+  const text = (await transcribe(wav)).transcript.trim();
+  if (!text) return;
+  const n = (heard.get(sessionId)?.n ?? 0) + 1;
+  heard.set(sessionId, { n, at: Date.now(), text, intent: "thinking" });
+  const latest = (db.prepare("SELECT id FROM specs WHERE session_id = ? ORDER BY version DESC LIMIT 1").get(sessionId) as any)?.id;
+  if (!latest) return heard.set(sessionId, { n, at: Date.now(), text, intent: "none" });
+  const row = specRow(latest);
+  try {
+    const r = await sortSaid(row.spec, text);
+    if (r.intent === "change") heard.set(sessionId, { n, at: Date.now(), text, intent: "change", changes: (await applyFeedback(row, text)).changes });
+    else heard.set(sessionId, { n, at: Date.now(), text, intent: r.intent, schedule: r.schedule });
+  } catch (e) { heard.set(sessionId, { n, at: Date.now(), text, intent: "none", error: (e as Error).message }); }
+}
+
 // One run at a time: it drives one visible browser.
 let active: Runner | null = null;
 function saveRun(run: Run) {
@@ -364,12 +400,6 @@ async function route(req: IncomingMessage, res: ServerResponse) {
   const origin = req.headers.origin;
   if (origin && !ALLOWED_ORIGINS.has(origin) && !origin.startsWith("chrome-extension://")) throw new HttpError(403, "not allowed from this page");
 
-  // A spoken note (feedback said out loud in the sidebar) to words.
-  if (url.pathname === "/api/transcribe" && m === "POST") {
-    const wav = await body(req);
-    if (wav.subarray(0, 4).toString() !== "RIFF") throw new HttpError(400, "audio must be WAV");
-    return send(res, 200, { text: (await transcribe(wav)).transcript.trim() });
-  }
   if (url.pathname === "/api/logins" && m === "GET") return send(res, 200, listLogins());
 
   // Folders the person allows: the Windows folder picker adds one; each lists its newest files.
@@ -503,6 +533,14 @@ async function route(req: IncomingMessage, res: ServerResponse) {
       await hear(id, wav, Number(url.searchParams.get("at") ?? 0), () => full(id));
       return send(res, 200, { ok: true });
     }
+    // Hands-free: something said about a learned task (sorted and acted on in the background), and the latest.
+    if (m === "POST" && p[3] === "say") {
+      const wav = await body(req);
+      if (wav.subarray(0, 4).toString() !== "RIFF") throw new HttpError(400, "audio must be WAV");
+      hearSaid(id, wav).catch((e) => console.warn("couldn't hear that:", (e as Error).message));
+      return send(res, 202, { ok: true });
+    }
+    if (m === "GET" && p[3] === "say") return send(res, 200, heard.get(id) ?? null);
     if (m === "GET" && p[3] === "live") return send(res, 200, liveState(id) ?? { turns: [], draft: null, drafting: false, error: null });
     if (m === "PUT" && p[3] === "audio") {
       const wav = await body(req);
@@ -544,17 +582,7 @@ async function route(req: IncomingMessage, res: ServerResponse) {
     if (m === "POST" && p[3] === "feedback") {
       const said = String((await json(req)).text ?? "").trim().slice(0, 2000);
       if (!said) throw new HttpError(400, "say what should change");
-      const last = db.prepare("SELECT json FROM runs WHERE spec_id IN (SELECT id FROM specs WHERE session_id = ?) ORDER BY updated_at DESC LIMIT 1").get(row.sessionId) as any;
-      const lastRun = last ? (JSON.parse(last.json) as Run).items.slice(0, 3).map((it) => `${it.label}: ${it.log.map((l) => l.msg).join(" / ")}`).join("\n").slice(0, 4000) : "";
-      const { spec, changes } = await revise(full(row.sessionId), row.spec, said, lastRun);
-      const specId = saveSpec(row.sessionId, spec, `You said: "${said.slice(0, 140)}"`);
-      stage(row.sessionId, "building");
-      build(spec, pagesOf(row.sessionId), new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Manila" }))
-        .then((b) => { db.prepare("UPDATE specs SET code = ?, tests = ? WHERE id = ?").run(b.code, JSON.stringify(b.tests), specId); stage(row.sessionId, "ready"); })
-        .catch((e) => stage(row.sessionId, "failed", (e as Error).message));
-      // Schedules follow the task to its new version.
-      db.prepare("UPDATE schedules SET spec_id = ? WHERE spec_id IN (SELECT id FROM specs WHERE session_id = ?)").run(specId, row.sessionId);
-      return send(res, 201, { specId, changes });
+      return send(res, 201, await applyFeedback(row, said));
     }
     // The task's file settings (which folder and rule each upload uses; where downloads go). Saved as a new
     // version that keeps the built code, since the rules didn't change.
