@@ -161,9 +161,19 @@ function FollowAlong({ sessionId, t, recording, onDone, onRetry }: { sessionId: 
   const [text, setText] = useState("");
   const [changes, setChanges] = useState<string[] | null>(null);
   const { busy, run } = useAction();
-  const send = () => run("send", async () => {
-    const r = await api<{ changes: string[] }>(`/specs/${t!.specId}/feedback`, "POST", { text });
+  const send = (said = text) => run("send", async () => {
+    const r = await api<{ changes: string[] }>(`/specs/${t!.specId}/feedback`, "POST", { text: said });
     setChanges(r.changes.length ? r.changes : ["I updated the task."]); setText("");
+  });
+  // Say it instead of typing: tap, talk, tap again. What you said shows in the box and goes straight in.
+  const [talking, setTalking] = useState(false);
+  const talk = () => run("talk", async () => {
+    if (!talking) { await ext("talk"); setTalking(true); return; }
+    setTalking(false);
+    const { text: said } = await ext<{ text: string }>("talkDone");
+    if (!said) { toast("I didn't catch that. Try again a little closer to the mic."); return; }
+    setText(said);
+    await send(said);
   });
 
   if (stage === "failed") return (
@@ -219,11 +229,18 @@ function FollowAlong({ sessionId, t, recording, onDone, onRetry }: { sessionId: 
             <Textarea className="min-h-14 text-[13.5px]" value={text} onChange={(e) => setText(e.target.value)} disabled={busy === "send"}
               placeholder="Something's off? Tell me, like “only the posts from today”."
               onKeyDown={(e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && text.trim()) send(); }} />
-            {text.trim() || busy === "send" ? (
-              <Button size="sm" variant="outline" className="mt-2 w-full" onClick={send} disabled={!text.trim() || !!busy}>
-                {busy === "send" ? <><LoaderCircle className="animate-spin" />Changing it…</> : "Change it"}
+            <div className="mt-2 flex gap-2">
+              <Button size="sm" variant="outline" onClick={talk} disabled={busy === "send" || (busy === "talk" && !talking)}
+                className={cn("flex-1", talking && "border-tally/50 bg-tally/10 hover:bg-tally/20")} aria-pressed={talking}>
+                {busy === "talk" && !talking ? <><LoaderCircle className="animate-spin" />Hearing you…</>
+                  : talking ? <><Square className="size-3 fill-tally text-tally" />Done talking</> : <><Mic />Say it</>}
               </Button>
-            ) : null}
+              {text.trim() || busy === "send" ? (
+                <Button size="sm" variant="outline" className="flex-1" onClick={() => send()} disabled={!text.trim() || !!busy}>
+                  {busy === "send" ? <><LoaderCircle className="animate-spin" />Changing it…</> : "Change it"}
+                </Button>
+              ) : null}
+            </div>
           </div>
         </>
       ) : null}

@@ -21,7 +21,7 @@ async function start(id) {
   await ctx.audioWorklet.addModule("recorder-worklet.js");
   t0 = ctx.currentTime;
   await listen();
-  ticker = setInterval(sendPiece, 8000);
+  if (id) ticker = setInterval(sendPiece, 8000); // a spoken note has no session to follow along
   return { startedAt: Date.now() };
 }
 
@@ -56,6 +56,12 @@ async function stop() {
   const raw = new Float32Array(Math.ceil(total * rate));
   for (const p of parts) { const i = Math.round(p.at * rate); if (i >= 0 && i < raw.length) raw.set(p.pcm.subarray(0, raw.length - i), i); }
   const wav = await toWav(raw, rate);
+  // A spoken note (feedback in the sidebar), not a recording: just turn it into words.
+  if (!sessionId) {
+    const r = await fetch(`${API}/transcribe`, { method: "POST", body: wav });
+    if (!r.ok) throw new Error(`couldn't hear that: HTTP ${r.status}`);
+    return r.json();
+  }
   const res = await fetch(`${API}/sessions/${sessionId}/audio`, { method: "PUT", body: wav });
   if (!res.ok) throw new Error(`upload failed: HTTP ${res.status}`);
   return { bytes: wav.size, seconds: Math.round(total), drops };

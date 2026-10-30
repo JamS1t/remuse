@@ -364,6 +364,12 @@ async function route(req: IncomingMessage, res: ServerResponse) {
   const origin = req.headers.origin;
   if (origin && !ALLOWED_ORIGINS.has(origin) && !origin.startsWith("chrome-extension://")) throw new HttpError(403, "not allowed from this page");
 
+  // A spoken note (feedback said out loud in the sidebar) to words.
+  if (url.pathname === "/api/transcribe" && m === "POST") {
+    const wav = await body(req);
+    if (wav.subarray(0, 4).toString() !== "RIFF") throw new HttpError(400, "audio must be WAV");
+    return send(res, 200, { text: (await transcribe(wav)).transcript.trim() });
+  }
   if (url.pathname === "/api/logins" && m === "GET") return send(res, 200, listLogins());
 
   // Folders the person allows: the Windows folder picker adds one; each lists its newest files.
