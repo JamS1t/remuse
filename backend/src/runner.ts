@@ -1,6 +1,7 @@
 // Run: plays a Task Spec on every item in the list with Playwright. DOM first, Muse Spark + SAM 3.1 when
 // the page changed. Checks every step, pauses for approval before anything irreversible, asks when unsure.
 import { chromium, type BrowserContext, type Page, type Locator } from "playwright";
+import { execFileSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -49,7 +50,22 @@ export const PROFILE = fileURLToPath(new URL("../data/browser", import.meta.url)
 // Hidden Chrome calls itself "HeadlessChrome", which sites like Google treat as a bot. Learn the real
 // user agent once and present that instead, so a hidden run looks like the person's normal Chrome.
 let realUA: string | null = null;
+// Chrome opens a profile only once. If the Google sign-in window (plain Chrome on this profile) is still
+// open, a run's browser would close at once; close that window first, politely, so the sign-in is saved.
+const sameProfile = () => {
+  if (process.platform !== "win32") return [];
+  const ps = `Get-CimInstance Win32_Process -Filter "Name='chrome.exe'" | ? { $_.CommandLine -like '*${PROFILE}*' -and $_.CommandLine -notlike '*--type=*' -and $_.CommandLine -notlike '*remote-debugging*' } | % { $_.ProcessId }`;
+  try { return execFileSync("powershell.exe", ["-NoProfile", "-Command", ps], { encoding: "utf8", timeout: 15_000 }).split(/\s+/).filter(Boolean); } catch { return []; }
+};
+async function closeSignInWindow() {
+  const pids = sameProfile();
+  if (!pids.length) return;
+  for (const pid of pids) try { execFileSync("taskkill", ["/PID", pid]); } catch { /* already gone */ }
+  for (let i = 0; i < 20 && sameProfile().length; i++) await new Promise((r) => setTimeout(r, 500));
+  for (const pid of sameProfile()) try { execFileSync("taskkill", ["/F", "/PID", pid]); } catch { /* gone */ }
+}
 const launch = async (opts: Parameters<typeof chromium.launchPersistentContext>[1]) => {
+  await closeSignInWindow();
   try { return await chromium.launchPersistentContext(PROFILE, { ...opts, channel: "chrome" }); }
   catch { return chromium.launchPersistentContext(PROFILE, opts); } // ponytail: no Chrome installed, bundled Chromium
 };
