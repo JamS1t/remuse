@@ -43,7 +43,7 @@ export type Run = {
 const VIEW = { width: 1440, height: 900 };
 const MOCK = process.env.MOCK_URL ?? "http://localhost:3100";
 const IRREVERSIBLE = /\b(refund|replace|send|pay|submit|ship|confirm|delete|place order|issue|buy|checkout|check out|purchase|book|transfer|message seller|post|share|publish)\b/i;
-const PROFILE = fileURLToPath(new URL("../data/browser", import.meta.url));
+export const PROFILE = fileURLToPath(new URL("../data/browser", import.meta.url));
 
 /** The Remuse browser: the person's installed Chrome with its own profile, so sign-ins stick between runs. */
 // Hidden Chrome calls itself "HeadlessChrome", which sites like Google treat as a bot. Learn the real

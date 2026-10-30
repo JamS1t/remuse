@@ -1,5 +1,6 @@
 // Remuse backend: recordings in, Task Specs and runs out. Serves the review/run UI on the same port.
 // Run: npm start   (port 3200, reads MODEL_API_KEY from ../.env)
+import { spawn } from "node:child_process";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { DatabaseSync } from "node:sqlite";
 import { mkdirSync, readFileSync, writeFileSync, existsSync, rmSync, statSync } from "node:fs";
@@ -9,9 +10,9 @@ import { fileURLToPath } from "node:url";
 import { transcribe, calls } from "./meta.ts";
 import { understand, type Spec } from "./understand.ts";
 import { build } from "./build.ts";
-import { Runner, openBrowser, type Run } from "./runner.ts";
+import { PROFILE, Runner, openBrowser, type Run } from "./runner.ts";
 import type { BrowserContext } from "playwright";
-import { SITE, listLogins, removeLogin, saveLogin } from "./logins.ts";
+import { GOOGLE, SITE, listLogins, removeLogin, saveLogin } from "./logins.ts";
 import { notify } from "./notify.ts";
 import { addFolder, chooseFile, filesIn, findFolder, listFolders, pickFolder, removeFolder, usedFor } from "./folders.ts";
 
@@ -210,6 +211,18 @@ async function openSignIn(url: string) {
   await page.bringToFront();
 }
 
+// Google sign-in: plain Chrome on Remuse's profile, not driven by anything, so Google sees an ordinary
+// browser and lets you sign in. The sign-in stays in the profile that runs use.
+const CHROME = [process.env.PROGRAMFILES, process.env["PROGRAMFILES(X86)"], process.env.LOCALAPPDATA]
+  .map((d) => d && join(d, "Google", "Chrome", "Application", "chrome.exe")).find((p) => p && existsSync(p));
+async function openGoogleSignIn(site: string) {
+  if (active && !["done", "failed", "stopped"].includes(active.run.status)) throw new HttpError(409, "wait for the run to finish first");
+  if (signIn) { await signIn.close().catch(() => {}); signIn = null; }
+  const url = `https://accounts.google.com/ServiceLogin?continue=${encodeURIComponent(`https://www.${site}/`)}`;
+  if (!CHROME) return openSignIn(url); // ponytail: no installed Chrome, fall back to the driven window
+  spawn(CHROME, [`--user-data-dir=${PROFILE}`, "--no-first-run", "--no-default-browser-check", url], { detached: true, stdio: "ignore" }).unref();
+}
+
 // A run that was going when the Agent stopped (shutdown, crash) can't resume: mark it stopped.
 for (const r of db.prepare("SELECT id, json FROM runs").all() as any[]) {
   const run = JSON.parse(r.json) as Run;
@@ -404,11 +417,18 @@ async function route(req: IncomingMessage, res: ServerResponse) {
     const b = await json(req);
     const site = String(b.site ?? "").toLowerCase();
     if (!SITE.test(site) || !Array.isArray(b.cookies)) throw new HttpError(400, "send {site, cookies}");
+    if (GOOGLE.test(site)) { removeLogin(site); return send(res, 200, { site, cookies: 0, skipped: true }); } // never copied, see GOOGLE
     saveLogin(site, b.cookies);
     return send(res, 200, { site, cookies: b.cookies.length });
   }
   if (p[1] === "logins" && p[2] && m === "DELETE") { removeLogin(p[2].toLowerCase()); return send(res, 200, { ok: true }); }
 
+  if (m === "POST" && url.pathname === "/api/browser/google") {
+    const site = (url.searchParams.get("site") ?? "google.com").toLowerCase();
+    if (!GOOGLE.test(site)) throw new HttpError(400, "not a Google site");
+    await openGoogleSignIn(site);
+    return send(res, 200, { open: true });
+  }
   if (m === "POST" && url.pathname === "/api/browser/open") {
     const target = url.searchParams.get("url") || "https://www.google.com";
     if (!/^https?:\/\//.test(target)) throw new HttpError(400, "give a web address starting with http");

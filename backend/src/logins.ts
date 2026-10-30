@@ -31,6 +31,10 @@ export function removeLogin(site: string) {
 /** What the UI may see: which sites are connected, never the cookie values. */
 export const listLogins = () => Object.entries(read()).map(([site, v]) => ({ site, cookies: v.cookies.length, updatedAt: v.updatedAt }));
 
+/** Google signs the account out on every device when its login turns up in a second browser, so a Google
+ *  login is never copied. The person signs in once in Remuse's own browser instead (a new device to Google). */
+export const GOOGLE = /^(google[.][a-z.]+|youtube[.]com|gmail[.]com|blogger[.]com)$/;
+
 const SAME_SITE: Record<string, "Strict" | "Lax" | "None"> = { strict: "Strict", lax: "Lax", no_restriction: "None" };
 
 /** Put every connected site's login into a Playwright browser. */
