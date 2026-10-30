@@ -6,9 +6,12 @@
   const alive = () => { try { return !!chrome.runtime?.id; } catch { return false; } };
   if (window.__remuseRecorder?.alive()) return;
   window.__remuseRecorder = { alive };
+  // Inside a frame (Google Sheets types through a hidden one), report the page the person sees.
+  const sub = window !== top;
+  const page = () => { try { return sub ? { url: top.location.href, title: top.document.title } : { url: location.href, title: document.title }; } catch { return { url: location.href, title: document.title }; } };
   const send = (kind, data = {}) => {
     try {
-      chrome.runtime.sendMessage({ type: "event", ev: { at: Date.now(), kind, url: location.href, title: document.title, ...data } }).catch(() => {});
+      chrome.runtime.sendMessage({ type: "event", ev: { at: Date.now(), kind, ...page(), ...data } }).catch(() => {});
     } catch { /* extension reloaded; this page's script is orphaned */ }
   };
 
@@ -94,11 +97,33 @@
     send("input", { target: describe(el), value: el.type === "password" ? "[hidden]" : el.value });
   }
 
+  // Typing outside form fields: Google Sheets and Docs, editors drawn on a canvas, rich text boxes.
+  // Keys are collected into text and sent when the person moves on (Enter, Tab, an arrow, a click).
+  // In Google Sheets the Name Box says which cell it went into.
+  let buf = "", bufEl = null;
+  const cell = () => { try { return top.document.querySelector("#t-name-box")?.value || undefined; } catch { return undefined; } };
+  const flush = () => {
+    if (buf) send("input", { target: bufEl ? describe(bufEl) : undefined, value: buf, cell: cell() });
+    buf = ""; bufEl = null;
+  };
+  const MOVE = /^(Enter|Tab|Escape|Arrow(Up|Down|Left|Right)|Home|End|PageUp|PageDown)$/;
+  addEventListener("keydown", (e) => {
+    if (isField(e.target) || e.isComposing) return;
+    const mods = (e.ctrlKey ? "Control+" : "") + (e.metaKey ? "Meta+" : "") + (e.altKey ? "Alt+" : "");
+    if (!mods && e.key.length === 1) { if (!buf) bufEl = e.target; buf += e.key; return; }
+    if (!mods && e.key === "Backspace") { buf = buf.slice(0, -1); return; }
+    if (MOVE.test(e.key) || (mods && /^[a-z]$/i.test(e.key) && /[vxz]/i.test(e.key))) {
+      const at = cell(); flush();
+      send("key", { key: mods + (e.shiftKey && MOVE.test(e.key) ? "Shift+" : "") + e.key, cell: at });
+    }
+  }, true);
+  if (sub) return; // frames only carry typing; clicks and pages come from the page itself
+
   // pointerdown fires before the click lands, so the "before" screenshot still shows the old screen.
   // Typing is flushed first: change only fires on blur, which comes after pointerdown.
   addEventListener("pointerdown", (e) => {
     if (!e.isPrimary || e.button !== 0) return;
-    typed(document.activeElement);
+    typed(document.activeElement); flush();
     const t = e.target.closest("button, a, input, select, textarea, label, summary, [role], [onclick]") ?? e.target;
     send("click", { target: describe(t) });
   }, true);

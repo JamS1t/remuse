@@ -449,6 +449,7 @@ export class Runner {
       if (step.do === "fill") {
         if (found?.loc) await found.loc.fill(step.value ?? "");
         else if (found?.point) { await this.page.mouse.click(found.point.x, found.point.y); await this.page.keyboard.press("Control+A"); await this.page.keyboard.type(step.value ?? ""); }
+        else if (!step.target) await this.page.keyboard.type(step.value ?? ""); // no field: type where the focus is (a spreadsheet cell, an editor)
       } else if (step.do === "press") {
         if (found?.loc) await found.loc.press(step.key ?? "Enter"); else await this.page.keyboard.press(step.key ?? "Enter");
       } else if (step.do === "click") {
