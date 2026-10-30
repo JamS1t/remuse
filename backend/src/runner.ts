@@ -18,7 +18,7 @@ class Skip extends Error {}
 export type LogLine = { at: number; msg: string; level: "info" | "ok" | "warn" | "error"; shot?: string };
 export type Candidate = { url: string; title: string; vars: Record<string, unknown>; score: number | null; shot?: string; best?: boolean };
 export type Item = {
-  url: string; label: string;
+  url: string; label: string; index?: number; // index: position in the list, for items that open by clicking
   status: "waiting" | "running" | "approval" | "asking" | "done" | "skipped" | "failed";
   vars: Record<string, unknown>; outcome?: string; because?: string; expected?: string; decidedBy?: "rules" | "you" | "learned"; log: LogLine[];
   candidates?: Candidate[];
@@ -207,7 +207,12 @@ export class Runner {
         this.run.items = rows.map((r) => ({ url: "", label: Object.values(r).join(" · ").slice(0, 90), status: "waiting", vars: { ...r }, log: [] }));
       } else {
         await this.page.goto(listUrl!);
-        const links = await this.page.$$eval(itemSelector ?? "a", (as) => as.map((a) => ({ url: (a as HTMLAnchorElement).href, label: (a as HTMLElement).innerText.replace(/\s+/g, " ").trim().slice(0, 90) })));
+        // An item is a link, or something that opens when clicked (a Discord post, a card): then it's found by position.
+        await this.page.locator(itemSelector ?? "a").first().waitFor({ timeout: 15_000 }).catch(() => {});
+        const links = await this.page.$$eval(itemSelector ?? "a", (els) => els.map((el, index) => ({
+          url: (el.closest("a[href]") as HTMLAnchorElement | null)?.href ?? (el.querySelector("a[href]") as HTMLAnchorElement | null)?.href ?? "",
+          label: (el as HTMLElement).innerText.replace(/\s+/g, " ").trim().slice(0, 90), index,
+        })));
         const expected = await this.expectedOutcomes();
         this.run.items = links.slice(0, limit ?? links.length).map((l) => ({ ...l, status: "waiting", vars: {}, log: [], expected: expected[l.url.split("/").pop()!] }));
       }
@@ -499,7 +504,16 @@ export class Runner {
         this.log(`Opened ${this.spec.inputs.itemName ?? "the item"} in the ${nextTab} tab`, "info");
         return;
       }
-      await this.page.goto(it.url);
+      if (it.url) await this.page.goto(it.url);
+      else {
+        // Opens by clicking: back to the list, click the same position.
+        const { listUrl, itemSelector } = this.spec.inputs;
+        if (listUrl && this.page.url() !== listUrl) await this.page.goto(listUrl);
+        const el = this.page.locator(itemSelector!).nth(it.index ?? 0);
+        await el.waitFor({ timeout: 15_000 });
+        await el.click();
+        await this.page.waitForTimeout(1500);
+      }
     }
     else if (step.do === "goto") await this.page.goto(step.url!);
     else if (step.do === "extract") return this.extract(step.vars ?? []);

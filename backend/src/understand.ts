@@ -143,13 +143,15 @@ export function buildPrompt(s: Session, dir: string, folders: FolderHint[] = [])
   const parts: Part[] = [text(INSTRUCTIONS), text(`Allowed folders (name: newest files): ${folders.length ? folders.map((f) => `\n- ${f.name}: ${f.files.join(", ") || "(empty)"}`).join("") : "none yet"}`), text(`Task name given by the person: ${s.title ?? "(none)"}\n\nRecording, in time order. Voice lines are what the person said; frames are screenshots.`)];
   // Pointing counts only while the person was talking (within 2 s of a voice line); the rest is the mouse passing by.
   const talking = (t: number) => s.turns.some((v) => t >= v.startMs - 2000 && t <= v.endMs + 2000);
+  // Tabs the person never clicked, typed or pointed in are other open tabs refreshing by themselves: leave them out.
+  const used = new Set(s.events.filter((e) => e.kind !== "page" && e.kind !== "tools").map((e) => e.tab));
   const items = [
-    ...s.events.map((e, i) => ({ t: e.t, i, e })).filter(({ e }) => e.kind !== "point" || talking(e.t)),
+    ...s.events.map((e, i) => ({ t: e.t, i, e })).filter(({ e }) => (e.kind !== "point" || talking(e.t)) && (e.tab == null || used.has(e.tab))),
     ...s.turns.map((v) => ({ t: v.startMs, v })),
   ].sort((a, b) => a.t - b.t);
   // Browser tabs as T1, T2... in the order the person first used them.
   const tabs = new Map<unknown, string>();
-  for (const e of s.events) if (e.tab != null && !tabs.has(e.tab)) tabs.set(e.tab, `T${tabs.size + 1}`);
+  for (const e of s.events) if (e.tab != null && used.has(e.tab) && !tabs.has(e.tab)) tabs.set(e.tab, `T${tabs.size + 1}`);
   let images = 0;
   let lastAction = -Infinity;
   for (const it of items) {
@@ -183,7 +185,10 @@ export function normalize(spec: Spec, s: Session): Spec {
   spec.inputs.source ??= spec.inputs.columns?.length ? "rows" : spec.inputs.itemEvent != null || spec.inputs.listUrl ? "list" : "once";
   if (spec.inputs.source === "list") {
     const ev = s.events[spec.inputs.itemEvent ?? -1];
-    if (ev?.target?.selector) spec.inputs.itemSelector = generic(ev.target.selector);
+    // Items that are links: siblings by selector. Items you click that aren't links (Discord posts, cards,
+    // rows): siblings by their role, which survives the deep, class-less markup such apps use.
+    const t = ev?.target;
+    if (t?.selector) spec.inputs.itemSelector = !t.href && t.role && !["button", "link", "none", "presentation", "generic"].includes(t.role) ? `[role="${t.role}"]` : generic(t.selector);
     if (ev?.url && !spec.inputs.listUrl) spec.inputs.listUrl = ev.url;
   }
   const all = [...spec.steps, ...Object.values(spec.outcomes ?? {}).flatMap((o) => o.steps)];
