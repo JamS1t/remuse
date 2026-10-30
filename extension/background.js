@@ -221,18 +221,17 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
     connect: async () => connect(msg.site ?? (await currentTab()).site),
     disconnect: () => disconnect(msg.site),
     currentTab,
-    // A spoken note for the sidebar (feedback): the same recorder, no session; comes back as words.
-    talk: async () => {
-      if (await current()) throw new Error("Finish the recording first.");
-      if (!(await micAllowed())) { chrome.tabs.create({ url: "mic.html" }); throw new Error("Allow the microphone in the tab that opened, then press the mic again."); }
-      const a = await chrome.runtime.sendMessage({ target: "offscreen", type: "start", sessionId: null });
+    // Hands-free conversation about a learned task: listen until told to stop (see offscreen.js).
+    listen: async () => {
+      if (await current()) return { ok: false };
+      if (!(await micAllowed())) throw new Error("Allow the microphone first: press Watch me do a task once.");
+      const a = await chrome.runtime.sendMessage({ target: "offscreen", type: "converse", sessionId: msg.sessionId });
       if (a?.error) throw new Error(a.error);
       return { ok: true };
     },
-    talkDone: async () => {
-      const a = await chrome.runtime.sendMessage({ target: "offscreen", type: "stop" });
-      if (a?.error) throw new Error(a.error);
-      return { text: a?.text ?? "" };
+    unlisten: async () => {
+      if (await chrome.offscreen.hasDocument()) await chrome.runtime.sendMessage({ target: "offscreen", type: "unlisten" }).catch(() => {});
+      return { ok: true };
     },
     openTab: async () => { if (/^https?:\/\//.test(msg.url ?? "")) await chrome.tabs.create({ url: msg.url }); return { ok: true }; },
   }[msg.type];

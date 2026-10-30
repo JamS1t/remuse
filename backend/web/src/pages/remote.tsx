@@ -165,16 +165,35 @@ function FollowAlong({ sessionId, t, recording, onDone, onRetry }: { sessionId: 
     const r = await api<{ changes: string[] }>(`/specs/${t!.specId}/feedback`, "POST", { text: said });
     setChanges(r.changes.length ? r.changes : ["I updated the task."]); setText("");
   });
-  // Say it instead of typing: tap, talk, tap again. What you said shows in the box and goes straight in.
-  const [talking, setTalking] = useState(false);
-  const talk = () => run("talk", async () => {
-    if (!talking) { await ext("talk"); setTalking(true); return; }
-    setTalking(false);
-    const { text: said } = await ext<{ text: string }>("talkDone");
-    if (!said) { toast("I didn't catch that. Try again a little closer to the mic."); return; }
-    setText(said);
-    await send(said);
-  });
+  // Hands-free: once it's learned, Remuse keeps listening. Talk and pause; the Agent works out what you meant
+  // (a change, "looks right", a schedule, "do it now", "let me show you again", or not meant for it).
+  // It stops by itself after 2 quiet minutes, or when you say it's right.
+  const [listening, setListening] = useState(false);
+  const [quietSince, setQuietSince] = useState(Date.now());
+  const canListen = inPanel && !recording && (stage === "ready" || stage === "building");
+  useEffect(() => {
+    if (!canListen) return;
+    let on = true;
+    ext("listen", { sessionId }).then(() => { if (on) { setListening(true); setQuietSince(Date.now()); } }, (e) => toast(e.message));
+    return () => { on = false; setListening(false); ext("unlisten").catch(() => {}); };
+  }, [canListen, sessionId]);
+  const stopListening = () => { setListening(false); ext("unlisten").catch(() => {}); };
+  const { data: said } = useApi<{ n: number; at: number; text: string; intent: string; changes?: string[]; schedule?: object } | null>(listening ? `/sessions/${sessionId}/say` : null, 1500, () => listening);
+  const [handled, setHandled] = useState(0);
+  useEffect(() => {
+    if (!said || said.n === handled || said.intent === "thinking") return;
+    setHandled(said.n); setQuietSince(Date.now());
+    if (said.intent === "change" && said.changes) setChanges(said.changes);
+    else if (said.intent === "approve") { stopListening(); onDone(); }
+    else if (said.intent === "schedule" && said.schedule && t?.specId) api("/schedules", "POST", { specId: t.specId, ...said.schedule }).then(() => toast.success("Done, it's on a schedule now."), (e) => toast.error(e.message));
+    else if (said.intent === "run" && t?.specId) api(`/specs/${t.specId}/runs`, "POST", {}).then(() => toast.success("Running it now."), (e) => toast.error(e.message));
+    else if (said.intent === "teach") { stopListening(); ext("start").catch((e) => toast.error(e.message)); }
+  }, [said?.n, said?.intent]);
+  useEffect(() => {
+    if (!listening) return;
+    const timer = setInterval(() => { if (Date.now() - quietSince > 120_000) stopListening(); }, 5000);
+    return () => clearInterval(timer);
+  }, [listening, quietSince]);
 
   if (stage === "failed") return (
     <section className="glass rounded-2xl p-4">
@@ -227,20 +246,19 @@ function FollowAlong({ sessionId, t, recording, onDone, onRetry }: { sessionId: 
           <Button size="sm" className="mt-4 w-full" variant={t.askedSchedule ? "outline" : "default"} onClick={onDone}>Looks right</Button>
           <div className="mt-3 border-t border-rule pt-3">
             <Textarea className="min-h-14 text-[13.5px]" value={text} onChange={(e) => setText(e.target.value)} disabled={busy === "send"}
-              placeholder="Something's off? Tell me, like “only the posts from today”."
+              placeholder="Or type it, like “only the posts from today”."
               onKeyDown={(e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && text.trim()) send(); }} />
-            <div className="mt-2 flex gap-2">
-              <Button size="sm" variant="outline" onClick={talk} disabled={busy === "send" || (busy === "talk" && !talking)}
-                className={cn("flex-1", talking && "border-tally/50 bg-tally/10 hover:bg-tally/20")} aria-pressed={talking}>
-                {busy === "talk" && !talking ? <><LoaderCircle className="animate-spin" />Hearing you…</>
-                  : talking ? <><Square className="size-3 fill-tally text-tally" />Done talking</> : <><Mic />Say it</>}
+            {text.trim() || busy === "send" ? (
+              <Button size="sm" variant="outline" className="mt-2 w-full" onClick={() => send()} disabled={!text.trim() || !!busy}>
+                {busy === "send" ? <><LoaderCircle className="animate-spin" />Changing it…</> : "Change it"}
               </Button>
-              {text.trim() || busy === "send" ? (
-                <Button size="sm" variant="outline" className="flex-1" onClick={() => send()} disabled={!text.trim() || !!busy}>
-                  {busy === "send" ? <><LoaderCircle className="animate-spin" />Changing it…</> : "Change it"}
-                </Button>
-              ) : null}
-            </div>
+            ) : null}
+            {said && said.n === handled && said.intent !== "none" ? <p className="mt-2 text-[12.5px] text-muted-foreground">You said <Said>{said.text}</Said></p> : null}
+            {said?.intent === "thinking" ? <p className="mt-2 text-[12.5px]"><span className="shimmer">Working out what you mean…</span> <Said>{said.text}</Said></p> : null}
+            <p className="mt-2 flex items-center gap-1.5 text-[12.5px] text-muted-foreground">
+              {listening ? <><Mic className="size-3.5 text-tally" />Listening. Just talk, no need to press anything.<button type="button" className="ml-auto underline-offset-2 hover:text-foreground hover:underline" onClick={stopListening}>Stop</button></>
+                : canListen ? <><Mic className="size-3.5" />Not listening.<button type="button" className="ml-auto underline-offset-2 hover:text-foreground hover:underline" onClick={() => ext("listen", { sessionId }).then(() => { setListening(true); setQuietSince(Date.now()); }, (e) => toast(e.message))}>Listen again</button></> : null}
+            </p>
           </div>
         </>
       ) : null}

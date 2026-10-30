@@ -198,6 +198,24 @@ Don't ask what they already said. ${asked ? `You last asked: "${asked}". If the 
   return { goal: String(r?.goal ?? ""), steps: (r?.steps ?? []).map(String).slice(0, 8), rules: (r?.rules ?? []).slice(0, 5), question: r?.question ? String(r.question) : null };
 }
 
+/** Something the person said out loud while looking at a learned task, sorted by what they meant. */
+export async function sortSaid(spec: Spec, said: string): Promise<{ intent: "change" | "approve" | "schedule" | "run" | "teach" | "none"; schedule?: { everyMinutes?: number; time?: string; days?: string } }> {
+  const r = await askJson<any>([text(`You are Remuse. You just learned a browser task from a person's demo and they're looking at your summary of it in a sidebar. The microphone is open, so what they say may be meant for you or for someone else in the room. They said: "${said}"
+
+What do they mean? Pick one:
+- "change": they want something about the task different, added, removed or fixed ("no, take the views from the Reach tab", "also send me the subscribers", "skip the ones that are already done").
+- "approve": it's right ("looks good", "yes that's it", "perfect", "okay").
+- "schedule": they want it to repeat ("do this every hour", "every weekday at 9"). Give everyMinutes (15 to 1440) or time "HH:MM" (24h) and days ("1234567" = every day, "12345" = weekdays).
+- "run": do it now ("try it", "go ahead and run it").
+- "teach": they'll show it again or show something new ("let me show you again", "watch this").
+- "none": not meant for you (talking to someone, thinking out loud, unrelated).
+
+The task: ${spec.goal}. Steps: ${[...spec.steps, ...Object.values(spec.outcomes).flatMap((o) => o.steps)].map((s) => s.describe).join("; ")}.
+Reply with ONLY JSON: {"intent": "...", "schedule": {"everyMinutes": n} or {"time": "HH:MM", "days": "..."} or null}`)], "sort-said");
+  const intent = ["change", "approve", "schedule", "run", "teach", "none"].includes(r?.intent) ? r.intent : "none";
+  return { intent, schedule: intent === "schedule" && r?.schedule ? r.schedule : undefined };
+}
+
 /** The person says, in their own words, what's wrong with a learned task ("it read the wrong number",
  *  "only do posts from today", "put it in column C"). Muse Spark changes only that, and says what it changed
  *  in plain words. `lastRun` is what the task did last time, which is usually what they're reacting to. */
