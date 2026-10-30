@@ -143,7 +143,10 @@ function siteOf(url) {
   const n = parts.length >= 3 && parts.at(-1).length === 2 && /^(com|co|net|org|gov|edu|ac)$/.test(parts.at(-2)) ? 3 : 2;
   return parts.slice(-n).join(".");
 }
-const sites = async () => (await chrome.storage.local.get("sites")).sites ?? [];
+// Google signs the account out everywhere when its login turns up in a second browser, so Google logins are
+// never copied: "Use my login" opens Remuse's own browser at Google's sign-in page instead.
+const GOOGLE = /^(google[.][a-z.]+|youtube[.]com|gmail[.]com|blogger[.]com)$/;
+const sites = async () => ((await chrome.storage.local.get("sites")).sites ?? []).filter((s) => !GOOGLE.test(s));
 
 // Hand the Agent this site's current login. It stays on this computer.
 async function share(site) {
@@ -154,6 +157,7 @@ async function share(site) {
 
 async function connect(site) {
   if (!site) throw new Error("this page can't be connected");
+  if (GOOGLE.test(site)) { await api(`/browser/google?site=${encodeURIComponent(site)}`, "POST"); return { site, signin: true }; }
   const list = await sites();
   if (!list.includes(site)) await chrome.storage.local.set({ sites: [...list, site] });
   return { site, cookies: await share(site) };

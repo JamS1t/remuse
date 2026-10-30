@@ -312,7 +312,12 @@ function Sites({ top = false }: { top?: boolean }) {
   useEffect(() => { if (inPanel) load(); }, [tabTick]);
   if (!inPanel) return null;
   const here = tab?.site;
-  const connect = () => run("connect", async () => { await ext("connect"); toast.success(`Connected ${here}. I'll use your login there.`); await load(); });
+  const connect = () => run("connect", async () => {
+    const r = await ext<{ signin?: boolean }>("connect");
+    if (r?.signin) toast("Sign in to Google in the window that opened, then close it. Google sees it as a new device, so nothing else gets signed out.", { duration: 12000 });
+    else toast.success(`Connected ${here}. I'll use your login there.`);
+    await load();
+  });
   const drop = (s: string) => run(s, async () => { await ext("disconnect", { site: s }); await load(); });
   if (top) return here && list && !list.includes(here) ? (
         <button type="button" onClick={connect} disabled={!!busy} className="glow-edge flex w-full items-center gap-3 rounded-2xl px-4 py-3 text-left disabled:opacity-60">
