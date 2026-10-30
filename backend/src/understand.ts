@@ -178,6 +178,31 @@ export async function understand(s: Session, dir: string, folders: FolderHint[] 
   return normalize(spec, s);
 }
 
+/** The person says, in their own words, what's wrong with a learned task ("it read the wrong number",
+ *  "only do posts from today", "put it in column C"). Muse Spark changes only that, and says what it changed
+ *  in plain words. `lastRun` is what the task did last time, which is usually what they're reacting to. */
+export async function revise(s: Session, spec: Spec, feedback: string, lastRun: string): Promise<{ spec: Spec; changes: string[] }> {
+  const r = await askJson<{ spec: Spec; changes: string[] }>([
+    text(`You are Remuse. A browser robot repeats a task it learned from a recording. Below is the Task Spec it follows, what it did on its last run, and the person's feedback in their own words. Update the Task Spec so the robot does what the person wants.
+
+Rules:
+- Change only what the feedback is about. Keep every other step, target, tab, rule, variable and outcome exactly as it is (same ids).
+- The person isn't technical: read "the number", "that part", "the second one" against the steps and the last run to find what they mean.
+- If they want something read differently, change the variable's "description" (and "demoValue" if they gave the right value), so the robot reads the right thing next time.
+- If they want a new rule or a different decision, add or change a rule with "said" set to their words.
+- New steps follow the same shape as the existing ones. Never remove an irreversible step's approval.
+
+Reply with ONLY a JSON object: {"spec": <the full updated Task Spec, same shape as below>, "changes": ["<one short plain sentence per change, written to the person, e.g. 'I'll read the views from the Reach tab instead of Overview.'>"]}
+The Task Spec shape is:
+${SCHEMA}`),
+    text(`Current Task Spec:\n${JSON.stringify(spec)}`),
+    text(`Last run:\n${lastRun || "(it hasn't run yet)"}`),
+    text(`The person's feedback: "${feedback}"`),
+  ], "revise");
+  if (!r?.spec?.steps || !r.spec.outcomes) throw new Error("Muse Spark didn't return an updated task");
+  return { spec: normalize(r.spec, s), changes: Array.isArray(r.changes) ? r.changes.map(String).slice(0, 8) : [] };
+}
+
 // Fill in what code can know for sure instead of trusting the model.
 export function normalize(spec: Spec, s: Session): Spec {
   // The recorded selector of one clicked item, minus its position, matches all its siblings.
