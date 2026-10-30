@@ -7,7 +7,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { ItemLabel, Lockup, Orb, Said, useAction, type OrbState } from "@/components/bits";
 import { PendingCard } from "@/pages/run";
 import { parseCsv } from "@/pages/spec";
-import { api, isLive, useApi, type Run, type RunRow } from "@/lib/api";
+import { api, isLive, useApi, type Run, type RunRow, type SpecRow } from "@/lib/api";
 import { ext, inPanel, useTabChanges } from "@/lib/bridge";
 import { cn } from "@/lib/utils";
 
@@ -19,7 +19,7 @@ type Task = {
   askedSchedule: { everyMinutes?: number; time?: string; days?: string; said?: string } | null;
   lastReport: { text: string; at: number; runId: string } | null;
 };
-type Rec = { recording: boolean; rec?: { audioError?: string }; waitingForMic?: boolean };
+type Rec = { recording: boolean; rec?: { id?: string; audioError?: string }; waitingForMic?: boolean };
 type Schedule = { id: number; specId: number; sessionId: string; time: string; days: string; everyMinutes: number | null };
 
 const AGENT = location.origin;
@@ -68,6 +68,8 @@ export function Remote() {
   const learning = tasks?.find((t) => t.learnStage && LEARNING.includes(t.learnStage));
   const fresh = tasks?.find((t) => (t.learnStage === "ready" || t.learnStage === "failed") && t.endedAt && Date.now() - t.endedAt < 6 * 3600_000 && !seen(t.sessionId));
   const live = run && isLive(run.status) ? run : null;
+  // The recording (or task) Remuse is thinking about right now, shown in FollowAlong.
+  const focusId = rec?.recording ? rec.rec?.id : (learning ?? fresh)?.sessionId;
   const state: OrbState = rec?.recording ? "watching" : live?.pending ? "waiting" : learning ? "thinking" : live ? "working" : fresh?.learnStage === "ready" ? "done" : "idle";
 
   const start = () => act("start", async () => {
@@ -135,7 +137,7 @@ export function Remote() {
             <Button variant="ghost" onClick={() => act("halt", () => api(`/runs/${live.id}/stop`, "POST"))}><Square className="fill-current" />Stop</Button>
           </div>
         ) : null}
-        {fresh && !learning ? <Learned t={fresh} onDone={() => dismiss(fresh.sessionId)} onRetry={() => act("relearn", async () => { await api(`/sessions/${fresh.sessionId}/learn`, "POST"); reloadTasks(); })} /> : null}
+        {focusId ? <FollowAlong key={focusId} sessionId={focusId} t={tasks?.find((x) => x.sessionId === focusId)} recording={!!rec?.recording} onDone={() => dismiss(focusId)} onRetry={() => act("relearn", async () => { await api(`/sessions/${focusId}/learn`, "POST"); reloadTasks(); })} /> : null}
         <Sites top />
         <Tasks tasks={tasks} />
         <Sites />
@@ -145,40 +147,86 @@ export function Remote() {
   );
 }
 
-/** "I learned …": everything Remuse worked out on its own, shown once for a quick yes. */
-function Learned({ t, onDone, onRetry }: { t: Task; onDone: () => void; onRetry: () => void }) {
-  if (t.learnStage === "failed") return (
+type LiveDraft = { goal: string; steps: string[]; rules: { said: string; then: string }[]; question: string | null };
+type LiveState = { turns: { startMs: number; text: string }[]; draft: LiveDraft | null; drafting: boolean; error: string | null };
+
+/** Remuse thinking out loud, in the sidebar, from the moment you start recording: what it heard, the steps
+ *  as it works them out, and a question if it has one (you answer out loud). After you stop it checks its
+ *  work, then you say "Looks right" or tell it what's off, right here. No other page needed. */
+function FollowAlong({ sessionId, t, recording, onDone, onRetry }: { sessionId: string; t?: Task; recording: boolean; onDone: () => void; onRetry: () => void }) {
+  const stage = recording ? "recording" : t?.learnStage ?? "listening";
+  const thinking = recording || LEARNING.includes(stage);
+  const { data: live } = useApi<LiveState>(`/sessions/${sessionId}/live`, 2000, () => thinking);
+  const { data: spec } = useApi<SpecRow>(t?.specId && !recording ? `/specs/${t.specId}` : null);
+  const [text, setText] = useState("");
+  const [changes, setChanges] = useState<string[] | null>(null);
+  const { busy, run } = useAction();
+  const send = () => run("send", async () => {
+    const r = await api<{ changes: string[] }>(`/specs/${t!.specId}/feedback`, "POST", { text });
+    setChanges(r.changes.length ? r.changes : ["I updated the task."]); setText("");
+  });
+
+  if (stage === "failed") return (
     <section className="glass rounded-2xl p-4">
       <p className="flex items-center gap-2 font-medium"><CircleAlert className="size-4 text-warn" />I couldn't learn that one</p>
-      <p className="mt-1 text-[13px] text-muted-foreground">{t.learnError}</p>
+      <p className="mt-1 text-[13px] text-muted-foreground">{t?.learnError}</p>
       <div className="mt-3 flex gap-2"><Button size="sm" onClick={onRetry}><RotateCcw />Try again</Button><Button size="sm" variant="ghost" onClick={onDone}>Dismiss</Button></div>
     </section>
   );
-  const ok = t.checks.total > 0 && t.checks.passed === t.checks.total;
+
+  // The real task once it's written; until then, the live draft.
+  const s = spec?.spec;
+  const steps = s ? [...s.steps.map((x) => x.describe), ...Object.values(s.outcomes).flatMap((o) => o.steps.map((x) => x.describe))] : live?.draft?.steps ?? [];
+  const rules = s ? s.rules.filter((r) => r.if !== "otherwise" || r.said).map((r) => ({ said: r.said ?? `If ${r.if}`, then: words(r.then) ?? "" })) : live?.draft?.rules ?? [];
+  const heard = (live?.turns ?? []).map((x) => x.text).join(" ").slice(-260);
+  const status = recording ? (live?.drafting ? "Thinking about what you said" : "Following along") : stage === "listening" ? "Listening back to all of it" : stage === "understanding" ? "Writing the steps properly" : stage === "building" ? "Checking it against what you did" : "Here's what I'll do";
+  const ok = !!t && t.checks.total > 0 && t.checks.passed === t.checks.total;
+
   return (
-    <section className="glass rounded-2xl p-4">
-      <p className="text-[13px] text-muted-foreground">Here's what I'll do</p>
-      <p className="mt-1 leading-snug">{t.goal}</p>
-      {t.rules.length ? (
-        <ul className="mt-3 space-y-2">
-          {t.rules.slice(0, 4).map((r, i) => (
-            <li key={i} className="text-[13px]">
-              {r.said ? <Said>{r.said}</Said> : <span>If {r.if}</span>}
-              <span className="text-muted-foreground"> → {words(r.then)}</span>
+    <section className="glass rounded-2xl p-4" aria-live="polite">
+      <p className={cn("text-[13px] text-muted-foreground", thinking && "shimmer")}>{status}{thinking ? "…" : ""}</p>
+      {heard && thinking ? <p className="mt-2 line-clamp-3 text-[13px]"><span className="text-muted-foreground">I heard </span><Said>{heard.length >= 260 ? `…${heard}` : heard}</Said></p> : null}
+      {s?.goal || live?.draft?.goal ? <p className="mt-3 leading-snug">{s?.goal ?? live?.draft?.goal}</p> : null}
+      {steps.length ? (
+        <ol className="mt-2 space-y-1.5">
+          {steps.map((x, i) => (
+            <li key={`${i}-${x}`} className="flex gap-2.5 text-[13.5px] animate-in fade-in duration-300">
+              <span className="w-4 shrink-0 text-right font-mono text-[11.5px] leading-[1.6] text-muted-foreground">{i + 1}</span><span>{x}</span>
             </li>
           ))}
+        </ol>
+      ) : thinking ? <p className="mt-2 text-[13px] text-muted-foreground">Do the task and tell me why as you go. The steps show up here.</p> : null}
+      {rules.length ? (
+        <ul className="mt-3 space-y-1.5">
+          {rules.slice(0, 4).map((r, i) => <li key={i} className="text-[13px]"><Said>{r.said}</Said><span className="text-muted-foreground"> → {r.then}</span></li>)}
         </ul>
       ) : null}
-      <ul className="mt-3 space-y-1 text-[12.5px]">
-        <li className={cn("flex items-center gap-1.5", ok ? "text-ok" : "text-warn")}>{ok ? <Check className="size-3.5" /> : <CircleAlert className="size-3.5" />}{t.checks.passed} of {t.checks.total} checks pass against your demo</li>
-        {t.guessed.length ? <li className="flex items-center gap-1.5 text-warn"><CircleAlert className="size-3.5" />I guessed how to {t.guessed.map(words).join(", ")}; check it once</li> : null}
-        <li className="flex items-center gap-1.5 text-muted-foreground"><Check className="size-3.5" />Anything I'd pay or send for waits for your OK</li>
-      </ul>
-      {t.askedSchedule && t.specId ? <AskedSchedule t={t} onDone={onDone} /> : null}
-      <div className="mt-4 flex gap-2">
-        <Button size="sm" className="flex-1" variant={t.askedSchedule ? "outline" : "default"} onClick={onDone}>Looks right</Button>
-        <Button size="sm" variant="outline" onClick={() => open(`#/task/${t.sessionId}`)}>Review</Button>
-      </div>
+      {recording && live?.draft?.question ? (
+        <p className="mt-3 border-t border-rule pt-3 text-[13.5px]"><span className="font-medium">Quick question: </span>{live.draft.question}<span className="text-muted-foreground"> Just say it.</span></p>
+      ) : null}
+
+      {stage === "ready" && t ? (
+        <>
+          <ul className="mt-3 space-y-1 text-[12.5px]">
+            <li className={cn("flex items-center gap-1.5", ok ? "text-ok" : "text-warn")}>{ok ? <Check className="size-3.5" /> : <CircleAlert className="size-3.5" />}{t.checks.passed} of {t.checks.total} checks pass against what you did</li>
+            {t.guessed.length ? <li className="flex items-center gap-1.5 text-warn"><CircleAlert className="size-3.5" />I guessed how to {t.guessed.map(words).join(", ")}; check it once</li> : null}
+            <li className="flex items-center gap-1.5 text-muted-foreground"><Check className="size-3.5" />Anything I'd pay or send for waits for your OK</li>
+          </ul>
+          {changes ? <ul className="mt-3 space-y-1 border-t border-rule pt-3 text-[13px]">{changes.map((c) => <li key={c} className="flex gap-1.5"><Check className="mt-0.5 size-3.5 shrink-0 text-ok" />{c}</li>)}</ul> : null}
+          {t.askedSchedule && t.specId ? <AskedSchedule t={t} onDone={onDone} /> : null}
+          <Button size="sm" className="mt-4 w-full" variant={t.askedSchedule ? "outline" : "default"} onClick={onDone}>Looks right</Button>
+          <div className="mt-3 border-t border-rule pt-3">
+            <Textarea className="min-h-14 text-[13.5px]" value={text} onChange={(e) => setText(e.target.value)} disabled={busy === "send"}
+              placeholder="Something's off? Tell me, like “only the posts from today”."
+              onKeyDown={(e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && text.trim()) send(); }} />
+            {text.trim() || busy === "send" ? (
+              <Button size="sm" variant="outline" className="mt-2 w-full" onClick={send} disabled={!text.trim() || !!busy}>
+                {busy === "send" ? <><LoaderCircle className="animate-spin" />Changing it…</> : "Change it"}
+              </Button>
+            ) : null}
+          </div>
+        </>
+      ) : null}
     </section>
   );
 }

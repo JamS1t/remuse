@@ -8,6 +8,7 @@ import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { transcribe, calls } from "./meta.ts";
 import { revise, understand, type Spec } from "./understand.ts";
+import { endLive, hear, liveState } from "./live.ts";
 import { build } from "./build.ts";
 import { Runner, openBrowser, openPlainChrome, type Run } from "./runner.ts";
 import type { BrowserContext } from "playwright";
@@ -184,9 +185,11 @@ async function learn(id: string, offsetMs: number) {
     const r = await build(spec, pagesOf(id), new Date(session(id).started_at).toLocaleDateString("en-CA", { timeZone: "Asia/Manila" }));
     db.prepare("UPDATE specs SET code = ?, tests = ? WHERE id = ?").run(r.code, JSON.stringify(r.tests), specId);
     stage(id, "ready");
+    endLive(id);
     notify(`Remuse learned: ${session(id).title ?? spec.goal}`, r.ok ? "Ready to do it again. Open Remuse to run or schedule it." : "Some checks failed. Open Remuse to review it.", `http://127.0.0.1:${PORT}/#/spec/${specId}`);
   } catch (e) {
     stage(id, "failed", (e as Error).message);
+    endLive(id);
     notify("Remuse couldn't learn that task", (e as Error).message, `http://127.0.0.1:${PORT}/#/session/${id}`);
   }
 }
@@ -487,6 +490,14 @@ async function route(req: IncomingMessage, res: ServerResponse) {
       if (!r.changes) throw new HttpError(404, "no such event");
       return send(res, 200, { ok: true });
     }
+    // Following along while you record: a piece of your voice in, the live draft out.
+    if (m === "POST" && p[3] === "live") {
+      const wav = await body(req);
+      if (wav.subarray(0, 4).toString() !== "RIFF") throw new HttpError(400, "audio must be WAV");
+      await hear(id, wav, Number(url.searchParams.get("at") ?? 0), () => full(id));
+      return send(res, 200, { ok: true });
+    }
+    if (m === "GET" && p[3] === "live") return send(res, 200, liveState(id) ?? { turns: [], draft: null, drafting: false, error: null });
     if (m === "PUT" && p[3] === "audio") {
       const wav = await body(req);
       if (wav.subarray(0, 4).toString() !== "RIFF") throw new HttpError(400, "audio must be WAV");

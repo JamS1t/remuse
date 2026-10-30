@@ -80,6 +80,13 @@ try {
   await sleep(500);
   await page.keyboard.type("4.5%"); await page.keyboard.press("Enter");
   await sleep(40_000); // longer than the 30 s where the voice used to stop
+  // While still recording, the sidebar can already show what Remuse heard and its draft of the task.
+  const recId = ((await call("status")) as any).rec?.id;
+  let lv: any = null;
+  for (let i = 0; i < 20; i++) { lv = await get(`/sessions/${recId}/live`); if (lv.draft?.steps?.length && !lv.drafting) break; await sleep(1500); }
+  console.log("   live:", JSON.stringify({ heard: lv.turns.map((x: any) => x.text).join(" ").slice(0, 120), draft: lv.draft }).slice(0, 600));
+  check("while recording, the voice is heard in pieces", lv.turns.length > 0, `${lv.turns.length} pieces ${lv.error ?? ""}`);
+  check("and a draft of the task is shown before you stop", (lv.draft?.steps?.length ?? 0) > 0, lv.error ?? "");
   const stopped = (await call("stop")) as any;
 
   const s = await get(`/sessions/${stopped.id}`);
