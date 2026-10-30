@@ -62,7 +62,7 @@ try {
   check("each is opened by clicking it and read", JSON.stringify(reports) === JSON.stringify(["a study planner", "street food maps", "a barangay helpdesk"]), JSON.stringify(reports));
 
   // Plan first, then the list reorders before Go: posts are opened by position, so moved ones are left alone.
-  const p = await post(`/specs/${specId}/runs`, { plan: true });
+  const p = await post(`/specs/${specId}/runs`, { plan: true, redo: true });
   let pr: any;
   for (let i = 0; i < 60; i++) { pr = await get(`/runs/${p.id}`); if (pr.pending?.kind === "plan" || ["done", "failed", "stopped"].includes(pr.status)) break; await sleep(1000); }
   check("posts opened by clicking can be planned too", pr.pending?.kind === "plan" && pr.pending.counts.done === 3, JSON.stringify(pr.pending?.counts));

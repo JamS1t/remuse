@@ -28,6 +28,8 @@ export type Item = {
   vars: Record<string, unknown>; outcome?: string; because?: string; expected?: string; decidedBy?: "rules" | "you" | "learned"; log: LogLine[];
   candidates?: Candidate[];
   report?: string; // the update a "report" step gave the person
+  key?: string; // how it is remembered between runs (itemKey, numbered when two items read the same)
+  byYou?: boolean; // skipped because the person said so (no to a step, or skip on a question): settled, not retried
 };
 export type Pending =
   | { kind: "approval"; item: number; step: string; target?: string; outcome?: string; because?: string; shot: string; healed?: string }
@@ -46,6 +48,8 @@ export type Run = {
   startedAt: number; endedAt?: number; error?: string; shot?: string;
   heals: { step: string; from: string; to: string }[];
   learned: { requestType: string; outcome: string; note?: string; reply?: string }[];
+  // Items in the list it had already handled in earlier runs, left alone this time (a list task remembers).
+  alreadyDone?: number;
   score?: { matched: number; total: number };
   // "practice": right after learning, Remuse tries the task once on the person's own example and stops
   // before anything irreversible, then compares what it read and chose with what the person did.
@@ -144,6 +148,17 @@ const urlShape = (u: string) => {
 // A value shown in a reason: one line, not too long.
 const short = (s?: string | null) => { const t = (s ?? "").replace(/\s+/g, " ").trim(); return t.length > 60 ? `${t.slice(0, 57)}…` : t; };
 
+/** How a list item is remembered between runs: its address, or (items opened by clicking) its text. */
+const TRACKING = /^(utm_\w+|fbclid|gclid|igsh|igshid|si|mc_cid|mc_eid|ref_src|_hsenc|_hsmi)$/i;
+export function itemKey(i: { url: string; label: string }) {
+  if (i.url) {
+    try { const u = new URL(i.url); for (const k of [...u.searchParams.keys()]) if (TRACKING.test(k)) u.searchParams.delete(k); return u.href.replace(/\/$/, ""); }
+    catch { return i.url.replace(/\/$/, ""); }
+  }
+  // Items opened by clicking are known by their text, minus the parts that change on their own ("2m ago", "9:42 PM").
+  return `text:${i.label.replace(/\b(\d+\s*(seconds?|secs?|minutes?|mins?|hours?|hrs?|days?|weeks?|months?|years?|s|m|h|d|w|y)\b(\s+ago)?|just now|today|yesterday|\d{1,2}:\d{2}(\s*[ap]m)?)/gi, "").replace(/\s+/g, " ").trim()}`;
+}
+
 const manila = () => new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Manila" });
 // The reply is kept as a template, so its own {{values}} are filled where it's typed (one level, reply only:
 // text read from a page is never treated as a template).
@@ -173,6 +188,10 @@ export class Runner {
   baseRules: Spec["rules"]; // decide() indexes these; learned rules are added to the spec, not here
   // Practice only: the item the person opened in the demo (its link, or its text for items opened by clicking).
   example?: { url?: string; label?: string };
+  // List tasks: items handled in earlier runs (by itemKey), left alone unless the person asks to do them again.
+  handled?: Set<string>;
+  // Started because this file landed in a watched folder: the upload uses it.
+  file?: { folder: string; name: string };
   private get practicing() { return this.run.mode === "practice"; }
   private phase: "all" | "plan" | "act" = "all"; // which pass the current item is in (see runItem)
   /** A practice starts by itself, on live data, so it is stricter than a run: any click, key press or site tool
@@ -326,7 +345,12 @@ export class Runner {
           label: (el as HTMLElement).innerText.replace(/\s+/g, " ").trim().slice(0, 90), index,
         })));
         const expected = await this.expectedOutcomes();
-        let pick = links.slice(0, limit ?? links.length);
+        // Only what is new since earlier runs; "how many" counts new ones.
+        const seen = new Map<string, number>();
+        const keyed = [...links].reverse().map((l) => { const k = itemKey(l); const n = (seen.get(k) ?? 0) + 1; seen.set(k, n); return { ...l, key: n > 1 ? `${k}#${n}` : k }; }).reverse();
+        const fresh = this.practicing || !this.handled ? keyed : keyed.filter((l) => !this.handled!.has(l.key));
+        if (!this.practicing) this.run.alreadyDone = links.length - fresh.length;
+        let pick = fresh.slice(0, limit ?? fresh.length);
         if (this.practicing) {
           // The very item from the demo, so what it reads can be compared with what the person saw.
           // Whole address first (items often differ only by ?id= or #/path), then without the fragment, then by
@@ -335,15 +359,15 @@ export class Runner {
           const noTrail = (u: string) => u.replace(/\/$/, "");
           const unique = (f: (u: string) => string) => {
             if (!ex?.url) return undefined;
-            const m = links.filter((l) => l.url && f(l.url) === f(ex.url!));
+            const m = keyed.filter((l) => l.url && f(l.url) === f(ex.url!));
             return m.length === 1 ? m[0] : undefined;
           };
           const text = ex?.label?.replace(/\s+/g, " ").trim().slice(0, 40);
           // Path only when the example had no ?query: with ?id= links, a lone other email isn't the example.
           const hit = unique(noTrail) ?? unique((u) => noTrail(u.split("#")[0])) ?? (ex?.url?.includes("?") ? undefined : unique((u) => noTrail(u.split(/[?#]/)[0])))
-            ?? (text ? links.find((l) => l.label?.includes(text)) : undefined);
+            ?? (text ? keyed.find((l) => l.label?.includes(text)) : undefined);
           this.run.practice!.sameItem = !!hit;
-          pick = (hit ? [hit] : links.slice(0, 1));
+          pick = (hit ? [hit] : keyed.slice(0, 1));
         }
         this.run.items = pick.map((l) => ({ ...l, status: "waiting", vars: {}, log: [], expected: expected[l.url.split("/").pop()!] }));
       }
@@ -476,7 +500,7 @@ export class Runner {
       const a = await this.wait({ kind: "ask", item: this.run.current, shot: file, options: Object.keys(this.spec.outcomes),
         question: `I couldn't read ${missing.join(", ")} for "${it.label}". What should I do?` });
       it.status = "running";
-      if (!a.outcome || !this.spec.outcomes[a.outcome]) { it.status = "skipped"; this.log("Skipped, as you asked.", "info"); return; }
+      if (!a.outcome || !this.spec.outcomes[a.outcome]) { it.status = "skipped"; it.byYou = !this.stopped; this.log("Skipped, as you asked.", "info"); return; }
       it.outcome = a.outcome; reply = a.reply || undefined;
       it.because = `You told me${a.note ? `: ${a.note}` : ""}`; it.decidedBy = "you";
     } else if (learned) {
@@ -489,7 +513,7 @@ export class Runner {
       const a = await this.wait({ kind: "ask", item: this.run.current, requestType: rt, shot: file, options: Object.keys(this.spec.outcomes),
         question: `"${it.label}" looks like ${rt.replace(/_/g, " ")}. Your rules don't cover that. What should I do?` });
       it.status = "running";
-      if (!a.outcome || !this.spec.outcomes[a.outcome]) { it.status = "skipped"; this.log("Skipped, as you asked.", "info"); return; }
+      if (!a.outcome || !this.spec.outcomes[a.outcome]) { it.status = "skipped"; it.byYou = !this.stopped; this.log("Skipped, as you asked.", "info"); return; }
       it.outcome = a.outcome; reply = a.reply || undefined;
       it.because = `You told me${a.note ? `: ${a.note}` : ""}`; it.decidedBy = "you";
       if (a.learn !== false) {
@@ -536,7 +560,8 @@ export class Runner {
     const rule = raw.file ?? { folder: null };
     const folder = findFolder(rule.folder);
     if (!folder) throw new Error(rule.folder ? `the folder "${rule.folder}" isn't allowed any more; add it on the Folders page` : "choose which folder to upload from on the task page");
-    const name = chooseFile(folder, rule, usedFor(this.taskKey));
+    // A run started by a file landing posts exactly that file; otherwise the task's own rule picks.
+    const name = this.file && folder.name === this.file.folder && !usedFor(this.taskKey).has(this.file.name) ? this.file.name : this.file ? null : chooseFile(folder, rule, usedFor(this.taskKey));
     if (!name) throw new Skip(`Nothing new to upload in ${folder.name} right now (${rule.pick ?? "next"} file). Skipped.`);
     const path = pathIn(folder, name);
     it.vars.file_name = name;
@@ -826,7 +851,7 @@ export class Runner {
       outcome: it.outcome, because: it.because, shot: file, healed: healedName ? `The page changed: I'm using "${healedName}" for "${step.target?.name}".` : undefined });
     it.status = "running";
     if (a.decision === "approve_all") this.run.autoApprove = true;
-    if (a.decision === "reject") { it.status = "skipped"; this.log(`You said no to: ${step.describe}. Skipped this ${this.spec.inputs.itemName ?? "item"}.`, "warn"); return false; }
+    if (a.decision === "reject") { it.status = "skipped"; it.byYou = !this.stopped; this.log(`You said no to: ${step.describe}. Skipped this ${this.spec.inputs.itemName ?? "item"}.`, "warn"); return false; }
     this.log(`You approved: ${step.describe}`, "ok");
     return true;
   }
