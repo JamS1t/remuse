@@ -1,5 +1,6 @@
 // Check: the Remuse extension's sidebar loads the Agent's remote page, and connecting a site shares
-// that site's login with the Agent (and disconnecting removes it). Starts its own Agent on port 3200.
+// that site's login with the Agent (and disconnecting removes it), and a Google login is never copied.
+// Starts its own Agent on port 3200 with its own data folder; needs that port free.
 // Run: node test/sidepanel.check.ts [screenshot.png]
 import { spawn } from "node:child_process";
 import { mkdtempSync } from "node:fs";
@@ -9,7 +10,8 @@ import { chromium } from "playwright";
 
 const API = "http://127.0.0.1:3200/api";
 const ext = resolve(import.meta.dirname, "../../extension");
-const agent = spawn(process.execPath, ["--env-file-if-exists=../.env", "src/server.ts"], { cwd: resolve(import.meta.dirname, ".."), stdio: "ignore" });
+if (await fetch(`${API}/sessions`).then(() => true, () => false)) { console.error("Port 3200 is busy: stop the Remuse Agent first."); process.exit(1); }
+const agent = spawn(process.execPath, ["--env-file-if-exists=../.env", "src/server.ts"], { cwd: resolve(import.meta.dirname, ".."), env: { ...process.env, DATA_DIR: mkdtempSync(join(tmpdir(), "remuse-data-")) }, stdio: "ignore" });
 const ctx = await chromium.launchPersistentContext(mkdtempSync(join(tmpdir(), "remuse-panel-")), {
   channel: "chromium", headless: true, viewport: { width: 400, height: 900 },
   args: [`--disable-extensions-except=${ext}`, `--load-extension=${ext}`],
@@ -28,9 +30,13 @@ try {
   const panel = await ctx.newPage();
   await panel.goto(`chrome-extension://${id}/sidepanel.html`);
   const frame = panel.frameLocator("#ui");
-  await frame.getByText("Connected sites").waitFor({ timeout: 15000 });
+  await frame.getByText("Connected sites").click({ timeout: 15000 }); // the list starts folded
   await frame.getByText("example.com").waitFor({ timeout: 5000 });
   console.log("sidebar shows the connected site");
+  const g = await (await fetch(`${API}/logins`, { method: "POST", body: JSON.stringify({ site: "youtube.com", cookies: [{ name: "SID" }] }) })).json();
+  const kept = (await (await fetch(`${API}/logins`)).json()).some((l: any) => l.site === "youtube.com");
+  console.assert(g.skipped && !kept, "a Google login was copied");
+  console.log("a Google login is never copied:", !!g.skipped && !kept);
   if (process.argv[2]) await panel.screenshot({ path: process.argv[2], fullPage: true });
 
   await sw.evaluate(() => (globalThis as any).showrun.disconnect("example.com"));

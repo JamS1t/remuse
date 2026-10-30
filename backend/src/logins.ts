@@ -1,10 +1,12 @@
 // Logins the Chrome helper shares for the sites the person connected. Kept on this PC only (data/ is
 // gitignored), handed to the Agent's browser before each run so nobody has to sign in twice.
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { BrowserContext } from "playwright";
 
-const FILE = fileURLToPath(new URL("../data/logins.json", import.meta.url));
+// With the rest of the Agent data (DATA_DIR in tests, so tests never touch your real logins).
+const FILE = process.env.DATA_DIR ? join(resolve(process.env.DATA_DIR), "logins.json") : fileURLToPath(new URL("../data/logins.json", import.meta.url));
 
 // Shape of chrome.cookies.Cookie, the fields we use.
 export type ChromeCookie = {
