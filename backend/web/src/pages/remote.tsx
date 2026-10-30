@@ -113,9 +113,19 @@ export function Remote() {
         <h1 className={cn("mt-1 max-w-[18ch] text-[24px] leading-[1.15] font-medium tracking-[-0.025em]", state === "thinking" && "shimmer")}>{head.big}</h1>
         {"sub" in head && head.sub ? <p className="mt-2 line-clamp-2 max-w-[34ch] text-[13px] text-muted-foreground">{state === "working" ? <ItemLabel text={head.sub} /> : head.sub}</p> : null}
         {rec?.rec?.audioError && state === "watching" ? <p className="mt-2 text-[12.5px] text-warn">No voice: {rec.rec.audioError}</p> : null}
+        {/* The one control sits with the orb: show Remuse something, or say you're done. */}
+        {inPanel && rec?.recording ? (
+          <Button size="lg" variant="outline" onClick={stop} disabled={!!busy} className="mt-6 rounded-full border-tally/40 bg-tally/10 px-5 hover:bg-tally/20">
+            {busy === "stop" ? <LoaderCircle className="animate-spin" /> : <Square className="size-3 fill-tally text-tally" />}Stop, I've shown you
+          </Button>
+        ) : inPanel && !learning && !live ? (
+          <Button size="lg" onClick={start} disabled={!!busy} className="mt-6 rounded-full px-5">
+            {busy === "start" ? <LoaderCircle className="animate-spin" /> : <Mic />}Watch me do a task
+          </Button>
+        ) : null}
       </section>
 
-      <div className="flex-1 space-y-6 px-4 pb-28">
+      <div className="flex-1 space-y-6 px-4 pb-8">
         {live?.pending ? (
           <PendingCard key={`${live.pending.kind}-${live.pending.item}-${live.pending.shot}`} p={live.pending} r={live} file={(f) => `/api/runs/${live.id}/files/${f}`} busy={!!busy} answer={answer} />
         ) : null}
@@ -126,28 +136,11 @@ export function Remote() {
           </div>
         ) : null}
         {fresh && !learning ? <Learned t={fresh} onDone={() => dismiss(fresh.sessionId)} onRetry={() => act("relearn", async () => { await api(`/sessions/${fresh.sessionId}/learn`, "POST"); reloadTasks(); })} /> : null}
+        <Sites top />
         <Tasks tasks={tasks} />
         <Sites />
       </div>
 
-      {/* The one control, like the reference's composer pill: show Remuse something. */}
-      {inPanel ? (
-        <div className="fixed inset-x-0 bottom-0 bg-gradient-to-t from-background via-background/90 to-transparent px-4 pt-6 pb-4">
-          {rec?.recording ? (
-            <button type="button" onClick={stop} disabled={!!busy}
-              className="glass flex h-12 w-full items-center gap-3 rounded-full px-5 text-left transition-colors hover:bg-white/10 disabled:opacity-60">
-              <span className="text-[14px]">Stop. I've shown you.</span>
-              <span className="ml-auto inline-flex size-7 items-center justify-center rounded-full bg-tally/90 text-white">{busy === "stop" ? <LoaderCircle className="size-3.5 animate-spin" /> : <Square className="size-3 fill-current" />}</span>
-            </button>
-          ) : (
-            <button type="button" onClick={start} disabled={!!busy || !!learning}
-              className="glass flex h-12 w-full items-center gap-3 rounded-full px-5 text-left text-muted-foreground transition-colors hover:text-foreground disabled:opacity-60">
-              <span className="text-[14px]">{learning ? "Learning your last task…" : "Watch me do a task"}</span>
-              <span className="ml-auto inline-flex size-7 items-center justify-center rounded-full bg-foreground text-background">{busy === "start" ? <LoaderCircle className="size-3.5 animate-spin" /> : <Mic className="size-3.5" />}</span>
-            </button>
-          )}
-        </div>
-      ) : null}
     </div>
   );
 }
@@ -308,7 +301,8 @@ function TaskRow({ t, schedule, onSchedule }: { t: Task; schedule: Schedule | nu
   );
 }
 
-function Sites() {
+/** `top`: just the "Use my login" button, shown first. Otherwise: the connected sites list. */
+function Sites({ top = false }: { top?: boolean }) {
   const tabTick = useTabChanges();
   const [list, setList] = useState<string[] | null>(null);
   const [tab, setTab] = useState<{ site: string | null } | null>(null);
@@ -320,15 +314,15 @@ function Sites() {
   const here = tab?.site;
   const connect = () => run("connect", async () => { await ext("connect"); toast.success(`Connected ${here}. I'll use your login there.`); await load(); });
   const drop = (s: string) => run(s, async () => { await ext("disconnect", { site: s }); await load(); });
-  return (
-    <section>
-      {here && !list?.includes(here) ? (
-        <button type="button" onClick={connect} disabled={!!busy} className="glass mb-2 flex w-full items-center gap-3 rounded-2xl px-4 py-3 text-left transition-colors hover:bg-white/[0.07]">
-          <Globe className="size-4 text-muted-foreground" />
+  if (top) return here && list && !list.includes(here) ? (
+        <button type="button" onClick={connect} disabled={!!busy} className="glow-edge flex w-full items-center gap-3 rounded-2xl px-4 py-3 text-left disabled:opacity-60">
+          <Globe className="size-4 text-live" />
           <span className="min-w-0 flex-1"><span className="block font-medium">Use my login on {here}</span><span className="block text-[12.5px] text-muted-foreground">So I can work there, even with Chrome closed</span></span>
           {busy === "connect" ? <LoaderCircle className="size-4 animate-spin" /> : null}
         </button>
-      ) : null}
+      ) : null;
+  return (
+    <section>
       <button type="button" onClick={() => setShow((s) => !s)} className="flex w-full items-center gap-1 px-1 text-[13px] font-medium text-muted-foreground hover:text-foreground" aria-expanded={show}>
         Connected sites{list?.length ? ` · ${list.length}` : ""}<ChevronDown className={cn("ml-auto size-4 transition-transform", show && "rotate-180")} />
       </button>

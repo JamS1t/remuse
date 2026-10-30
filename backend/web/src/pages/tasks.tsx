@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { toast } from "sonner";
-import { CalendarClock, Check, FolderOpen, Eye, ChevronRight, CircleAlert, Code2, Ellipsis, Hand, LoaderCircle, Mic, RotateCcw, ShieldAlert, Trash2 } from "lucide-react";
+import { Square, CalendarClock, Check, FolderOpen, Eye, ChevronRight, CircleAlert, Code2, Ellipsis, Hand, LoaderCircle, Mic, RotateCcw, ShieldAlert, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
@@ -11,7 +11,7 @@ import { ScheduleEditor, describeSchedule } from "@/components/schedule";
 import { Content, PageHead } from "@/components/shell";
 import { RunsList } from "@/pages/activity";
 import { cn } from "@/lib/utils";
-import { ago, api, useApi, type FolderRow, type ScheduleRow, type SessionFull, type SpecRow, type Task } from "@/lib/api";
+import { ago, api, isLive, useApi, type ActivityRun, type FolderRow, type ScheduleRow, type SessionFull, type SpecRow, type Task } from "@/lib/api";
 
 const LEARNING: Record<string, string> = {
   listening: "Listening back to what you said",
@@ -83,6 +83,8 @@ export function TaskPage({ id, tab = "overview" }: { id: string; tab?: string })
   const [editing, setEditing] = useState<null | "schedule" | "delete">(null);
   const [cur, setCur] = useState(tab);
   const { busy, run } = useAction();
+  const { data: runs, reload: reloadRuns } = useApi<ActivityRun[]>(`/runs?task=${id}`, 2000, () => true);
+  const liveRun = runs?.find((r) => isLive(r.status));
   if (tasks && !t) return <Content><PageHead title="Task not found" back={{ href: "#/", label: "Tasks" }} /></Content>;
   if (!t) return <Content><div className="h-40 animate-pulse rounded-2xl bg-muted" /></Content>;
   const schedule = sched?.find((s) => s.sessionId === id) ?? null;
@@ -100,7 +102,12 @@ export function TaskPage({ id, tab = "overview" }: { id: string; tab?: string })
         sub={learning ? <span className="shimmer">{learning}…</span> : t.goal}
         actions={learning ? null : (
           <>
-            {t.specId ? <RunButton task={t} /> : null}
+            {liveRun ? (
+              <Button variant="outline" className="rounded-full" disabled={busy === "halt"}
+                onClick={() => run("halt", async () => { await api(`/runs/${liveRun.id}/stop`, "POST"); toast("Stopped."); reloadRuns(); })}>
+                <Square className="fill-current" />Stop
+              </Button>
+            ) : t.specId ? <RunButton task={t} /> : null}
             <TaskMenu t={t} hasSchedule={!!schedule} onSchedule={() => setEditing("schedule")} onRelearn={relearn} onDelete={() => setEditing("delete")} busy={!!busy} />
           </>
         )}
