@@ -96,8 +96,7 @@ try {
   check("on the spreadsheet's own address, not the hidden frame's", typed.every((e: any) => e.url.startsWith(SITE)), typed[0]?.url);
   console.log("   stop:", JSON.stringify(stopped));
   const wavPath = join(data, "sessions", stopped.id, "voice.wav");
-  const pt = s.events.find((e: any) => e.kind === "point" && e.target?.text === "Views 1,830");
-  check("pointing at something is recorded, with a screenshot", !!pt?.before, JSON.stringify(s.events.filter((e: any) => e.kind === "point").map((e: any) => e.target?.text)));
+  check("resting the mouse on something records nothing", !s.events.some((e: any) => e.kind === "point"), JSON.stringify(s.events.map((e: any) => e.kind)));
   const wav = existsSync(wavPath) ? readFileSync(wavPath) : Buffer.alloc(44);
   const secs = (wav.length - 44) / 32000, len = (s.ended_at - s.started_at) / 1000;
   check("the whole voice track is kept", secs > len - 4, `${secs.toFixed(1)} s of voice in a ${len.toFixed(1)} s recording`);
