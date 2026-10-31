@@ -1,7 +1,7 @@
 // End-to-end: plan first. A run you start on several items reads and decides every one before doing
 // anything, asks its questions up front (while you're there), shows the plan ("2 refund · 1 decline"), and
 // acts only after your Go, without reading or judging anything twice. Cancel leaves everything untouched.
-// Uses its own Agent, data folder, a stand-in inbox and a stand-in model. Needs port 3200 free.
+// Uses its own Agent, data folder, a stand-in inbox and a stand-in model. Uses its own port (3299).
 // Run: node test/plan.e2e.ts
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
@@ -10,13 +10,15 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
-const API = "http://127.0.0.1:3200/api";
+// Its own port and browser profile, so a running Remuse Agent (and its sign-ins) is never touched.
+const PORT = process.env.TEST_PORT ?? "3299";
+const API = `http://127.0.0.1:${PORT}/api`;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const results: [string, boolean, string][] = [];
 const check = (n: string, ok: boolean, d = "") => { results.push([n, ok, d]); console.log(`${ok ? "PASS" : "FAIL"}  ${n}${d ? `  (${d})` : ""}`); };
 const get = async (p: string) => (await fetch(API + p)).json();
 const post = async (p: string, b: unknown = {}) => (await fetch(API + p, { method: "POST", body: JSON.stringify(b) })).json();
-if (await fetch(`${API}/sessions`).then(() => true, () => false)) { console.error("Port 3200 is busy: stop the Remuse Agent first."); process.exit(1); }
+if (await fetch(`${API}/sessions`).then(() => true, () => false)) { console.error(`Port ${PORT} is busy: another test is running.`); process.exit(1); }
 
 // Three emails; the third doesn't say its amount, so Remuse has to ask about it.
 const mails = [{ id: 1, subject: "Broken mug", order: "1001", amount: "1,250" }, { id: 2, subject: "Late parcel", order: "1002", amount: "570" }, { id: 3, subject: "Wrong size", order: "1003", amount: "" }];
@@ -74,7 +76,7 @@ const code = `({ extract: { order: (t) => /Order: (\\d+)/.exec(t)?.[1] ?? null, 
 
 const data = mkdtempSync(join(tmpdir(), "remuse-plan-"));
 const agent = spawn(process.execPath, ["--env-file-if-exists=../.env", "src/server.ts"], {
-  cwd: resolve(import.meta.dirname, ".."), env: { ...process.env, DATA_DIR: data, HEADLESS: "1", SHOWRUN_NO_NOTIFY: "1", OPEN_MODEL_KEY: "", BASETEN_API_KEY: "", MODEL_API_KEY: "", SHOWRUN_PROXY: MODEL }, stdio: process.env.SHOW_AGENT ? "inherit" : "ignore",
+  cwd: resolve(import.meta.dirname, ".."), env: { ...process.env, DATA_DIR: data, PORT, BROWSER_PROFILE: join(data, "browser"), HEADLESS: "1", SHOWRUN_NO_NOTIFY: "1", OPEN_MODEL_KEY: "", BASETEN_API_KEY: "", MODEL_API_KEY: "", SHOWRUN_PROXY: MODEL }, stdio: process.env.SHOW_AGENT ? "inherit" : "ignore",
 });
 const sent = () => replies.length;
 const until = async (id: string, ok: (r: any) => boolean, secs = 90) => {

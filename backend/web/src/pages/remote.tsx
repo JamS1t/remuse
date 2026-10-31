@@ -7,7 +7,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { ItemLabel, Lockup, Orb, PracticeLines, Said, useAction, type OrbState } from "@/components/bits";
 import { PendingCard } from "@/pages/run";
 import { parseCsv } from "@/pages/spec";
-import { api, isLive, saved, useApi, type PracticeState, type Run, type RunRow, type SpecRow } from "@/lib/api";
+import { api, isLive, saved, useApi, type PracticeState, type Run, type RunRow, type SpecRow, useGoogle } from "@/lib/api";
 import { ext, inPanel, useTabChanges } from "@/lib/bridge";
 import { cn } from "@/lib/utils";
 
@@ -441,8 +441,8 @@ function Sites({ top = false }: { top?: boolean }) {
   const tabTick = useTabChanges();
   // Google is never copied: you sign in once in Remuse's own browser, and the Agent says whether that worked. After
   // pressing the button it keeps asking until the sign-in shows up.
-  const [waitGoogle, setWaitGoogle] = useState(false);
-  const { data: g } = useApi<{ signedIn: boolean | null }>(inPanel ? "/logins/google" : null, waitGoogle ? 4000 : 0, (d) => waitGoogle && !d.signedIn);
+  const google = useGoogle(inPanel);
+  const g = google.data;
   const [list, setList] = useState<string[] | null>(null);
   const [tab, setTab] = useState<{ site: string | null } | null>(null);
   const [show, setShow] = useState(false);
@@ -453,11 +453,16 @@ function Sites({ top = false }: { top?: boolean }) {
   const here = tab?.site;
   const connect = () => run("connect", async () => {
     const r = await ext<{ signin?: boolean }>("connect");
-    if (r?.signin) { setWaitGoogle(true); toast("Sign in to Google in the window that opened, then close it. Google sees it as a new device, so nothing else gets signed out.", { duration: 12000 }); }
+    if (r?.signin) { google.watch(); toast("Sign in to Google in the window that opened, then close it. Google sees it as a new device, so nothing else gets signed out.", { duration: 12000 }); }
     else toast.success(`Connected ${here}. I'll use your login there.`);
     await load();
   });
   const drop = (s: string) => run(s, async () => { await ext("disconnect", { site: s }); await load(); });
+  const addGoogle = () => run("google", async () => {
+    await google.add();
+    toast("Sign in to the other Google account in the window that opened, then close it.", { duration: 12000 });
+  });
+  const signOutGoogle = () => run("signout", async () => { if (await google.signOut()) toast.success("Remuse's browser is signed out of Google."); });
   if (top) return here && list && (isGoogle(here) ? !!g && g.signedIn !== true : !list.includes(here)) ? (
         <button type="button" onClick={connect} disabled={!!busy} className="glow-edge flex w-full items-center gap-3 rounded-2xl px-4 py-3 text-left disabled:opacity-60">
           <Globe className="size-4 text-live" />
@@ -476,9 +481,16 @@ function Sites({ top = false }: { top?: boolean }) {
           {list?.length || g?.signedIn ? (
             <ul className="glass divide-y divide-rule overflow-hidden rounded-2xl">
               {g?.signedIn ? (
-                <li className="flex items-center gap-2 px-4 py-2.5">
-                  <Globe className="size-3.5 text-muted-foreground" /><span className="font-medium">Google</span>
-                  <span className="ml-auto text-[12px] text-muted-foreground">YouTube, Gmail, Sheets: signed in for Remuse</span>
+                <li className="flex items-start gap-2 px-4 py-2.5">
+                  <Globe className="mt-1 size-3.5 text-muted-foreground" />
+                  <div className="min-w-0 flex-1">
+                    <span className="font-medium">Google</span>
+                    {g.accounts?.length ? g.accounts.map((a) => <span key={a} className="block truncate text-[12px] text-muted-foreground">{a}</span>) : <span className="block text-[12px] text-muted-foreground">YouTube, Gmail, Sheets: signed in for Remuse</span>}
+                  </div>
+                  <div className="flex shrink-0 flex-col items-end">
+                    <Button size="xs" variant="ghost" className="text-muted-foreground" disabled={!!busy || google.waiting} onClick={addGoogle}>{google.waiting ? "Waiting…" : "Add account"}</Button>
+                    <Button size="xs" variant="ghost" className="text-muted-foreground" disabled={!!busy || google.waiting} onClick={signOutGoogle}>{busy === "signout" ? "Signing out…" : "Sign out"}</Button>
+                  </div>
                 </li>
               ) : null}
               {(list ?? []).map((s) => (

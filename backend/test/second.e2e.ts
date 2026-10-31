@@ -2,7 +2,7 @@
 // weights, through an OpenAI-style Chat Completions endpoint): it answers the same judgement questions on its own
 // before anything irreversible, and looks at the screen after. When the two models disagree, Remuse asks you
 // (even in a run you started "without asking"). Without a key, Muse Spark is asked again, fresh.
-// Uses its own Agent, data folder, a stand-in shop and stand-in models. Needs port 3200 free.
+// Uses its own Agent, data folder, a stand-in shop and stand-in models. Uses its own port (3299).
 // Run: node test/second.e2e.ts
 import { spawn, type ChildProcess } from "node:child_process";
 import { createServer } from "node:http";
@@ -11,13 +11,15 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
-const API = "http://127.0.0.1:3200/api";
+// Its own port and browser profile, so a running Remuse Agent (and its sign-ins) is never touched.
+const PORT = process.env.TEST_PORT ?? "3299";
+const API = `http://127.0.0.1:${PORT}/api`;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const results: [string, boolean, string][] = [];
 const check = (n: string, ok: boolean, d = "") => { results.push([n, ok, d]); console.log(`${ok ? "PASS" : "FAIL"}  ${n}${d ? `  (${d})` : ""}`); };
 const get = async (p: string) => (await fetch(API + p)).json();
 const post = async (p: string, b: unknown = {}) => (await fetch(API + p, { method: "POST", body: JSON.stringify(b) })).json();
-if (await fetch(`${API}/sessions`).then(() => true, () => false)) { console.error("Port 3200 is busy: stop the Remuse Agent first."); process.exit(1); }
+if (await fetch(`${API}/sessions`).then(() => true, () => false)) { console.error(`Port ${PORT} is busy: another test is running.`); process.exit(1); }
 
 // Three claims, each with a photo. What was done to each is recorded.
 const claims = [{ id: 1, subject: "Cracked mug" }, { id: 2, subject: "Late parcel" }, { id: 3, subject: "Torn box" }];
@@ -71,7 +73,7 @@ let agent: ChildProcess | null = null;
 const startAgent = async (openKey: string, openUrl = MODEL) => {
   agent = spawn(process.execPath, ["--env-file-if-exists=../.env", "src/server.ts"], {
     cwd: resolve(import.meta.dirname, ".."), stdio: process.env.SHOW_AGENT ? "inherit" : "ignore",
-    env: { ...process.env, DATA_DIR: data, HEADLESS: "1", SHOWRUN_NO_NOTIFY: "1", MODEL_API_KEY: "", SHOWRUN_PROXY: MODEL, OPEN_MODEL_URL: openUrl, OPEN_MODEL_KEY: openKey, BASETEN_API_KEY: "" },
+    env: { ...process.env, DATA_DIR: data, PORT, BROWSER_PROFILE: join(data, "browser"), HEADLESS: "1", SHOWRUN_NO_NOTIFY: "1", MODEL_API_KEY: "", SHOWRUN_PROXY: MODEL, OPEN_MODEL_URL: openUrl, OPEN_MODEL_KEY: openKey, BASETEN_API_KEY: "" },
   });
   for (let i = 0; i < 40 && !(await fetch(`${API}/sessions`).then((r) => r.ok, () => false)); i++) await sleep(250);
 };

@@ -1,7 +1,7 @@
 // End-to-end: right after learning, Remuse practices the task once on the person's own example. It finds
 // the very item from the demo, reads the same values, makes the same choice, and stops before anything
 // irreversible (nothing is sent). A practice never waits on the person, flags what doesn't match, and
-// gives way when a real run starts. Uses its own Agent, data folder and a stand-in inbox. Needs port 3200 free.
+// gives way when a real run starts. Uses its own Agent, data folder and a stand-in inbox. Uses its own port (3299).
 // Run: node test/practice.e2e.ts
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
@@ -10,13 +10,15 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
-const API = "http://127.0.0.1:3200/api";
+// Its own port and browser profile, so a running Remuse Agent (and its sign-ins) is never touched.
+const PORT = process.env.TEST_PORT ?? "3299";
+const API = `http://127.0.0.1:${PORT}/api`;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const results: [string, boolean, string][] = [];
 const check = (n: string, ok: boolean, d = "") => { results.push([n, ok, d]); console.log(`${ok ? "PASS" : "FAIL"}  ${n}${d ? `  (${d})` : ""}`); };
 const get = async (p: string) => (await fetch(API + p)).json();
 const post = async (p: string, b: unknown = {}) => (await fetch(API + p, { method: "POST", body: JSON.stringify(b) })).json();
-if (await fetch(`${API}/sessions`).then(() => true, () => false)) { console.error("Port 3200 is busy: stop the Remuse Agent first."); process.exit(1); }
+if (await fetch(`${API}/sessions`).then(() => true, () => false)) { console.error(`Port ${PORT} is busy: another test is running.`); process.exit(1); }
 
 // A small inbox: three emails, each with a reply box and a Send button that really sends.
 const mails = [{ id: 1, subject: "Broken mug", order: "1001", amount: "1,250" }, { id: 2, subject: "Late parcel", order: "1002", amount: "570" }, { id: 3, subject: "Wrong size", order: "1003", amount: "320" }];
@@ -75,7 +77,7 @@ const good = code(read("Order: (\\d+)"), read("Amount: ₱([\\d,]+)"));
 
 const data = mkdtempSync(join(tmpdir(), "remuse-practice-"));
 const agent = spawn(process.execPath, ["--env-file-if-exists=../.env", "src/server.ts"], {
-  cwd: resolve(import.meta.dirname, ".."), env: { ...process.env, DATA_DIR: data, HEADLESS: "1", SHOWRUN_NO_NOTIFY: "1", OPEN_MODEL_KEY: "", BASETEN_API_KEY: "", MODEL_API_KEY: "", SHOWRUN_PROXY: MODEL }, stdio: process.env.SHOW_AGENT ? "inherit" : "ignore",
+  cwd: resolve(import.meta.dirname, ".."), env: { ...process.env, DATA_DIR: data, PORT, BROWSER_PROFILE: join(data, "browser"), HEADLESS: "1", SHOWRUN_NO_NOTIFY: "1", OPEN_MODEL_KEY: "", BASETEN_API_KEY: "", MODEL_API_KEY: "", SHOWRUN_PROXY: MODEL }, stdio: process.env.SHOW_AGENT ? "inherit" : "ignore",
 });
 const finished = async (id: string, secs = 90) => {
   let run: any;

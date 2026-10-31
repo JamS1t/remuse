@@ -14,6 +14,7 @@ export type Step = {
   tab?: string;
   describe: string; expect?: { urlIncludes?: string; textIncludes?: string; looks?: string };
   irreversible?: boolean; fromEvent?: number | null; healed?: string;
+  account?: string; // the Google/YouTube account this step was done as in the demo (from its event)
   // The page's own WebMCP tool for this action: used when the page offers it, else the robot clicks.
   tool?: { name: string; args: Record<string, string> };
   // compare only: open the top `max` results on this page, read `vars` on each, keep the best by the person's rule.
@@ -39,6 +40,9 @@ export type Spec = {
   schedule?: { everyMinutes?: number; time?: string; days?: string; said?: string };
   // An allowed folder (by name) where every file the task downloads is saved, or null.
   saveDownloads?: string | null;
+  // Google apps can be signed in as several accounts at once: the one each site (host) was used as in the demo, or,
+  // for a site used as several, all of them (each step then carries its own account when known).
+  accounts?: Record<string, string>; accountSets?: Record<string, string[]>;
   scopeTypes: string[]; variables: Variable[]; steps: Step[]; rules: Rule[];
   outcomes: Record<string, { describe: string; steps: Step[]; reply?: string; demonstrated: boolean }>;
 };
@@ -80,7 +84,7 @@ const SCHEMA = `{
       "said": "compare only: the person's own words for what makes one result better",
       "tab": "only when the task uses more than one tab: a short name for what this tab is for, e.g. \"inbox\", \"sheet\", \"store\"",
       "describe": "short plain sentence",
-      "expect": { "urlIncludes": "optional, may use {{var}}", "textIncludes": "optional, may use {{var}}", "looks": "what the screen should show after this step" },
+      "expect": { "urlIncludes": "optional, may use {{var}}", "textIncludes": "optional: words that are always there after this step (a heading, label or tab name), may use {{var}}; never a number or value that changes between runs (a count, %, duration, date, price, this item's own data)", "looks": "what the screen should show after this step" },
       "irreversible": false,
       "tool": { "name": "optional: a WebMCP tool the page offered that does this same action", "args": { "<param>": "value or {{var}}" } },
       "fromEvent": <event # this step came from, or null> }
@@ -266,5 +270,46 @@ export function normalize(spec: Spec, s: Session): Spec {
     }
   });
   spec.scopeTypes ??= [];
+  // Which account each site was used as in the demo, from what the recorder saw (emails are case-insensitive; YouTube
+  // IDs are not). One account on a site: kept for the site. Several: kept as a set, and each step gets its own.
+  const ident = (a: unknown) => { const x = String(a); return x.includes("@") ? x.toLowerCase() : x; };
+  const seen: Record<string, Set<string>> = {};
+  for (const e of s.events) if (e?.account && e?.url) { try { (seen[new URL(e.url).host] ??= new Set()).add(ident(e.account)); } catch { /* not a web page */ } }
+  const one = Object.entries(seen).filter(([, v]) => v.size === 1).map(([h, v]) => [h, [...v][0]]);
+  const many = Object.entries(seen).filter(([, v]) => v.size > 1).map(([h, v]) => [h, [...v]]);
+  if (one.length) spec.accounts = Object.fromEntries(one);
+  if (many.length) spec.accountSets = Object.fromEntries(many);
+  all.forEach((st) => { const e = st.fromEvent != null ? s.events[st.fromEvent] : null; if (e?.account) st.account = ident(e.account); });
+  stableChecks(spec, all);
   return spec;
+}
+
+// A step's page check must hold on the next run too. "5.0%" or "3:04" (the demo's own numbers) stop matching as soon
+// as they change, and then every run falls back to a screenshot look. Such a check keeps its longest stretch of fixed
+// words, or, if it has none, the clicked label's; with neither, it is left to "looks".
+const NUMBER = /[-+]?[$€£₱]?\d[\d,.:/%-]*\s*(?:%|[kKmM]\b)?/g;
+export function stableChecks(spec: Spec, all: Step[]) {
+  const values = [...(spec.variables ?? []).map((v) => v.demoValue), ...(spec.inputs.columns ?? []).map((c) => c.demoValue)]
+    .filter((v) => v != null && typeof v !== "object").map((v) => String(v).trim()).filter((v) => v.length >= 2)
+    .sort((a, b) => b.length - a.length); // longest first, so "2,595 views" goes before "2,595"
+  const letters = (x: string) => (x.match(/\p{L}/gu) ?? []).length;
+  const fixedPart = (x?: string) => {
+    if (!x) return "";
+    let cut = x;
+    for (const v of values) cut = cut.split(v).join("\u0000");
+    return cut.replace(NUMBER, "\u0000").split("\u0000").map((p) => p.replace(/^[\s:·•|,.()-]+|[\s:·•|,.()-]+$/g, "")).filter((p) => letters(p) >= 4).sort((a, b) => b.length - a.length)[0] ?? "";
+  };
+  for (const st of all) {
+    let t = st.expect?.textIncludes;
+    if (!t) continue;
+    // This item's own value from your list is known before the step: check for the next item's value instead.
+    for (const c of spec.inputs.columns ?? []) if (c.demoValue && String(c.demoValue).trim().length >= 2) t = t.split(String(c.demoValue).trim()).join(`{{${c.name}}}`);
+    st.expect!.textIncludes = t;
+    if (t.includes("{{")) continue;
+    const changing = values.some((v) => t.toLowerCase().includes(v.toLowerCase())) || (letters(t) < 4 && /\d/.test(t));
+    if (!changing) continue;
+    const keep = fixedPart(t) || fixedPart(st.target?.name);
+    if (keep) st.expect!.textIncludes = keep;
+    else delete st.expect!.textIncludes;
+  }
 }

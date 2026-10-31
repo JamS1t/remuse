@@ -33,6 +33,8 @@ const SHAPE = `({
   rankTests: [ { name: "cheaper per unit wins", better: { /* candidate vars */ }, worse: { /* ... */ } } ],
 })`;
 
+// A rule that covers everything else ("otherwise"): with one, every item gets an outcome; without, "no rule fits" stops it.
+const catchAll = (spec: Spec) => spec.rules.some((r) => /^\s*(otherwise|else|default|always|in all cases|every)\b/i.test(r.if));
 const compares = (spec: Spec) => [...spec.steps, ...Object.values(spec.outcomes).flatMap((o) => o.steps)].filter((s) => s.do === "compare");
 function compareText(spec: Spec) {
   const c = compares(spec);
@@ -61,7 +63,7 @@ ${JSON.stringify(textVars, null, 2)}
 Computed variables:
 ${JSON.stringify(computed, null, 2)}
 
-Also in v: prev_<name> for every variable, its value from the previous run of this task, or null on the first run (use it for "change since last time"; return null when it is null).
+Also in v: prev_<name> for every variable, its value from the previous run of this task, or null on the first run (a computed "change since last time" uses it, and is null when it is null).
 
 Values the person gives per item (always present in v):
 ${JSON.stringify(spec.inputs.columns ?? [], null, 2)}
@@ -71,6 +73,8 @@ ${JSON.stringify(other, null, 2)}
 
 ${compareText(spec)}Rules, in order (first match wins):
 ${spec.rules.map((r, i) => `${i}. if ${r.if} -> ${r.then}${r.said ? `   (person said: "${r.said}")` : ""}`).join("\n")}
+
+${catchAll(spec) ? `The rules end with a catch-all, so decide() always returns one of these outcomes: ${Object.keys(spec.outcomes).join(", ")}. Never null or undefined: an item with no outcome stops the run.` : `decide() returns one of these outcomes: ${Object.keys(spec.outcomes).join(", ")}, or null when no rule fits (the robot then stops and asks).`} A first run (prev_* and changes all null) is a normal case, decided by the rules like any other.
 
 Notes: compare strings case-insensitively and trim them. Dates on the pages are YYYY-MM-DD; compute day differences in UTC so time zones can't shift them. Make extractors robust to layout changes: anchor on labels and value formats, not on line positions.
 
@@ -128,10 +132,15 @@ export function selfTest(spec: Spec, code: string, pages: { url: string; text: s
       } catch (e) { out.push({ name: `ranking: ${t.name}`, ok: false, detail: (e as Error).message }); }
     }
   }
+  const keys = Object.keys(spec.outcomes);
   const shown = Object.entries(spec.outcomes).find(([, o]) => o.demonstrated)?.[0];
   try {
     const d = r.decide(demo);
-    out.push({ name: "demo case decides like the person did", ok: d?.outcome === shown, detail: `decide() said ${d?.outcome}, the person did ${shown}` });
+    // Nothing done in the demo (a report the model guessed) still needs an outcome: "nothing" would stop the run.
+    out.push(shown
+      ? { name: "demo case decides like the person did", ok: d?.outcome === shown, detail: `decide() said ${d?.outcome}, the person did ${shown}` }
+      : catchAll(spec) ? { name: "demo case gets an outcome", ok: keys.includes(d?.outcome as string), detail: `decide() said ${d?.outcome}; with a catch-all rule it must always return one of: ${keys.join(", ")}` }
+      : { name: "demo case decides like the person did", ok: !d?.outcome || keys.includes(d.outcome), detail: `decide() said ${d?.outcome}, which isn't one of: ${keys.join(", ")}` });
   } catch (e) { out.push({ name: "demo case decides like the person did", ok: false, detail: (e as Error).message }); }
   for (const t of r.tests ?? []) {
     try {
@@ -139,8 +148,7 @@ export function selfTest(spec: Spec, code: string, pages: { url: string; text: s
       out.push({ name: `rule test: ${t.name}`, ok: d?.outcome === t.expect, detail: `expected ${t.expect}, got ${d?.outcome}` });
     } catch (e) { out.push({ name: `rule test: ${t.name}`, ok: false, detail: (e as Error).message }); }
   }
-  const unknown = Object.keys(spec.outcomes);
-  for (const t of r.tests ?? []) if (!unknown.includes(t.expect)) out.push({ name: `rule test: ${t.name}`, ok: false, detail: `"${t.expect}" is not an outcome` });
+  for (const t of r.tests ?? []) if (!keys.includes(t.expect)) out.push({ name: `rule test: ${t.name}`, ok: false, detail: `"${t.expect}" is not an outcome${catchAll(spec) ? `: with a catch-all rule, decide must always return one of ${keys.join(", ")}` : ` (one of: ${keys.join(", ")})`}` });
   return out;
 }
 

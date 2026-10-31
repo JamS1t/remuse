@@ -82,6 +82,26 @@ export function useApi<T>(path: string | null, everyMs = 0, keepPolling: (d: T) 
   return { data, error, reload };
 }
 
+export type GoogleStatus = { signedIn: boolean | null; accounts?: string[]; at: number };
+/** The Google accounts signed in to Remuse's own browser. add() opens Google's sign-in (to add another account once one
+ *  is in) and watch() keeps asking until the new account shows up, which is after you close that window. */
+export function useGoogle(enabled = true) {
+  const [from, setFrom] = useState<number | null>(null); // how many accounts there were when the window opened
+  const more = (d: GoogleStatus) => !!d.signedIn && (!d.accounts || d.accounts.length > (from ?? 0));
+  const q = useApi<GoogleStatus>(enabled ? "/logins/google" : null, from !== null ? 4000 : 0, (d) => from !== null && !more(d));
+  const watch = () => setFrom(q.data?.signedIn ? q.data.accounts?.length ?? 0 : 0);
+  const add = async () => { await api("/browser/google?site=google.com", "POST"); watch(); };
+  // Google signs a browser out of all its accounts at once, so this is all of them, in Remuse's browser only.
+  const signOut = async () => {
+    const n = q.data?.accounts?.length ?? 0;
+    if (!confirm(`Sign Remuse's browser out of Google?\n\nGoogle signs a browser out of all its accounts at once${n > 1 ? ` (all ${n})` : ""}. Your own Chrome stays signed in. You can add the accounts you want back after.`)) return false;
+    await api("/browser/google/signout", "POST");
+    q.reload();
+    return true;
+  };
+  return { ...q, add, watch, signOut, waiting: from !== null && !(q.data && more(q.data)) };
+}
+
 export function useHash() {
   const [hash, setHash] = useState(location.hash);
   useEffect(() => {
@@ -109,6 +129,7 @@ export type Task = {
   handled: number; // list items earlier runs already handled (left alone next time)
   // Time saved: items done in real runs × how long the demo took.
   doneCount: number; demoMs: number | null; savedMs: number | null;
+  accounts: Record<string, string> | null; // site -> the Google account it was used as in the demo
 };
 export type FolderRow = { id: string; name: string; path: string; count: number; latest: { name: string; modified: number } | null; ok: boolean };
 export type ScheduleRow = { id: number; specId: number; sessionId: string; time: string; days: string; everyMinutes: number | null; watchFolder?: string | null };

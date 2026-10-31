@@ -3,7 +3,7 @@
 import { chromium, type BrowserContext, type Page, type Locator } from "playwright";
 import { execFileSync, spawn } from "node:child_process";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { askJson, checker, ground, sam, text, png, type Box, type Part } from "./meta.ts";
 import { load, same, type Rules } from "./build.ts";
@@ -74,7 +74,8 @@ export type Practice = {
 const VIEW = { width: 1440, height: 900 };
 const MOCK = process.env.MOCK_URL ?? "http://localhost:3100";
 const IRREVERSIBLE = /\b(refund|replace|send|pay|submit|ship|confirm|delete|place order|issue|buy|checkout|check out|purchase|book|transfer|message seller|post|share|publish|approve|merge|archive|resolve)\b/i;
-export const PROFILE = fileURLToPath(new URL("../data/browser", import.meta.url));
+// The browser profile runs use (its sign-ins live here). Tests point BROWSER_PROFILE at a throwaway one.
+export const PROFILE = process.env.BROWSER_PROFILE ? resolve(process.env.BROWSER_PROFILE) : fileURLToPath(new URL("../data/browser", import.meta.url));
 
 /** The Remuse browser: the person's installed Chrome with its own profile, so sign-ins stick between runs. */
 // Hidden Chrome calls itself "HeadlessChrome", which sites like Google treat as a bot. Learn the real
@@ -167,6 +168,28 @@ const gatedStep = (s: Step) => !!s.irreversible || (s.do === "click" && IRREVERS
 /** Test sites only: an outcome by what it means ("send_replacement" is "replace", "refund_lost" is "lost_refund"),
  *  so a run can be scored whatever names the model gave the outcomes. */
 export const meaning = (o?: string) => (!o ? o : /lost/i.test(o) ? "lost_refund" : /declin/i.test(o) ? "decline" : /replac/i.test(o) ? "replace" : /refund/i.test(o) ? "refund" : o);
+
+// Only Google and YouTube pages have their account checked (and their address changed to switch). Tests widen it.
+const ACCOUNT_HOSTS = new RegExp(process.env.REMUSE_ACCOUNT_HOSTS ?? "(^|\\.)(google|youtube)\\.com$");
+/** In the page: YouTube Studio's channel, from its address ("ytc:UC…"), or null. */
+const studioChannel = () => { const c = /\/channel\/(UC[\w-]+)/.exec(location.pathname)?.[1]; return c ? `ytc:${c}` : null; };
+
+/** In the page: who YouTube says is logged in ("yt:<channel>||<account>" or "yt:<account>||"), else Studio's channel
+ *  from its address ("ytc:UC…"), else null. Runs in the page itself, where YouTube's own config lives. */
+const youTubeIdentity = () => {
+  const cfg = (window as any).ytcfg;
+  const get = (k: string) => { try { return cfg?.get?.(k) ?? cfg?.data_?.[k]; } catch { return undefined; } };
+  const id = get("DATASYNC_ID");
+  if (get("LOGGED_IN") === true && id) return `yt:${id}`;
+  const c = /\/channel\/(UC[\w-]+)/.exec(location.pathname)?.[1];
+  return location.host.startsWith("studio.") && c ? `ytc:${c}` : null;
+};
+
+/** In the page: the Google account it is using, from its account button, or null when it shows none. */
+const pageAccount = () => {
+  const label = [...document.querySelectorAll('[aria-label*="Google"]')].map((e) => e.getAttribute("aria-label") ?? "").find((a) => /\([^()\s]+@[^()\s]+\)/.test(a));
+  return label ? /\(([^()\s]+@[^()\s]+)\)/.exec(label)![1].toLowerCase() : null;
+};
 
 const manila = () => new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Manila" });
 // The reply is kept as a template, so its own {{values}} are filled where it's typed (one level, reply only:
@@ -498,7 +521,9 @@ export class Runner {
     for (const [i, step] of this.spec.steps.entries()) if (!(await this.step(step, this.spec.steps[i + 1]?.tab))) return;
     for (const v of this.spec.variables.filter((x) => x.kind === "computed" && !x.candidate)) {
       it.vars[v.name] = this.rules.compute[v.name]?.(it.vars);
-      this.log(`${v.name} = ${JSON.stringify(it.vars[v.name])} (computed)`, "info");
+      // A change since last time has nothing to compare with on the first run: say so rather than show a bare "null".
+      const firstRun = this.spec.variables.every((x) => it.vars[`prev_${x.name}`] == null);
+      this.log(`${v.name} = ${JSON.stringify(it.vars[v.name])} (computed)${it.vars[v.name] == null ? (firstRun ? ": nothing to compare with yet, this is the first run" : ": couldn't be worked out") : ""}`, "info");
     }
 
     // Decide. Your own rules come first: one that clearly applies (anything but the "otherwise" catch-all) decides,
@@ -817,6 +842,8 @@ export class Runner {
     // A new tab whose first step isn't a "goto" is one the site opened (the previous click did it).
     if (raw.tab) await this.useTab(raw.tab, raw.do !== "goto");
 
+    // Reading a page counts too: the values must come from the account in your demo.
+    if (step.do === "extract" || step.do === "compare") await this.rightAccount("act", raw);
     if (step.do === "open_item") {
       // In the demo the item opened in its own tab (the next step is in another tab): open it there.
       if (nextTab && raw.tab && nextTab !== raw.tab) {
@@ -824,10 +851,11 @@ export class Runner {
         const into = p && !p.isClosed() ? p : await this.ctx.newPage();
         this.tabs.set(nextTab, into);
         await into.goto(it.url);
+        await this.rightAccount("open", raw, into);
         this.log(`Opened ${this.spec.inputs.itemName ?? "the item"} in the ${nextTab} tab`, "info");
         return;
       }
-      if (it.url) await this.page.goto(it.url);
+      if (it.url) { await this.page.goto(it.url); await this.rightAccount("open", raw); }
       else {
         // Opens by clicking: back to the list, click the same position.
         const { listUrl, itemSelector } = this.spec.inputs;
@@ -844,7 +872,7 @@ export class Runner {
         await this.page.waitForTimeout(1500);
       }
     }
-    else if (step.do === "goto") await this.page.goto(step.url!);
+    else if (step.do === "goto") { await this.page.goto(step.url!); await this.rightAccount("open", raw); }
     // Acting after a plan: values were read in the planning pass, so they aren't read (or judged) again.
     else if (step.do === "extract") return this.phase === "act" ? this.stillTheSame(step.vars ?? []) : this.extract(step.vars ?? []);
     else if (step.do === "compare") {
@@ -855,6 +883,7 @@ export class Runner {
     else if (step.do === "upload") {
       if (this.phase === "plan") return; // planning only looks; the upload happens when it acts
       if (this.unsure(raw)) await this.approve(step);
+      await this.rightAccount("act", raw);
       return this.upload(raw, step);
     }
     else if (step.do === "report" && this.phase === "plan") return;
@@ -872,6 +901,7 @@ export class Runner {
       return;
     }
     else if (raw.tool && (await this.hasTool(raw.tool.name))) {
+      await this.rightAccount("act", raw);
       // The page offers this action as a WebMCP tool: call it directly instead of clicking. Same approval gate.
       const gated = raw.irreversible || IRREVERSIBLE.test(step.target?.name ?? "") || IRREVERSIBLE.test(raw.tool.name.replace(/_/g, " ")) || this.unsure(raw);
       if (gated && !(await this.approve(step))) return;
@@ -883,6 +913,7 @@ export class Runner {
       this.log(`Used the site's WebMCP tool ${raw.tool.name}(${JSON.stringify(args)}) instead of clicking: ${out}`, "ok");
     }
     else {
+      await this.rightAccount("act", raw);
       const found = step.target ? await this.locate(raw, step) : null;
       // The picture kept with the step's check: what it pressed (taken before pressing), or the field after typing
       // (so it shows what the check says). A healed element already has its marked-up screenshot.
@@ -1007,6 +1038,67 @@ export class Runner {
     return (await loc.count()) === 1 ? { loc, healedName, shot: seen.file } : { point, healedName, shot: seen.file };
   }
 
+  /** Google apps (YouTube included) can be signed in as several accounts at once. If you did this part of the task as
+   *  a particular account, make sure the page uses it. Right after opening a page ("open") it may switch: Google opens a
+   *  page as an account with ?authuser=<email>; YouTube by trying each signed-in account (and &pageid= for a brand
+   *  channel). Before acting or reading ("act") it only checks, and stops rather than reload mid-form or act as anyone
+   *  else. A site used as several accounts in the demo, where this step's account isn't known, must at least be one of
+   *  them. Pages that name no account aren't checked; only Google and YouTube pages are. */
+  private async rightAccount(mode: "open" | "act", raw?: Step, p: Page = this.page) {
+    let host = "";
+    try { host = new URL(p.url()).host; } catch { return; }
+    if (!ACCOUNT_HOSTS.test(host)) return;
+    const want = raw?.account ?? this.spec.accounts?.[host];
+    const allowed = this.spec.accountSets?.[host];
+    if (!want && !allowed?.length) return;
+    const sample = want ?? allowed![0];
+    const read = sample.startsWith("ytc:") ? studioChannel : sample.startsWith("yt:") ? youTubeIdentity : pageAccount;
+    const shown = async (ms: number) => {
+      // After opening a page its account can show a few seconds later; before acting, the page is already settled.
+      for (const end = Date.now() + ms; ;) {
+        const got = await p.evaluate(read).catch(() => null);
+        if (got || Date.now() >= end) return got;
+        await p.waitForTimeout(300);
+      }
+    };
+    const now = await shown(mode === "open" ? 8000 : 0);
+    if (!now) return; // this page names no account: nothing to compare
+    const name = (x: string) => (x.includes("@") ? x : "another YouTube account or channel");
+    if (!want) {
+      if (allowed!.includes(now)) return;
+      throw new Error(`this page is using ${name(now)}, which isn't one of the accounts from your demo`);
+    }
+    if (now === want) return;
+    if (mode === "act") throw new Error(`this page is using ${name(now)}, not the account from your demo (${name(want)}). I won't act as another account`);
+    if (read === pageAccount) {
+      this.log(`This page is using ${now}, but you did this as ${want}. Switching to ${want}.`, "warn");
+      const u = new URL(p.url());
+      u.pathname = u.pathname.replace(/\/u\/\d+(?=\/|$)/, ""); // the account number from your Chrome means another account here
+      u.searchParams.set("authuser", want);
+      await p.goto(u.href);
+      await p.waitForLoadState("domcontentloaded").catch(() => {});
+      const after = await shown(8000);
+      if (after !== want) throw new Error(after ? `this page is signed in as ${after}, not ${want} as in your demo. Add ${want} under Connected sites › Google › Add another account, then try again` : `I couldn't tell which account this page uses after switching to ${want}, so I stopped`);
+      this.log(`Now using ${want}.`, "ok", undefined, { why: "the account button shows it", how: "page" });
+      return;
+    }
+    this.log("This YouTube page is signed in as another account or channel than in your demo. Switching to yours.", "warn");
+    const [first, second] = want.replace(/^ytc?:/, "").split("||");
+    const brand = want.startsWith("yt:") && second ? first : null; // "channel||account" is a brand channel
+    for (let n = 0; n < 6; n++) {
+      const u = new URL(p.url());
+      u.searchParams.set("authuser", String(n));
+      if (brand) u.searchParams.set("pageid", brand); else u.searchParams.delete("pageid");
+      await p.goto(u.href);
+      await p.waitForLoadState("domcontentloaded").catch(() => {});
+      const got = await shown(8000);
+      if (got === want) { this.log("Now on your channel from the demo.", "ok", undefined, { why: "YouTube's own page data names that account and channel", how: "page" }); return; }
+      const loggedIn = await p.evaluate(() => (window as any).ytcfg?.get?.("LOGGED_IN")).catch(() => undefined);
+      if (!got || loggedIn === false) break; // past the last signed-in account
+    }
+    throw new Error("the YouTube channel from your demo isn't signed in to Remuse's browser. Add the Google account that owns it under Connected sites › Google › Add another account, then try again");
+  }
+
   /** Acting after a plan: before doing anything, make sure this is still the item that was planned (lists move;
    *  values change). Code reads the same values again, no model call; any that differ end the item untouched. */
   private async stillTheSame(names: string[]) {
@@ -1108,7 +1200,8 @@ export class Runner {
     } else if (e.urlIncludes || e.textIncludes) {
       const deadline = Date.now() + 5000;
       for (;;) {
-        const urlOk = !e.urlIncludes || this.page.url().toLowerCase().includes(e.urlIncludes.toLowerCase());
+        const bare = (x: string) => x.toLowerCase().replace(/\/u\/\d+(?=\/|$)/, "");
+        const urlOk = !e.urlIncludes || bare(this.page.url()).includes(bare(e.urlIncludes));
         const textOk = !e.textIncludes || (await this.page.innerText("body").catch(() => "")).toLowerCase().includes(e.textIncludes.toLowerCase());
         domOk = urlOk && textOk;
         if (domOk) { why = [e.urlIncludes && `the address now has “${short(e.urlIncludes)}”`, e.textIncludes && `“${short(e.textIncludes)}” is on the page`].filter(Boolean).join(", and "); break; }

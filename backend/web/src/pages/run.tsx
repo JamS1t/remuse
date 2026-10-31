@@ -189,7 +189,7 @@ function ItemDetail({ it, file, choices, live, latest }: { it: Item; file: (f: s
                     : l.level === "ok" ? <Check className="size-3.5 text-ok" /> : <span className="mt-1.5 ml-1 block size-1 rounded-full bg-muted-foreground/60" />}
                 </span>
                 {read ? (
-                  <span className="min-w-0"><span className="text-muted-foreground">{nice(read[1])}</span> <span className="ml-1 font-mono text-[13px]">{JSON.parse(JSON.stringify(read[2])).replace(/^"|"$/g, "")}</span></span>
+                  <span className="min-w-0"><span className="text-muted-foreground">{nice(read[1])}</span> {read[2] === "null" ? <span className="ml-1 text-muted-foreground">{read[4] ? read[4].slice(2) : "none"}</span> : <span className="ml-1 font-mono text-[13px]">{JSON.parse(JSON.stringify(read[2])).replace(/^"|"$/g, "")}</span>}</span>
                 ) : (
                   <span className="min-w-0">
                     <span className={cn(l.level === "error" && "text-destructive", l.level === "warn" && "text-warn")}>{label}</span>

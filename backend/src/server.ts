@@ -294,8 +294,9 @@ async function openSignIn(url: string) {
 async function openGoogleSignIn(site: string, email = "") {
   if (active && !["done", "failed", "stopped"].includes(active.run.status)) throw new HttpError(409, "wait for the run to finish first");
   if (signIn) { await signIn.close().catch(() => {}); signIn = null; }
-  // login_hint fills in the account, so Google goes straight to a passkey or "tap Yes on your phone".
-  const url = `https://accounts.google.com/ServiceLogin?continue=${encodeURIComponent(`https://www.${site}/`)}${email ? `&login_hint=${encodeURIComponent(email)}` : ""}`;
+  // login_hint fills in the account, so Google goes straight to a passkey or "tap Yes on your phone". Once an account
+  // is signed in, AddSession adds another instead of going straight back to the first.
+  const url = `https://accounts.google.com/${google.signedIn ? "AddSession" : "ServiceLogin"}?continue=${encodeURIComponent(`https://www.${site}/`)}${email ? `&login_hint=${encodeURIComponent(email)}` : ""}`;
   googleOpenedAt = Date.now(); // the next status check looks again, once that window is closed
   if (!openPlainChrome(url)) return openSignIn(url); // ponytail: no installed Chrome, fall back to the driven window
 }
@@ -303,7 +304,8 @@ async function openGoogleSignIn(site: string, email = "") {
 // Is Remuse's own browser signed in to Google? Google logins are never copied, so you sign in there once, and the
 // only place that sign-in shows is the browser profile itself: a hidden Chrome on it, and Google's session cookie.
 // Remembered for 10 minutes, and looked at again after the sign-in window closes. Never while the profile is in use.
-let google: { signedIn: boolean | null; at: number } = { signedIn: null, at: 0 };
+// ids: Google account id -> email, so a recorded YouTube identity can be shown as the account that owns it.
+let google: { signedIn: boolean | null; accounts: string[]; ids: Record<string, string>; at: number } = { signedIn: null, accounts: [], ids: {}, at: 0 };
 let googleOpenedAt = 0;
 let googleLook: Promise<void> | null = null; // a run waits for it (one Chrome per profile)
 async function googleStatus() {
@@ -315,12 +317,53 @@ async function googleStatus() {
       const ctx = await openBrowser(true);
       try {
         const cookies = await ctx.cookies(["https://accounts.google.com", "https://www.youtube.com"]);
-        google = { signedIn: cookies.some((c) => /^(SID|__Secure-1PSID|__Secure-3PSID)$/.test(c.name)), at: Date.now() };
+        const signedIn = cookies.some((c) => /^(SID|__Secure-1PSID|__Secure-3PSID)$/.test(c.name));
+        // Which accounts: Google's own list of the accounts signed in to this browser.
+        let accounts: string[] = [];
+        const ids: Record<string, string> = {};
+        let known = false; // Google's list was read, so it (not the cookie) says who is signed in
+        if (signedIn) {
+          // Asked the way Chrome asks (POST); a plain page visit gets "400 Bad Request".
+          const body = await ctx.request.post("https://accounts.google.com/ListAccounts?gpsia=1&source=ChromiumBrowser&json=standard", { headers: { "content-type": "application/x-www-form-urlencoded" }, data: "", timeout: 15_000 }).then((r) => (r.ok() ? r.text() : ""), () => "");
+          // Each entry: [.., .., name, email, photo, valid (1), .., .., .., .., account id, .., .., .., signed out (1), ..].
+          // Google also keeps accounts that were signed out of this browser (its account chooser shows them): left out.
+          try {
+            for (const a of JSON.parse(body.replace(/^\)\]\}'\s*/, ""))[1] ?? []) {
+              const email = typeof a?.[3] === "string" ? a[3].toLowerCase() : "";
+              if (!email) continue;
+              known = true;
+              if (typeof a[10] === "string") ids[a[10]] = email; // a recorded YouTube identity names this id
+              if (a[5] === 1 && a[14] !== 1 && !accounts.includes(email)) accounts.push(email);
+            }
+          } catch { /* not the shape we know: no list, the cookie decides */ }
+        }
+        google = { signedIn: known ? accounts.length > 0 : signedIn, accounts, ids, at: Date.now() };
       } finally { await ctx.close().catch(() => {}); }
     } catch (e) { console.warn("couldn't check the Google sign-in:", (e as Error).message); }
   })();
   try { await googleLook; } finally { googleLook = null; }
   return google;
+}
+
+// Sign Remuse's own browser out of Google. Google signs a browser out of all its accounts at once (there is no
+// signing out of just one); your own Chrome isn't touched, it's another browser to Google.
+async function googleSignOut() {
+  if (busyRun()) throw new HttpError(409, "wait for the run to finish first");
+  if (signIn || plainChromeOpen()) throw new HttpError(409, "close the Google sign-in window first");
+  if (googleLook) await googleLook.catch(() => {});
+  googleLook = (async () => {
+    const ctx = await openBrowser(true);
+    try {
+      const p = await ctx.newPage();
+      await p.goto("https://accounts.google.com/Logout", { timeout: 30_000 });
+      await p.waitForLoadState("networkidle", { timeout: 15_000 }).catch(() => {}); // it signs out YouTube too, on the way
+    } finally { await ctx.close().catch(() => {}); }
+  })();
+  try { await googleLook; } finally { googleLook = null; }
+  google.at = 0; // look again
+  const after = await googleStatus();
+  if (after.signedIn) throw new HttpError(502, "Google didn't sign out. Try again");
+  return after;
 }
 
 // A run that was going when the Agent stopped (shutdown, crash) can't resume: mark it stopped.
@@ -492,6 +535,15 @@ function timeSaved(sessionId: string, startedAt: number, endedAt: number | null)
   return { doneCount: did.size, demoMs, savedMs: demoMs ? did.size * demoMs : null };
 }
 
+/** An account as a person reads it: an email as is; a YouTube identity as the account that owns it, if known. */
+function accountLabel(who: string) {
+  if (!/^ytc?:/.test(who)) return who;
+  if (who.startsWith("ytc:")) return "the YouTube channel from your demo";
+  const [first, second] = who.slice(3).split("||");
+  const owner = google.ids[second || first];
+  return `${second ? "a brand channel" : "the YouTube channel"} of ${owner ?? "your demo's Google account"}`;
+}
+
 /** The practice of this task's newest version, if there was one: going, or how it went. */
 function latestPractice(sessionId: string, specId: number | null) {
   const run = recentRuns(sessionId).find((r) => r.mode === "practice" && r.specId === specId);
@@ -591,7 +643,7 @@ async function route(req: IncomingMessage, res: ServerResponse) {
           checks: { passed: tests.filter((x) => x.ok).length, total: tests.length },
           askedSchedule: spec?.schedule ?? null, lastReport: lastReport(t.sessionId),
           uploads: spec ? [...spec.steps, ...Object.values(spec.outcomes).flatMap((o) => o.steps)].filter((x) => x.do === "upload").map((x) => ({ folder: x.file?.folder ?? null, pick: x.file?.pick ?? "next" })) : [],
-          saveDownloads: spec?.saveDownloads ?? null, practice: latestPractice(t.sessionId, t.specId), handled: handledCount(t.sessionId), ...timeSaved(t.sessionId, t.startedAt, t.endedAt) };
+          saveDownloads: spec?.saveDownloads ?? null, practice: latestPractice(t.sessionId, t.specId), handled: handledCount(t.sessionId), ...timeSaved(t.sessionId, t.startedAt, t.endedAt), accounts: spec?.accounts ? Object.fromEntries(Object.entries(spec.accounts).map(([site, who]) => [site, accountLabel(who)])) : null };
       }));
   if (url.pathname === "/api/logins" && m === "POST") {
     const b = await json(req);
@@ -610,6 +662,7 @@ async function route(req: IncomingMessage, res: ServerResponse) {
     await openGoogleSignIn(site, /^[^@\s]+@[^@\s]+$/.test(email) ? email : "");
     return send(res, 200, { open: true });
   }
+  if (m === "POST" && url.pathname === "/api/browser/google/signout") return send(res, 200, await googleSignOut());
   if (m === "POST" && url.pathname === "/api/browser/open") {
     const target = url.searchParams.get("url") || "https://www.google.com";
     if (!/^https?:\/\//.test(target)) throw new HttpError(400, "give a web address starting with http");
