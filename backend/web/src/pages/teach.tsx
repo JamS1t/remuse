@@ -133,7 +133,7 @@ export function TeachMode({ sessionId, task, onExit }: { sessionId: string; task
   return (
     <Frame orb={view.orb} word={view.word} sub={<>{view.sub}{recording && st?.rec?.audioError ? <p className="mt-2 text-[13px] text-warn">No voice: {st.rec.audioError}</p> : null}{recording && st?.mic ? (st.micPermission ? (
         <span className="mt-2 block text-[13px] text-warn">
-          Chrome took back the microphone, so I can't hear you. <button type="button" className="font-medium underline underline-offset-2" onClick={() => ext("openMic").catch(() => {})}>Allow the mic again</button> and choose “Allow while visiting the site”. I'll pick up where you are.
+          Chrome took back the microphone, so I can't hear you. <button type="button" className="font-medium underline underline-offset-2" onClick={() => ext("openMic").catch(() => {})}>Allow the mic again</button> and pick “forever” (or “Allow while visiting the site”). I'll pick up where you are.
         </span>
       ) : <p className="mt-2 text-[13px] text-warn">The mic stopped hearing you ({st.mic}). Reconnecting…</p>) : null}</>} shimmer={view.word === "Thinking"}
       right={recording ? (
