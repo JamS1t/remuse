@@ -54,6 +54,8 @@ const receipts = {
     sheet("s15", "Archive the receipt email", { do: "click", target: { role: "button", name: "Archive" } }),
   ],
 } as unknown as Spec;
+const every = readback(spec(2, { rules: [{ if: "item_type == 'receipt'", then: "log_and_archive", said: "every receipt that goes to my Gmail I log it on my Google Sheets" }], outcomes: { log_and_archive: { describe: "Log it and archive", demonstrated: true, steps: [] } } } as any));
+check("a rule said as \"every …\" is read as said", every.plan.some((l) => l.text === "Every receipt that goes to my Gmail I log it on my Google Sheets.") && !every.plan.some((l) => /^If every/.test(l.text)), every.plan.map((l) => l.text));
 const rr = readback(receipts);
 const said = rr.plan.filter((l) => l.step).map((l) => l.text);
 check("keypresses aren't read as steps of their own", !said.some((t) => /Confirm|Move to next column|Jump to end|Go to start of last row|Land on first empty row/.test(t)), said);

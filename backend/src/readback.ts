@@ -41,7 +41,7 @@ export function readback(spec: Spec): { plan: Line[]; questions: Line[]; steps: 
     const cond = String(r.if ?? "");
     if (!then || (!cond && !r.said)) continue; // half a rule from the model: nothing sensible to say
     const always = /^\s*(otherwise|else|default|always|in all cases|every)\b/i.test(cond); // "do it": no condition to read
-    if (r.said && /^(if|when|otherwise)\b/i.test(r.said.trim())) plan.push({ text: `${upper(sentence(r.said))}.` }); // their whole rule, as they said it
+    if (r.said && /^(if|when|whenever|otherwise|every|each|all|for every|for each)\b/i.test(r.said.trim())) plan.push({ text: `${upper(sentence(r.said))}.` }); // their whole rule, as they said it
     else if (always) continue;
     else if (r.said) plan.push({ text: `If ${sentence(r.said)}, I'll ${then}.` });
     else plan.push({ text: `If ${sentence(cond.replaceAll("_", " "))}, I'll ${then}.` });
