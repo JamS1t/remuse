@@ -296,7 +296,31 @@ async function openGoogleSignIn(site: string, email = "") {
   if (signIn) { await signIn.close().catch(() => {}); signIn = null; }
   // login_hint fills in the account, so Google goes straight to a passkey or "tap Yes on your phone".
   const url = `https://accounts.google.com/ServiceLogin?continue=${encodeURIComponent(`https://www.${site}/`)}${email ? `&login_hint=${encodeURIComponent(email)}` : ""}`;
+  googleOpenedAt = Date.now(); // the next status check looks again, once that window is closed
   if (!openPlainChrome(url)) return openSignIn(url); // ponytail: no installed Chrome, fall back to the driven window
+}
+
+// Is Remuse's own browser signed in to Google? Google logins are never copied, so you sign in there once, and the
+// only place that sign-in shows is the browser profile itself: a hidden Chrome on it, and Google's session cookie.
+// Remembered for 10 minutes, and looked at again after the sign-in window closes. Never while the profile is in use.
+let google: { signedIn: boolean | null; at: number } = { signedIn: null, at: 0 };
+let googleOpenedAt = 0;
+let googleLook: Promise<void> | null = null; // a run waits for it (one Chrome per profile)
+async function googleStatus() {
+  const stale = Date.now() - google.at > 10 * 60_000 || googleOpenedAt > google.at;
+  if (!stale || busyRun() || signIn || googleLook) return google;
+  if (plainChromeOpen()) return google; // still signing in
+  googleLook = (async () => {
+    try {
+      const ctx = await openBrowser(true);
+      try {
+        const cookies = await ctx.cookies(["https://accounts.google.com", "https://www.youtube.com"]);
+        google = { signedIn: cookies.some((c) => /^(SID|__Secure-1PSID|__Secure-3PSID)$/.test(c.name)), at: Date.now() };
+      } finally { await ctx.close().catch(() => {}); }
+    } catch (e) { console.warn("couldn't check the Google sign-in:", (e as Error).message); }
+  })();
+  try { await googleLook; } finally { googleLook = null; }
+  return google;
 }
 
 // A run that was going when the Agent stopped (shutdown, crash) can't resume: mark it stopped.
@@ -349,6 +373,7 @@ setInterval(async () => {
 async function startRun(specId: number, opts: { limit?: number; autoApprove?: boolean; rows?: Record<string, string>[]; scheduled?: boolean; watch?: boolean; practice?: boolean; plan?: boolean; redo?: boolean; fromFolder?: number; file?: { folder: string; name: string }; example?: { url?: string; label?: string } }) {
   const row = specRow(specId);
   if (!row.code) throw new HttpError(400, "build the rules first");
+  if (googleLook) await googleLook; // the Google sign-in check has the browser profile for a moment
   // A practice gives way to real work, and to a newer practice: it stops, and the new run starts once the old
   // one has closed its browser. A real run is never interrupted.
   // A loop: another practice may have slipped in while we waited for the last one to close.
@@ -510,6 +535,7 @@ async function route(req: IncomingMessage, res: ServerResponse) {
   if (origin && !ALLOWED_ORIGINS.has(origin) && !origin.startsWith("chrome-extension://")) throw new HttpError(403, "not allowed from this page");
 
   if (url.pathname === "/api/logins" && m === "GET") return send(res, 200, listLogins());
+  if (url.pathname === "/api/logins/google" && m === "GET") return send(res, 200, await googleStatus());
 
   // Folders the person allows: the Windows folder picker adds one; each lists its newest files.
   if (url.pathname === "/api/folders" && m === "GET")
