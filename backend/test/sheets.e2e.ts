@@ -83,10 +83,10 @@ try {
   // While still recording, the sidebar can already show what Remuse heard and its draft of the task.
   const recId = ((await call("status")) as any).rec?.id;
   let lv: any = null;
-  for (let i = 0; i < 20; i++) { lv = await get(`/sessions/${recId}/live`); if (lv.draft?.steps?.length && !lv.drafting) break; await sleep(1500); }
-  console.log("   live:", JSON.stringify({ heard: lv.turns.map((x: any) => x.text).join(" ").slice(0, 120), draft: lv.draft }).slice(0, 600));
-  check("while recording, the voice is heard in pieces", lv.turns.length > 0, `${lv.turns.length} pieces ${lv.error ?? ""}`);
-  check("and a draft of the task is shown before you stop", (lv.draft?.steps?.length ?? 0) > 0, lv.error ?? "");
+  for (let i = 0; i < 20; i++) { lv = await get(`/sessions/${recId}/live`); if (lv.cards?.length && !lv.thinking) break; await sleep(1500); }
+  console.log("   live:", JSON.stringify({ heard: lv.turns.map((x: any) => x.text).join(" | ").slice(0, 200), cards: lv.cards }).slice(0, 600));
+  check("while recording, the voice is heard in sentences", lv.turns.length > 0, `${lv.turns.length} sentences ${lv.error ?? ""}`);
+  check("cards show up before you stop", (lv.cards?.length ?? 0) > 0, lv.error ?? "");
   const stopped = (await call("stop")) as any;
 
   const s = await get(`/sessions/${stopped.id}`);

@@ -8,7 +8,7 @@ import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { transcribe, calls } from "./meta.ts";
 import { revise, sortSaid, understand, type Spec } from "./understand.ts";
-import { endLive, hear, liveState } from "./live.ts";
+import { endLive, heard as hearLive, liveCards, liveState } from "./live.ts";
 import { build } from "./build.ts";
 import { Runner, itemKey, openBrowser, openPlainChrome, plainChromeOpen, type Run } from "./runner.ts";
 import type { BrowserContext } from "playwright";
@@ -114,7 +114,7 @@ function full(id: string) {
     .map((e) => ({ id: e.id, t: e.t, kind: e.kind, url: e.url, ...JSON.parse(e.data), before: e.before_png, after: e.after_png }));
   const turns = db.prepare("SELECT start_ms AS startMs, end_ms AS endMs, text FROM turns WHERE session_id = ? ORDER BY start_ms").all(id);
   const specs = db.prepare("SELECT id, version, note, created_at FROM specs WHERE session_id = ? ORDER BY version DESC").all(id);
-  return { ...s, events, turns, specs };
+  return { ...s, events, turns, specs, cards: s.cards ? JSON.parse(s.cards) : [] };
 }
 
 const pagesOf = (sessionId: string) => (db.prepare("SELECT url, data FROM events WHERE session_id = ? AND kind = 'page' ORDER BY t").all(sessionId) as any[])
@@ -168,7 +168,7 @@ async function transcribeSession(id: string, offsetMs: number) {
 
 // Learning a recording end to end, with no input from the person: what they said, the Task Spec (which
 // also names the task), then the rules as tested code. Each stage is saved so the sidebar can show it.
-for (const col of ["learn_stage TEXT", "learn_error TEXT"]) { try { db.exec(`ALTER TABLE sessions ADD COLUMN ${col}`); } catch { /* already there */ } }
+for (const col of ["learn_stage TEXT", "learn_error TEXT", "cards TEXT"]) { try { db.exec(`ALTER TABLE sessions ADD COLUMN ${col}`); } catch { /* already there */ } }
 const stage = (id: string, s: string, err: string | null = null) => db.prepare("UPDATE sessions SET learn_stage = ?, learn_error = ? WHERE id = ?").run(s, err, id);
 // A recording that was mid-learning when the Agent stopped would show "thinking" forever.
 db.prepare("UPDATE sessions SET learn_stage = 'failed', learn_error = 'Remuse stopped while learning this. Press Try again.' WHERE learn_stage IN ('listening', 'understanding', 'building')").run();
@@ -176,6 +176,9 @@ db.prepare("UPDATE sessions SET learn_stage = 'failed', learn_error = 'Remuse st
 async function learn(id: string, offsetMs: number) {
   try {
     stage(id, "listening");
+    // The notes taken while you taught (what you said you want): kept with the recording. A retry keeps the old ones.
+    const cards = await liveCards(id);
+    if (cards.length) db.prepare("UPDATE sessions SET cards = ? WHERE id = ?").run(JSON.stringify(cards), id);
     await transcribeSession(id, offsetMs);
     stage(id, "understanding");
     const spec = await understand(full(id), sessionDir(id), folderHints());
@@ -724,12 +727,11 @@ async function route(req: IncomingMessage, res: ServerResponse) {
       if (!r.changes) throw new HttpError(404, "no such event");
       return send(res, 200, { ok: true });
     }
-    // Following along while you record: a piece of your voice in, the live draft out.
-    if (m === "POST" && p[3] === "live") {
+    // While you teach: one thing you said, whole. Notes are taken from it; "control: done" means you said you're done.
+    if (m === "POST" && p[3] === "heard") {
       const wav = await body(req);
       if (wav.subarray(0, 4).toString() !== "RIFF") throw new HttpError(400, "audio must be WAV");
-      await hear(id, wav, Number(url.searchParams.get("at") ?? 0), () => full(id));
-      return send(res, 200, { ok: true });
+      return send(res, 200, await hearLive(id, wav, Number(url.searchParams.get("at") ?? 0), () => full(id)));
     }
     // Hands-free: something said about a learned task (sorted and acted on in the background), and the latest.
     if (m === "POST" && p[3] === "say") {
@@ -739,7 +741,7 @@ async function route(req: IncomingMessage, res: ServerResponse) {
       return send(res, 202, { ok: true });
     }
     if (m === "GET" && p[3] === "say") return send(res, 200, heard.get(id) ?? null);
-    if (m === "GET" && p[3] === "live") return send(res, 200, liveState(id) ?? { turns: [], draft: null, drafting: false, error: null });
+    if (m === "GET" && p[3] === "live") return send(res, 200, liveState(id) ?? { turns: [], cards: [], thinking: false, error: null });
     if (m === "PUT" && p[3] === "audio") {
       const wav = await body(req);
       if (wav.subarray(0, 4).toString() !== "RIFF") throw new HttpError(400, "audio must be WAV");

@@ -95,7 +95,7 @@ async function start(title, { skipMicCheck = false } = {}) {
   await save(r);
 
   await ensureOffscreen();
-  const a = await chrome.runtime.sendMessage({ target: "offscreen", type: "start", sessionId: id });
+  const a = await chrome.runtime.sendMessage({ target: "offscreen", type: "start", sessionId: id, t0 });
   if (a?.error) {
     r.audioError = a.error;
     // Offscreen pages can't show the mic prompt; a normal tab can, once per install.
@@ -112,7 +112,10 @@ async function start(title, { skipMicCheck = false } = {}) {
   return r;
 }
 
-async function stop() {
+// Stop can come from the button, the shortcut and "I'm done" at the same moment: they all share one stop.
+let stopping = null;
+function stop(opts) { return (stopping ??= finish(opts).finally(() => { stopping = null; })); }
+async function finish({ byVoice = false } = {}) {
   const r = await current();
   if (!r) throw new Error("not recording");
   await save(null);
@@ -128,14 +131,14 @@ async function stop() {
   let finishError = null;
   const done = await api(`/sessions/${r.id}/finish`, "POST", { endedAt: Date.now(), audioOffsetMs: r.audioOffsetMs }).catch((e) => { finishError = e.message; return null; });
   // Nothing was done in the recording: the Agent dropped it rather than keep an empty task.
-  const result = { id: r.id, learning: !finishError && !done?.discarded, discarded: !!done?.discarded, error: finishError ?? r.audioError ?? null };
+  const result = { id: r.id, learning: !finishError && !done?.discarded, discarded: !!done?.discarded, error: finishError ?? r.audioError ?? null, byVoice, at: Date.now() };
   await chrome.storage.local.set({ last: result });
   return result;
 }
 
 async function status() {
   const r = await current();
-  return { recording: !!r, rec: r, last: (await chrome.storage.local.get("last")).last ?? null };
+  return { recording: !!r, rec: r, hearing: !!r && hearing, last: (await chrome.storage.local.get("last")).last ?? null };
 }
 
 // ---- Connected sites: the Agent works with your logins for these, and only these. ----
@@ -201,8 +204,17 @@ chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => 
 // Exposed for tests and the DevTools console.
 globalThis.showrun = { start, stop, status, connect, disconnect };
 
+// Whether you are talking right now (the offscreen recorder hears it first), for the sidebar to show.
+let hearing = false;
+
 chrome.runtime.onMessage.addListener((msg, sender, reply) => {
   if (msg.type === "event") { onEvent(msg.ev, sender).catch((e) => console.warn("event dropped:", e.message)); return; }
+  if (msg.type === "hearing") { hearing = !!msg.on; return; }
+  // You said you're done. Only for the recording that is still running: a late one (Stop was pressed) is ignored.
+  if (msg.type === "saidDone") {
+    current().then((r) => { if (r?.id === msg.sessionId) return stop({ byVoice: true }); }).catch((e) => console.warn("couldn't stop:", e.message));
+    return;
+  }
   if (msg.type === "micGranted") {
     // Back to the page the person was on, then start the recording they asked for.
     (async () => {

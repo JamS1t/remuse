@@ -178,26 +178,6 @@ export async function understand(s: Session, dir: string, folders: FolderHint[] 
   return normalize(spec, s);
 }
 
-/** What Remuse has understood so far, shown live in the sidebar while the person is still recording. */
-export type Draft = { goal: string; steps: string[]; rules: { said: string; then: string }[]; question: string | null };
-
-/** A quick read of the recording so far (actions and voice, no screenshots, so it's fast). Muse Spark
- *  says what it thinks the task is, and asks one question if something important is unclear; the person
- *  answers out loud and the next draft takes it in. */
-export async function draft(s: Session, asked: string | null): Promise<Draft> {
-  const tabs = new Map<unknown, string>();
-  for (const e of s.events) if (e.tab != null && e.kind !== "page" && !tabs.has(e.tab)) tabs.set(e.tab, `T${tabs.size + 1}`);
-  const lines = [
-    ...s.events.filter((e) => e.kind !== "tools" && (e.kind !== "page" || tabs.has(e.tab))).map((e, i) => ({ t: e.t, line: eventLine({ ...e, target: e.target && { ...e.target, selector: undefined } }, i, tabs) })),
-    ...s.turns.map((v) => ({ t: v.startMs, line: `[voice ${(v.startMs / 1000).toFixed(1)}s] "${v.text}"` })),
-  ].sort((a, b) => a.t - b.t).map((x) => x.line).slice(-120);
-  const r = await askJson<Draft>([text(`You are Remuse. A person is recording a browser task right now, explaining it out loud as they go, so you can repeat it later on new items. Below is what they've done and said so far. Tell them, briefly and in plain words, what you understand so far, so they can correct you while they're still recording.
-
-Reply with ONLY JSON: {"goal": "<one sentence>", "steps": ["<short plain step, e.g. 'Open each post in team-search'>", ...at most 8], "rules": [{"said": "<their words>", "then": "<what you'll do>"}], "question": "<one short question if something important is unclear (which items, how often, what to do when...), or null>"}
-Don't ask what they already said. ${asked ? `You last asked: "${asked}". If the voice after that answers it, use the answer and don't ask again.` : ""}`), text(lines.join("\n") || "(nothing yet)")], "draft");
-  return { goal: String(r?.goal ?? ""), steps: (r?.steps ?? []).map(String).slice(0, 8), rules: (r?.rules ?? []).slice(0, 5), question: r?.question ? String(r.question) : null };
-}
-
 /** Something the person said out loud while looking at a learned task, sorted by what they meant. */
 export async function sortSaid(spec: Spec, said: string): Promise<{ intent: "change" | "approve" | "schedule" | "run" | "teach" | "none"; schedule?: { everyMinutes?: number; time?: string; days?: string } }> {
   const r = await askJson<any>([text(`You are Remuse. You just learned a browser task from a person's demo and they're looking at your summary of it in a sidebar. The microphone is open, so what they say may be meant for you or for someone else in the room. They said: "${said}"
