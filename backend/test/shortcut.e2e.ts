@@ -25,7 +25,7 @@ const agent = spawn(process.execPath, ["--env-file-if-exists=../.env", "src/serv
   cwd: resolve(import.meta.dirname, ".."), env: { ...process.env, DATA_DIR: join(tmp, "data"), HEADLESS: "1", SHOWRUN_NO_NOTIFY: "1", OPEN_MODEL_KEY: "", BASETEN_API_KEY: "" }, stdio: process.env.SHOW_AGENT ? "inherit" : "ignore",
 });
 const ctx = await chromium.launchPersistentContext(join(tmp, "profile"), {
-  channel: "chromium", headless: true, viewport: { width: 1280, height: 800 },
+  channel: "chromium", headless: !process.env.HEADED, viewport: { width: 1280, height: 800 },
   args: [`--disable-extensions-except=${ext}`, `--load-extension=${ext}`, "--use-fake-ui-for-media-stream", "--use-fake-device-for-media-stream", `--use-file-for-fake-audio-capture=${quiet}`],
 });
 try {
@@ -46,6 +46,34 @@ try {
   await call("command", "teach"); await sleep(1500);
   check("during a review it never starts a new recording", !(await recording()));
   await call("setMode", "idle");
+
+  // Remuse speaks (the review reads its plan aloud): it shows while it talks, hush ends it, and the teach shortcut
+  // while it talks only silences it.
+  // Test Chromium has no voices (James's Chrome does): a stand-in engine that "says" each line in 1.5 s, so the
+  // speaking, hush and shortcut logic still runs. Real voices are checked live.
+  const voices = await sw.evaluate(() => chrome.tts.getVoices().then((v) => v.length));
+  if (!voices) await sw.evaluate(() => {
+    const q: { o: any; timer?: ReturnType<typeof setTimeout> }[] = [];
+    const play = () => { const u = q[0]; if (!u) return; u.o.onEvent?.({ type: "start" }); u.timer = setTimeout(() => { q.shift(); u.o.onEvent?.({ type: "end" }); play(); }, 1500); };
+    const tts = chrome.tts as any;
+    tts.getVoices = async () => [{ voiceName: "Google US English", lang: "en-US" }];
+    tts.speak = (_text: string, o: any) => { q.push({ o }); if (q.length === 1) play(); };
+    tts.stop = () => { for (const u of q.splice(0)) { clearTimeout(u.timer); u.o.onEvent?.({ type: "interrupted" }); } };
+  });
+  const sp = call("speak", ["One.", "Two."]);
+  await sleep(300);
+  check("speaking shows in status, line by line", (await call("status")).speaking?.total === 2 && (await call("status")).speaking?.line === 0, JSON.stringify((await call("status")).speaking));
+  await sleep(1600);
+  check("and moves to the next line", (await call("status")).speaking?.line === 1, JSON.stringify((await call("status")).speaking));
+  await call("hush");
+  check("hush ends it", (await call("status")).speaking === null && (await sp).spoken === 1, JSON.stringify(await sp));
+  const whole = await call("speak", ["Short."]);
+  check("a plan read to the end says how many lines it spoke", whole.spoken === 1, JSON.stringify(whole));
+  call("speak", ["A long line to be cut off by the shortcut."]);
+  await sleep(300);
+  await call("command", "teach"); await sleep(500);
+  const after = await call("status");
+  check("the teach shortcut while speaking only silences it", !after.recording && after.speaking === null, JSON.stringify({ recording: after.recording, speaking: after.speaking }));
 
   const panel = await ctx.newPage();
   await panel.goto(`chrome-extension://${extId}/sidepanel.html`);

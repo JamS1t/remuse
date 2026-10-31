@@ -81,6 +81,7 @@ chrome.tabs.onRemoved.addListener(async (tabId) => {
 
 async function start(title, { skipMicCheck = false } = {}) {
   if (await current()) throw new Error("already recording");
+  hush(); // "let me show you again" while Remuse is still talking
   if (!skipMicCheck && !(await micAllowed())) {
     const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
     const mic = await chrome.tabs.create({ url: "mic.html" });
@@ -140,12 +141,50 @@ async function finish({ byVoice = false } = {}) {
 
 async function status() {
   const r = await current();
-  return { recording: !!r, rec: r, hearing: !!r && hearing, mode, last: (await chrome.storage.local.get("last")).last ?? null };
+  return { recording: !!r, rec: r, hearing, speaking: talk ? { line: talk.line, total: talk.total } : null, mode, last: (await chrome.storage.local.get("last")).last ?? null };
 }
 
 // Every page knows whether you're teaching (drawing on the page only works then).
 async function broadcast(on) {
   for (const t of await chrome.tabs.query({}).catch(() => [])) chrome.tabs.sendMessage(t.id, { type: "recording", on }).catch(() => {});
+}
+
+// ---- Remuse speaks: the review reads its plan aloud. Chrome's own voices, no click needed in the page. ----
+// While it talks the microphone holds off, so Remuse never hears itself as you.
+let talk = null; // { line, total, end } while speaking
+let voice = null; // Google US English if there is one, else the first English voice; asked again until found
+async function pickVoice() {
+  if (voice) return voice; // Chrome can list its voices late, right after it starts: an empty list isn't kept
+  const all = await chrome.tts.getVoices();
+  voice = all.find((v) => v.voiceName === "Google US English") ?? all.find((v) => (v.lang ?? "").startsWith("en")) ?? null;
+  return voice;
+}
+const hold = (on) => chrome.runtime.sendMessage({ target: "offscreen", type: "hold", on }).catch(() => {});
+async function speak(lines) {
+  hush();
+  const list = (lines ?? []).map(String).filter((l) => l.trim());
+  const v = await pickVoice();
+  if (!list.length || !v) return { spoken: 0 };
+  return new Promise((resolve) => {
+    let spoken = 0;
+    const me = { line: 0, total: list.length, end: () => { if (talk !== me) return; talk = null; hold(false); resolve({ spoken }); } };
+    talk = me;
+    hold(true);
+    list.forEach((text, i) => chrome.tts.speak(text, {
+      voiceName: v.voiceName, enqueue: true,
+      onEvent: (e) => {
+        if (talk !== me) return;
+        if (e.type === "start") me.line = i;
+        else if (e.type === "end") { spoken = i + 1; if (i === list.length - 1) me.end(); }
+        else if (e.type === "interrupted" || e.type === "cancelled" || e.type === "error") me.end();
+      },
+    }));
+  });
+}
+function hush() {
+  const t = talk;
+  if (t) { chrome.tts.stop(); t.end(); }
+  return { ok: true };
 }
 
 // What the sidebar is showing, which it says itself: "idle", "learning", "review" or "practice".
@@ -162,6 +201,7 @@ async function command(name) {
     return { did: "pen" };
   }
   if (name !== "teach") return { did: "nothing" };
+  if (talk) { hush(); return { did: "hush" }; } // Remuse is talking: the key cuts it off, and you talk
   if (await current()) { await stop(); return { did: "stop" }; }
   if (mode === "idle") { await start(""); return { did: "start" }; }
   return { did: "nothing" };
@@ -233,7 +273,7 @@ async function currentTab() {
 chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {});
 
 // Exposed for tests and the DevTools console.
-globalThis.showrun = { start, stop, status, connect, disconnect, command, setMode };
+globalThis.showrun = { start, stop, status, connect, disconnect, command, setMode, speak, hush };
 
 // Whether you are talking right now (the offscreen recorder hears it first), for the sidebar to show.
 let hearing = false;
@@ -267,6 +307,8 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
     disconnect: () => disconnect(msg.site),
     currentTab,
     mode: async () => setMode(msg.mode),
+    speak: () => speak(msg.lines),
+    hush: async () => hush(),
     keys: async () => Object.fromEntries((await chrome.commands.getAll()).map((c) => [c.name, c.shortcut || ""])),
     // Hands-free conversation about a learned task: listen until told to stop (see offscreen.js).
     listen: async () => {
