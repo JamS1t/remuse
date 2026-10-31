@@ -93,6 +93,7 @@ async function start(title, { skipMicCheck = false } = {}) {
   const { id } = await api("/sessions", "POST", { title, startedAt: t0 });
   const r = { id, t0, audioOffsetMs: null, audioError: null };
   await save(r);
+  broadcast(true);
 
   await ensureOffscreen();
   const a = await chrome.runtime.sendMessage({ target: "offscreen", type: "start", sessionId: id, t0 });
@@ -119,6 +120,7 @@ async function finish({ byVoice = false } = {}) {
   const r = await current();
   if (!r) throw new Error("not recording");
   await save(null);
+  broadcast(false);
   await queue; // let pending screenshots land
   if (await chrome.offscreen.hasDocument()) {
     const a = await chrome.runtime.sendMessage({ target: "offscreen", type: "stop" });
@@ -138,8 +140,37 @@ async function finish({ byVoice = false } = {}) {
 
 async function status() {
   const r = await current();
-  return { recording: !!r, rec: r, hearing: !!r && hearing, last: (await chrome.storage.local.get("last")).last ?? null };
+  return { recording: !!r, rec: r, hearing: !!r && hearing, mode, last: (await chrome.storage.local.get("last")).last ?? null };
 }
+
+// Every page knows whether you're teaching (drawing on the page only works then).
+async function broadcast(on) {
+  for (const t of await chrome.tabs.query({}).catch(() => [])) chrome.tabs.sendMessage(t.id, { type: "recording", on }).catch(() => {});
+}
+
+// What the sidebar is showing, which it says itself: "idle", "learning", "review" or "practice".
+let mode = "idle";
+function setMode(m) { mode = ["idle", "learning", "review", "practice"].includes(m) ? m : "idle"; return { mode }; }
+
+// Shortcuts. Teach (Alt+Shift+R) does the obvious thing: start teaching, or stop. While Remuse is learning, reviewing
+// or practicing it only opens the sidebar: a new recording would throw away the review. Pen (Alt+Shift+D): draw.
+async function command(name) {
+  if (name === "pen") {
+    if (!(await current())) return { did: "nothing" };
+    const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+    if (tab?.id != null) await chrome.tabs.sendMessage(tab.id, { type: "pen" }).catch(() => {});
+    return { did: "pen" };
+  }
+  if (name !== "teach") return { did: "nothing" };
+  if (await current()) { await stop(); return { did: "stop" }; }
+  if (mode === "idle") { await start(""); return { did: "start" }; }
+  return { did: "nothing" };
+}
+chrome.commands.onCommand.addListener((name, tab) => {
+  // The side panel opens only in answer to the key press itself, so before anything is awaited.
+  if (tab?.windowId != null) chrome.sidePanel.open({ windowId: tab.windowId }).catch(() => {});
+  command(name).catch((e) => console.warn(`${name}:`, e.message));
+});
 
 // ---- Connected sites: the Agent works with your logins for these, and only these. ----
 
@@ -202,7 +233,7 @@ async function currentTab() {
 chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {});
 
 // Exposed for tests and the DevTools console.
-globalThis.showrun = { start, stop, status, connect, disconnect };
+globalThis.showrun = { start, stop, status, connect, disconnect, command, setMode };
 
 // Whether you are talking right now (the offscreen recorder hears it first), for the sidebar to show.
 let hearing = false;
@@ -235,6 +266,8 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
     connect: async () => connect(msg.site ?? (await currentTab()).site),
     disconnect: () => disconnect(msg.site),
     currentTab,
+    mode: async () => setMode(msg.mode),
+    keys: async () => Object.fromEntries((await chrome.commands.getAll()).map((c) => [c.name, c.shortcut || ""])),
     // Hands-free conversation about a learned task: listen until told to stop (see offscreen.js).
     listen: async () => {
       if (await current()) return { ok: false };

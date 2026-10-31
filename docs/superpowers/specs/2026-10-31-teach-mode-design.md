@@ -169,7 +169,7 @@ When learning finishes, the sidebar stays in teaching mode and switches to **Rev
 
 ### 7.9 Shortcuts (`chrome.commands`)
 
-- `teach`, **Alt+Shift+R**, one key that does the obvious thing in each state:
+- `teach`, **Alt+Shift+S**, one key that does the obvious thing in each state:
   - Nothing going on: open the side panel and start teaching.
   - Recording: stop ("I'm done").
   - Remuse speaking: stop talking and listen.
@@ -201,7 +201,7 @@ When a recording starts, or a learning or review for it is in progress, `Remote`
 │                              │
 │ ┌──────────────────────────┐ │
 │ │ ■ Stop   or say "I'm done"│ │  fixed bottom bar
-│ │ Alt+Shift+R · Alt+Shift+D │ │  real bound keys
+│ │ Alt+Shift+S · Alt+Shift+D │ │  real bound keys
 │ └──────────────────────────┘ │
 └──────────────────────────────┘
 ```
@@ -246,21 +246,21 @@ Live (James's acceptance, the same YouTube Studio task that failed):
 - Every step in review shows where it came from.
 - "Okay, that's it" ends it. "I'm done with this tab" doesn't.
 - Remuse reads the plan aloud. "No, step 2, use the Reach tab" changes step 2, and it says so.
-- Alt+Shift+R starts teaching from any tab.
+- Alt+Shift+S starts teaching from any tab.
 - Circling the views number makes a "You marked" card.
 
 ## 11. Calls I made (James can overrule any)
 
 - `chrome.tts` in the extension instead of the page's speech API (works from the shortcut, no click needed). Default voice "Google US English".
 - Hover pointing removed entirely, not just filtered.
-- Right-drag to draw, Alt+Shift+D pen, Alt+Shift+R teach.
+- Right-drag to draw, Alt+Shift+D pen, Alt+Shift+S teach.
 - The end-phrase list in 7.5.
 - Whole-recording transcription kept for the final learning; live utterances for cards and the end phrase.
 - Questions are shown silently during recording and spoken only in review, so Remuse never interrupts a demo.
 - Half-duplex turn-taking.
 - Practice waits for "looks good" or "try it" instead of starting by itself, and Remuse says how it went, then keeps listening.
 - Questions are asked one at a time after the plan, each waiting for its answer.
-- Alt+Shift+R does the obvious thing in each state and never throws away a review.
+- Alt+Shift+S does the obvious thing in each state and never throws away a review.
 
 ## 12. Left to the builder
 

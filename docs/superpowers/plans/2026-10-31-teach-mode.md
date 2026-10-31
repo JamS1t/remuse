@@ -17,7 +17,7 @@
 - Never read or print `.env`. Never copy Google cookies or the Remuse browser profile.
 - Never touch the approval gate before pay, send, refund or submit, or the runner's step checks.
 - Teaching-mode text is never under 13 px.
-- Shortcuts: `teach` = **Alt+Shift+R**, `pen` = **Alt+Shift+D**.
+- Shortcuts: `teach` = **Alt+Shift+S**, `pen` = **Alt+Shift+D**.
 - Voice: "Google US English" if present, else the first voice whose `lang` starts with `en`.
 - End phrases, verbatim: "I'm done", "that's it", "that's all", "proceed", "go ahead", "you can start", "tapos na", "ayan na", "sige na", "done showing", "okay Remuse".
 - Tests without port 3200 (`*.check.ts`, and e2e tests with `PORT=3299`) can run any time. Extension e2e tests need port 3200: stop James's Agent (background task) only when no `chrome.exe` uses `backend\data\browser` and nothing is recording or learning, then restart it with `npm start` in `backend/`.
@@ -281,7 +281,7 @@ check("undemonstrated outcome steps are left alone", six.outcomes.refund.steps.l
 ```js
 let mode = "idle"; // "idle" | "learning" | "review" | "practice", set by the sidebar: ext("mode", { mode })
 async function command(name) // "teach" | "pen"; exposed as showrun.command
-// keys: ext("keys") -> { teach: "Alt+Shift+R", pen: "Alt+Shift+D" } from chrome.commands.getAll()
+// keys: ext("keys") -> { teach: "Alt+Shift+S", pen: "Alt+Shift+D" } from chrome.commands.getAll()
 // to tabs: { type: "recording", on: boolean } on start/stop; { type: "pen" } on the pen command
 ```
 - `teach` command, by state:
@@ -301,7 +301,7 @@ check("during a review it never starts a new recording", !(await call("status"))
 - [ ] **Step 2: Run.** Expected: FAIL.
 - [ ] **Step 3: Implement.** Expose `command` and `setMode(m)` (the same setter the `mode` message uses) on `globalThis.showrun`.
 - [ ] **Step 4: Run.** Expected: PASS.
-- [ ] **Step 5: Commit** "Alt+Shift+R starts and stops teaching".
+- [ ] **Step 5: Commit** "Alt+Shift+S starts and stops teaching".
 
 ### Task 7: The teaching screen
 
