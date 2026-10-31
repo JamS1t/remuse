@@ -31,6 +31,7 @@ const clean = (s: string) => s.replace(/^[\u2713\u2714]\s*/, "");
 export function RunPage({ id }: { id: string }) {
   const { data: r, error, reload } = useApi<Run>(`/runs/${id}`, 1000, (d) => isLive(d.status));
   const [sel, setSel] = useState<number | null>(null);
+  const [sure, setSure] = useState(false); // "Do them again" asks once before redoing the whole list
   const { busy, run } = useAction();
   const { data: spec } = useApi<SpecRow>(r ? `/specs/${r.specId}` : null);
   if (error) return <Content><ErrorNote>{error}</ErrorNote></Content>;
@@ -64,6 +65,7 @@ export function RunPage({ id }: { id: string }) {
             {!single ? <><span>·</span><span>{done} of {r.items.length} done</span></> : null}
             {r.browser ? <><span>·</span><span>{r.browser === "chrome" ? "In your Chrome" : "In Remuse's browser"}</span></> : null}
             {r.autoApprove ? <><span>·</span><span className="text-warn">without asking you</span></> : null}
+            {r.alreadyDone ? <><span>·</span><span>{r.alreadyDone} done before, left alone</span></> : null}
             {live && r.phase === "plan" && !r.pending ? <><span>·</span><span className="shimmer">Looking at every item first</span></> : null}
           </span>
         }
@@ -71,6 +73,9 @@ export function RunPage({ id }: { id: string }) {
           <>
             {r.score ? <span className="mr-2 font-mono text-[15px]">{r.score.matched}<span className="text-muted-foreground"> / {r.score.total} right</span></span> : null}
             {live ? <Button variant="outline" className="rounded-full" onClick={stop} disabled={!!busy}><Square className="fill-current" />Stop</Button> : null}
+            {!live && !r.items.length && r.alreadyDone ? <Button variant="outline" className="rounded-full" disabled={!!busy}
+              onClick={() => (sure ? run("redo", async () => { const n = await api<{ id: string }>(`/specs/${r.specId}/runs`, "POST", { redo: true, plan: true }); location.hash = `#/run/${n.id}`; }) : setSure(true))}>
+              {sure ? `Yes, all ${r.alreadyDone} again (I'll show the plan first)` : "Do them again"}</Button> : null}
           </>
         }
       />
@@ -92,8 +97,9 @@ export function RunPage({ id }: { id: string }) {
         </section>
       ) : null}
 
+      {!r.items.length && r.alreadyDone && !live ? <p className="glass rounded-2xl px-5 py-4 text-muted-foreground">Nothing new since last time. The {r.alreadyDone} already there were done before, so I left them alone.</p> : null}
       {single ? (
-        it ? <ItemDetail it={it} file={file} choices={choices} live={live && !settled(it)} latest={r.shot} /> : <p className="text-muted-foreground">Starting…</p>
+        it ? <ItemDetail it={it} file={file} choices={choices} live={live && !settled(it)} latest={r.shot} /> : live ? <p className="text-muted-foreground">Starting…</p> : null
       ) : (
         <div className="grid items-start gap-6 min-[900px]:grid-cols-[minmax(320px,400px)_minmax(0,1fr)]">
           {/* Every item in order, each with its time drawn to one shared scale. */}

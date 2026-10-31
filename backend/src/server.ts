@@ -2,7 +2,7 @@
 // Run: npm start   (port 3200, reads MODEL_API_KEY from ../.env)
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { DatabaseSync } from "node:sqlite";
-import { mkdirSync, readFileSync, writeFileSync, existsSync, rmSync, statSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync, existsSync, rmSync, statSync, realpathSync, watch, type FSWatcher } from "node:fs";
 import { join, dirname, extname } from "node:path";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
@@ -10,7 +10,7 @@ import { transcribe, calls } from "./meta.ts";
 import { revise, sortSaid, understand, type Spec } from "./understand.ts";
 import { endLive, hear, liveState } from "./live.ts";
 import { build } from "./build.ts";
-import { Runner, openBrowser, openPlainChrome, plainChromeOpen, type Run } from "./runner.ts";
+import { Runner, itemKey, openBrowser, openPlainChrome, plainChromeOpen, type Run } from "./runner.ts";
 import type { BrowserContext } from "playwright";
 import { GOOGLE, SITE, listLogins, removeLogin, saveLogin } from "./logins.ts";
 import { notify } from "./notify.ts";
@@ -236,6 +236,14 @@ async function hearSaid(sessionId: string, wav: Uint8Array) {
   } catch (e) { heard.set(sessionId, { n, at: Date.now(), text, intent: "none", error: (e as Error).message }); }
 }
 
+// What a list task has already handled, kept between runs: an hourly inbox task does each email once. Saved as
+// each item finishes (not at the end), so a crash halfway can't make the next run do the same items again.
+db.exec(`CREATE TABLE IF NOT EXISTS handled (
+  session_id TEXT NOT NULL, item_key TEXT NOT NULL, outcome TEXT, run_id TEXT, at INTEGER NOT NULL, PRIMARY KEY (session_id, item_key)
+)`);
+const handledKeys = (sessionId: string) => new Set((db.prepare("SELECT item_key FROM handled WHERE session_id = ?").all(sessionId) as any[]).map((r) => r.item_key as string));
+const handledCount = (sessionId: string) => (db.prepare("SELECT COUNT(*) AS n FROM handled WHERE session_id = ?").get(sessionId) as any).n as number;
+
 // One run at a time: it drives one visible browser.
 let active: Runner | null = null;
 let activeDone: Promise<unknown> = Promise.resolve(); // settles when the active run has closed its browser
@@ -305,12 +313,13 @@ db.exec(`CREATE TABLE IF NOT EXISTS schedules (
   rows TEXT, run_limit INTEGER, enabled INTEGER NOT NULL DEFAULT 1, last_run TEXT
 )`);
 // Two kinds: every N minutes ("every hour"), or on chosen days at a time ("weekdays at 9:00").
-for (const col of ["every_minutes INTEGER", "last_at INTEGER"]) { try { db.exec(`ALTER TABLE schedules ADD COLUMN ${col}`); } catch { /* already there */ } }
-type Schedule = { id: number; specId: number; sessionId: string; time: string; days: string; everyMinutes: number | null; rows: Record<string, string>[] | null; limit: number | null; enabled: boolean; lastRun: string | null; lastAt: number | null };
+// A third kind: whenever a new file lands in an allowed folder (watch_folder, for tasks that upload from it).
+for (const col of ["every_minutes INTEGER", "last_at INTEGER", "watch_folder TEXT", "since INTEGER"]) { try { db.exec(`ALTER TABLE schedules ADD COLUMN ${col}`); } catch { /* already there */ } }
+type Schedule = { id: number; specId: number; sessionId: string; time: string; days: string; everyMinutes: number | null; rows: Record<string, string>[] | null; limit: number | null; enabled: boolean; lastRun: string | null; lastAt: number | null; watchFolder: string | null; since: number | null };
 // sessionId names the task, so a schedule stays attached to it across new spec versions.
 const schedules = (): Schedule[] => (db.prepare("SELECT s.*, x.session_id FROM schedules s JOIN specs x ON x.id = s.spec_id ORDER BY s.id").all() as any[]).map((s) => ({
   id: s.id, specId: s.spec_id, sessionId: s.session_id, time: s.time, days: s.days, everyMinutes: s.every_minutes, rows: s.rows ? JSON.parse(s.rows) : null,
-  limit: s.run_limit, enabled: !!s.enabled, lastRun: s.last_run, lastAt: s.last_at,
+  limit: s.run_limit, enabled: !!s.enabled, lastRun: s.last_run, lastAt: s.last_at, watchFolder: s.watch_folder ?? null, since: s.since ?? null,
 }));
 // A schedule follows its task: it always runs the task's newest Task Spec, including versions learned since.
 // Only built versions can run: an edited-but-not-rebuilt version must not silence the schedule.
@@ -321,9 +330,12 @@ function manilaNow() {
   return { time: `${parts.hour}:${parts.minute}`, day: String(["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].indexOf(parts.weekday) + 1), date: today() };
 }
 setInterval(async () => {
+  watchFolders(); folderTick();
   const now = manilaNow();
   for (const s of schedules()) {
     if (!s.enabled) continue;
+    // Folder schedules run when a file lands (see watchFolders); here only one that had to wait for a busy run.
+    if (s.watchFolder) continue; // see folderTick
     const due = s.everyMinutes ? Date.now() - (s.lastAt ?? 0) >= s.everyMinutes * 60_000
       : s.lastRun !== now.date && s.days.includes(now.day) && s.time <= now.time;
     if (!due) continue;
@@ -334,7 +346,7 @@ setInterval(async () => {
   }
 }, 30_000).unref();
 
-async function startRun(specId: number, opts: { limit?: number; autoApprove?: boolean; rows?: Record<string, string>[]; scheduled?: boolean; watch?: boolean; practice?: boolean; plan?: boolean; example?: { url?: string; label?: string } }) {
+async function startRun(specId: number, opts: { limit?: number; autoApprove?: boolean; rows?: Record<string, string>[]; scheduled?: boolean; watch?: boolean; practice?: boolean; plan?: boolean; redo?: boolean; fromFolder?: number; file?: { folder: string; name: string }; example?: { url?: string; label?: string } }) {
   const row = specRow(specId);
   if (!row.code) throw new HttpError(400, "build the rules first");
   // A practice gives way to real work, and to a newer practice: it stops, and the new run starts once the old
@@ -355,7 +367,14 @@ async function startRun(specId: number, opts: { limit?: number; autoApprove?: bo
   let last = 0;
   let asked = "";
   const link = `http://127.0.0.1:${PORT}/#/run/${run.id}`;
+  const remembered = new Set<number>();
   const runner = new Runner(run, row.spec, row.code, runDir(run.id), (r) => {
+    // Each list item done (or settled by you) is remembered right away. Not by a practice, which only looks.
+    if (row.spec.inputs.source === "list" && r.mode !== "practice") r.items.forEach((it, n) => {
+      if (remembered.has(n) || !(it.status === "done" || (it.status === "skipped" && it.byYou))) return;
+      remembered.add(n);
+      db.prepare("INSERT OR REPLACE INTO handled (session_id, item_key, outcome, run_id, at) VALUES (?, ?, ?, ?, ?)").run(row.sessionId, it.key ?? itemKey(it), it.status === "done" ? it.outcome ?? null : "skipped", r.id, Date.now());
+    });
     if (Date.now() - last > 300 || ["done", "failed", "stopped"].includes(r.status)) { last = Date.now(); saveRun(r); }
     // Anything waiting on the person becomes a Windows notification, once.
     const p = r.pending;
@@ -372,11 +391,18 @@ async function startRun(specId: number, opts: { limit?: number; autoApprove?: bo
   runner.prev = lastValues(row.sessionId);
   runner.taskKey = row.sessionId;
   runner.example = opts.example;
+  runner.file = opts.file;
+  // List tasks leave alone what earlier runs handled, unless you asked to do them again.
+  if (row.spec.inputs.source === "list" && !opts.practice && !opts.redo) runner.handled = handledKeys(row.sessionId);
   active = runner;
   saveRun(run);
   activeDone = runner.start(opts.limit).then(() => {
     saveRun(run);
-    if (opts.scheduled) notify(`Remuse finished: ${row.spec.goal}`.slice(0, 120), `${run.items.filter((i) => i.status === "done").length} of ${run.items.length} done${run.error ? `. Problem: ${run.error}` : ""}`, link);
+    // Nothing new since last time (no new items, or no new file to post): a scheduled run stays quiet.
+    const nothingNew = !run.error && ((run.items.length === 0 && (run.alreadyDone ?? 0) > 0) || (run.items.length > 0 && run.items.every((i) => i.status === "skipped" && /^Nothing new to upload/.test(i.log.at(-1)?.msg ?? ""))));
+    // A folder run that posted something checks for the next file right away (a batch drops in at once).
+    if (opts.fromFolder !== undefined && run.status === "done" && !nothingNew && run.items.every((i) => i.status === "done")) setTimeout(() => folderTick(), 1000);
+    if (opts.scheduled && !nothingNew) notify(`Remuse finished: ${row.spec.goal}`.slice(0, 120), `${run.items.filter((i) => i.status === "done").length} of ${run.items.length} done${run.error ? `. Problem: ${run.error}` : ""}`, link);
     if (run.mode === "practice") {
       // A practice that went wrong is worth a word; one that matched shows in the sidebar.
       // ponytail: a practice's heals aren't saved as a new version; the first real run re-finds them
@@ -474,20 +500,28 @@ async function route(req: IncomingMessage, res: ServerResponse) {
     const b = await json(req);
     const specId = Number(b.specId);
     specRow(specId); // 404 if it doesn't exist
-    const every = b.everyMinutes ? Math.round(Number(b.everyMinutes)) : null;
+    // "Whenever a new file lands in <folder>": only for a task that uploads from that folder.
+    const watchFolder = b.watchFolder ? findFolder(String(b.watchFolder)) : null;
+    if (b.watchFolder && !watchFolder) throw new HttpError(400, "that folder isn't allowed; add it on the Folders page");
+    if (watchFolder && !uploadsFrom(specRow(specId).spec, watchFolder.name)) throw new HttpError(400, `this task doesn't post files from ${watchFolder.name}`);
+    const every = watchFolder ? null : b.everyMinutes ? Math.round(Number(b.everyMinutes)) : null;
     if (every !== null && !(every >= 15 && every <= 1440)) throw new HttpError(400, "repeat between every 15 minutes and once a day");
-    if (!every && !/^([01]\d|2[0-3]):[0-5]\d$/.test(b.time ?? "")) throw new HttpError(400, "time must be HH:MM");
+    if (!every && !watchFolder && !/^([01]\d|2[0-3]):[0-5]\d$/.test(b.time ?? "")) throw new HttpError(400, "time must be HH:MM");
     const days = String(b.days ?? "1234567").replace(/[^1-7]/g, "");
     if (!days) throw new HttpError(400, "pick at least one day");
     const rows = Array.isArray(b.rows) ? JSON.stringify(b.rows) : null;
-    // One schedule per task: saving again replaces it.
+    // One schedule per task: saving again replaces it. Re-saving a folder schedule for the same folder keeps when it
+    // started watching, so files that arrived since then still count as new.
+    const before = schedules().find((x) => x.sessionId === specRow(specId).sessionId);
+    const since = watchFolder && before?.watchFolder === watchFolder.name && before.since ? before.since : Date.now();
     db.prepare("DELETE FROM schedules WHERE spec_id IN (SELECT id FROM specs WHERE session_id = (SELECT session_id FROM specs WHERE id = ?))").run(specId);
     // An interval schedule starts counting now; the first run is one interval away.
-    db.prepare("INSERT INTO schedules (spec_id, time, days, rows, run_limit, enabled, every_minutes, last_at) VALUES (?, ?, ?, ?, ?, 1, ?, ?)")
-      .run(specId, b.time ?? "00:00", days, rows, b.limit ? Number(b.limit) : null, every, every ? Date.now() : null);
+    db.prepare("INSERT INTO schedules (spec_id, time, days, rows, run_limit, enabled, every_minutes, last_at, watch_folder, since) VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?)")
+      .run(specId, watchFolder ? "00:00" : b.time ?? "00:00", days, rows, b.limit ? Number(b.limit) : null, every, every ? Date.now() : null, watchFolder?.name ?? null, since);
+    watchFolders();
     return send(res, 200, schedules());
   }
-  if (p[1] === "schedules" && p[2] && m === "DELETE") { db.prepare("DELETE FROM schedules WHERE id = ?").run(Number(p[2])); return send(res, 200, schedules()); }
+  if (p[1] === "schedules" && p[2] && m === "DELETE") { db.prepare("DELETE FROM schedules WHERE id = ?").run(Number(p[2])); watchFolders(); return send(res, 200, schedules()); }
   // Saved tasks for the sidebar: every recording with its latest Task Spec.
   if (url.pathname === "/api/tasks" && m === "GET")
     return send(res, 200, (db.prepare(`SELECT s.id AS sessionId, s.title, s.started_at AS startedAt, s.ended_at AS endedAt, s.learn_stage AS learnStage, s.learn_error AS learnError,
@@ -505,7 +539,7 @@ async function route(req: IncomingMessage, res: ServerResponse) {
           checks: { passed: tests.filter((x) => x.ok).length, total: tests.length },
           askedSchedule: spec?.schedule ?? null, lastReport: lastReport(t.sessionId),
           uploads: spec ? [...spec.steps, ...Object.values(spec.outcomes).flatMap((o) => o.steps)].filter((x) => x.do === "upload").map((x) => ({ folder: x.file?.folder ?? null, pick: x.file?.pick ?? "next" })) : [],
-          saveDownloads: spec?.saveDownloads ?? null, practice: latestPractice(t.sessionId, t.specId) };
+          saveDownloads: spec?.saveDownloads ?? null, practice: latestPractice(t.sessionId, t.specId), handled: handledCount(t.sessionId) };
       }));
   if (url.pathname === "/api/logins" && m === "POST") {
     const b = await json(req);
@@ -553,6 +587,8 @@ async function route(req: IncomingMessage, res: ServerResponse) {
     const id = p[2];
     session(id);
     if (m === "GET" && p.length === 3) return send(res, 200, full(id));
+    // Start fresh: forget which items this task already handled (the next run does the whole list again).
+    if (m === "POST" && p[3] === "forget") { db.prepare("DELETE FROM handled WHERE session_id = ?").run(id); return send(res, 200, { forgotten: true }); }
     // Delete a task: its recording, every spec version, runs and schedule. The UI asks first.
     if (m === "DELETE" && p.length === 3) {
       session(id);
@@ -674,7 +710,7 @@ async function route(req: IncomingMessage, res: ServerResponse) {
     if (m === "POST" && p[3] === "runs") {
       const opts = await json(req);
       const rows = Array.isArray(opts.rows) ? opts.rows.filter((r: unknown) => r && typeof r === "object").map((r: Record<string, unknown>) => Object.fromEntries(Object.entries(r).map(([k, v]) => [String(k), String(v ?? "")]))) : undefined;
-      return send(res, 201, await startRun(sid, { limit: opts.limit ? Number(opts.limit) : undefined, autoApprove: !!opts.autoApprove, rows, watch: !!opts.watch, plan: !!opts.plan }));
+      return send(res, 201, await startRun(sid, { limit: opts.limit ? Number(opts.limit) : undefined, autoApprove: !!opts.autoApprove, rows, watch: !!opts.watch, plan: !!opts.plan, redo: !!opts.redo }));
     }
   }
 
@@ -691,7 +727,7 @@ async function route(req: IncomingMessage, res: ServerResponse) {
         const done = run.items.filter((i) => i.status === "done").length;
         return { id: run.id, specId: run.specId, sessionId: r.session_id, task: titles.get(r.session_id) ?? null, status: run.status, mode: run.mode ?? null, practiceOk: run.practice?.ok ?? null,
           startedAt: run.startedAt, endedAt: run.endedAt ?? null, items: run.items.length, done, error: run.error ?? null,
-          waiting: !!run.pending, report: run.items.find((i) => i.report)?.report ?? null, score: run.score };
+          waiting: !!run.pending, report: run.items.find((i) => i.report)?.report ?? null, score: run.score, alreadyDone: run.alreadyDone ?? 0 };
       }));
     }
     const id = p[2];
@@ -706,6 +742,78 @@ async function route(req: IncomingMessage, res: ServerResponse) {
 
   throw new HttpError(404, "not found");
 }
+
+// ---- Folder schedules: a task that posts files runs when a new one lands in its folder. ----
+// What an upload may pick: not a caption, and of the kinds the task asked for, if any.
+const isPostable = (name: string, ext?: string[]) => extname(name).toLowerCase() !== ".txt" && (!ext?.length || ext.map((e) => e.replace(/^\./, "").toLowerCase()).includes(extname(name).slice(1).toLowerCase()));
+const uploadsFrom = (spec: Spec, folder: string) => [...spec.steps, ...Object.values(spec.outcomes).flatMap((o) => o.steps)]
+  .some((s) => s.do === "upload" && findFolder(s.file?.folder)?.name === folder);
+// One watcher per folder schedule, keyed by schedule and folder (an id can be reused after a schedule is replaced).
+const watchers = new Map<string, { w: FSWatcher; timer?: ReturnType<typeof setTimeout> }>();
+const warned = new Set<string>();
+const watchKey = (s: Schedule) => `${s.id}:${findFolder(s.watchFolder)?.path ?? ""}`;
+// Files a folder run was started for (schedule:file:modified time). Each is tried once; a failed or refused post
+// isn't retried until the file changes or the Agent restarts, so a broken page can't start runs over and over.
+const tried = new Set<string>();
+/** The file a folder schedule would post next: arrived after the schedule was set up (files already there aren't
+ *  "new"), finished arriving (untouched for 10 s), never posted, and not already tried as it is now. */
+function nextFile(s: Schedule): { name: string; key: string } | null {
+  const folder = findFolder(s.watchFolder);
+  if (!folder) return null;
+  const row = specRow(latestSpec(s.specId));
+  const step = [...row.spec.steps, ...Object.values(row.spec.outcomes).flatMap((o) => o.steps)].find((x) => x.do === "upload" && findFolder(x.file?.folder)?.name === folder.name);
+  if (!step?.file) return null;
+  try {
+    const used = usedFor(row.sessionId);
+    // Only files that arrived after the schedule are candidates. Arrival is the latest of: modified (new file),
+    // created (a copy keeps its old modified time), changed (a move keeps both, but NTFS updates the change time).
+    const arrived = new Map<string, number>();
+    for (const f of filesIn(folder)) {
+      const st = statSync(join(folder.path, f.name));
+      const at = Math.max(st.mtimeMs, st.birthtimeMs, st.ctimeMs);
+      if (at > (s.since ?? 0) && Date.now() - st.mtimeMs > 10_000 && !used.has(f.name) && !tried.has(`${s.id}:${f.name}:${st.mtimeMs}`)) arrived.set(f.name, at);
+    }
+    // In the task's own order: "newest" is the last to arrive among them; "next" and "dated" follow chooseFile.
+    const skip = new Set(filesIn(folder).map((f) => f.name).filter((n) => !arrived.has(n)));
+    const name = step.file.pick === "newest"
+      ? [...arrived].filter(([n]) => isPostable(n, step.file!.ext)).sort((x, y) => y[1] - x[1])[0]?.[0] ?? null
+      : chooseFile(folder, step.file, skip);
+    return name && arrived.has(name) ? { name, key: `${s.id}:${name}:${statSync(join(folder.path, name)).mtimeMs}` } : null;
+  } catch { return null; }
+}
+/** Run each folder schedule that has a new file waiting, one at a time; the rest go on the next tick. A caption,
+ *  a deleted or hidden file never starts a run, since there's nothing to post. */
+function folderTick() {
+  for (const s of schedules()) {
+    if (!s.enabled || !s.watchFolder || busyRun()) continue;
+    let file: ReturnType<typeof nextFile> = null;
+    try { file = nextFile(s); } catch { continue; } // e.g. its task was deleted
+    if (!file) continue;
+    tried.add(file.key);
+    db.prepare("UPDATE schedules SET last_at = ? WHERE id = ?").run(Date.now(), s.id);
+    startRun(latestSpec(s.specId), { scheduled: true, rows: s.rows ?? undefined, limit: s.limit ?? undefined, fromFolder: s.id, file: { folder: s.watchFolder, name: file.name } })
+      .catch((e) => { tried.delete(file!.key); notify("Remuse couldn't start a task", (e as Error).message, `http://127.0.0.1:${PORT}/#/spec/${s.specId}`); });
+    return;
+  }
+}
+function watchFolders() {
+  const want = new Map(schedules().filter((s) => s.enabled && s.watchFolder && findFolder(s.watchFolder)).map((s) => [watchKey(s), s]));
+  for (const [k, x] of watchers) if (!want.has(k)) { clearTimeout(x.timer); x.w.close(); watchers.delete(k); }
+  for (const [k, s] of want) {
+    if (watchers.has(k)) continue;
+    try {
+      // A change starts the check 11 s later (a file must sit still 10 s, so one that is still copying waits).
+      // The full long path: Windows' file watcher aborts the whole process on a short (8.3, "JAMESC~1") one.
+      const x: { w: FSWatcher; timer?: ReturnType<typeof setTimeout> } = { w: watch(realpathSync.native(findFolder(s.watchFolder)!.path), () => {
+        clearTimeout(x.timer); x.timer = setTimeout(folderTick, 11_000);
+      }) };
+      x.w.on("error", () => { clearTimeout(x.timer); x.w.close(); watchers.delete(k); }); // re-attached on the next tick
+      watchers.set(k, x);
+    } catch (e) { if (!warned.has(k)) { warned.add(k); console.warn(`can't watch ${s.watchFolder}:`, (e as Error).message); } }
+  }
+}
+watchFolders();
+folderTick(); // files that arrived while the Agent was off
 
 // One broken page or browser link must not take the whole Agent (and every schedule) down with it.
 process.on("uncaughtException", (e) => console.error("uncaught:", e));

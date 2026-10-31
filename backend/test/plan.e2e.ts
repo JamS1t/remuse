@@ -128,7 +128,7 @@ try {
   check("acting didn't read or judge anything again", judged === 3, `${judged} judge calls`);
 
   // 4. Cancel at the plan: nothing happens.
-  const c = await post(`/specs/${specId}/runs`, { plan: true });
+  const c = await post(`/specs/${specId}/runs`, { plan: true, redo: true });
   let cr = await until(c.id, (x) => !!x.pending);
   if (cr.pending?.kind === "ask") { await post(`/runs/${c.id}/answer`, { outcome: "decline", learn: false }); cr = await until(c.id, (x) => x.pending?.kind === "plan"); }
   await post(`/runs/${c.id}/answer`, { decision: "reject" });
@@ -136,21 +136,21 @@ try {
   check("Cancel at the plan does nothing, and says so on each", cr.status === "stopped" && sent() === 2 && cr.items.every((i: any) => i.status === "skipped" && /cancelled at the plan/.test(i.log.at(-1)?.msg)), `${cr.status}, ${sent()} sent; ${cr.items.map((i: any) => `${i.status}: ${i.log.at(-1)?.msg}`).join(" | ")}`);
 
   // 5. "Approve all" at the plan: no more stops.
-  const g = await post(`/specs/${specId}/runs`, { plan: true, limit: 2 });
+  const g = await post(`/specs/${specId}/runs`, { plan: true, limit: 2, redo: true });
   let gr = await until(g.id, (x) => x.pending?.kind === "plan");
   await post(`/runs/${g.id}/answer`, { decision: "approve_all" });
   gr = await until(g.id, (x) => !!x.pending, 120);
   check("approving all at the plan runs through with no more stops", gr.status === "done" && !gr.pending && sent() === 4, `${gr.status}, ${sent()} sent, pending ${gr.pending?.kind ?? "none"}`);
 
   // 6. No plan: a single item; a run you chose to do without asking; a run started without asking for a plan.
-  const one = await post(`/specs/${specId}/runs`, { plan: true, limit: 1 });
+  const one = await post(`/specs/${specId}/runs`, { plan: true, limit: 1, redo: true });
   const oneRun = await until(one.id, (x) => !!x.pending);
   check("one item needs no plan (it asks before sending, as always)", oneRun.pending?.kind === "approval", oneRun.pending?.kind ?? oneRun.status);
   await post(`/runs/${one.id}/stop`); await until(one.id, () => false);
-  const auto = await post(`/specs/${specId}/runs`, { plan: true, limit: 2, autoApprove: true });
+  const auto = await post(`/specs/${specId}/runs`, { plan: true, limit: 2, autoApprove: true, redo: true });
   const autoRun = await until(auto.id, (x) => !!x.pending, 120);
   check("a run you chose to do without asking doesn't stop at a plan", autoRun.status === "done" && sent() === 6, `${autoRun.status}, pending ${autoRun.pending?.kind ?? "none"}, ${sent()} sent`);
-  const plain = await post(`/specs/${specId}/runs`, { limit: 2 });
+  const plain = await post(`/specs/${specId}/runs`, { limit: 2, redo: true });
   const plainRun = await until(plain.id, (x) => !!x.pending);
   check("without a plan, it goes item by item as before", plainRun.pending?.kind === "approval" && plainRun.items[0].status === "approval", plainRun.pending?.kind);
   await post(`/runs/${plain.id}/stop`); await until(plain.id, () => false);

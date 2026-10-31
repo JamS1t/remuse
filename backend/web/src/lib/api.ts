@@ -37,6 +37,7 @@ export type Run = {
   score?: { matched: number; total: number };
   mode?: "practice"; practice?: Practice;
   plan?: boolean; phase?: "plan" | "act";
+  alreadyDone?: number; // list items handled in earlier runs, left alone this time
 };
 /** A practice: the task tried once on the demo item, stopping before anything irreversible, compared with the demo. */
 export type Practice = {
@@ -104,13 +105,14 @@ export type Task = {
   lastReport: { text: string; at: number; runId: string } | null;
   uploads: { folder: string | null; pick: "next" | "newest" | "dated" }[]; saveDownloads: string | null;
   practice: PracticeState | null;
+  handled: number; // list items earlier runs already handled (left alone next time)
 };
 export type FolderRow = { id: string; name: string; path: string; count: number; latest: { name: string; modified: number } | null; ok: boolean };
-export type ScheduleRow = { id: number; specId: number; sessionId: string; time: string; days: string; everyMinutes: number | null };
+export type ScheduleRow = { id: number; specId: number; sessionId: string; time: string; days: string; everyMinutes: number | null; watchFolder?: string | null };
 /** A run as Activity lists it. */
 export type ActivityRun = {
   id: string; specId: number; sessionId: string; task: string | null; status: Run["status"]; startedAt: number; endedAt: number | null;
-  items: number; done: number; error: string | null; waiting: boolean; report: string | null; score?: Run["score"]; mode?: "practice" | null; practiceOk?: boolean | null;
+  items: number; done: number; error: string | null; waiting: boolean; report: string | null; score?: Run["score"]; mode?: "practice" | null; practiceOk?: boolean | null; alreadyDone?: number;
 };
 
 export const ago = (ms: number) => {

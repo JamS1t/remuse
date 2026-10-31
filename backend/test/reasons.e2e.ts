@@ -103,7 +103,7 @@ try {
   const pressed2 = line(second, /^✓ Press Refund/);
   check("…and still shows its reason", pressed2?.how === "screen" && !!pressed2.why, JSON.stringify(pressed2));
   // Saying no to a step on one order: the next order's steps carry their own pictures, never the last one's.
-  const r2 = await post(`/specs/${specId}/runs`, {});
+  const r2 = await post(`/specs/${specId}/runs`, { redo: true });
   let w: any;
   for (let i = 0; i < 60; i++) { w = await get(`/runs/${r2.id}`); if (w.pending || ["done", "failed", "stopped"].includes(w.status)) break; await sleep(500); }
   await post(`/runs/${r2.id}/answer`, { decision: "reject" });

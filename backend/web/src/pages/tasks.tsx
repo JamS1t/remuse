@@ -83,6 +83,7 @@ export function TaskPage({ id, tab = "overview" }: { id: string; tab?: string })
   const { data: spec } = useApi<SpecRow>(t?.specId ? `/specs/${t.specId}` : null);
   const [editing, setEditing] = useState<null | "schedule" | "delete">(null);
   const [cur, setCur] = useState(tab);
+  const [forgetting, setForgetting] = useState(false); // "Start fresh" asks once
   const { busy, run } = useAction();
   const { data: runs, reload: reloadRuns } = useApi<ActivityRun[]>(`/runs?task=${id}`, 2000, () => true);
   const liveRun = runs?.find((r) => isLive(r.status));
@@ -158,6 +159,13 @@ export function TaskPage({ id, tab = "overview" }: { id: string; tab?: string })
               <p className="text-[13px] font-medium">When it runs</p>
               <p className="mt-1 text-muted-foreground">{schedule ? `By itself, ${describeSchedule(schedule)}. Chrome can be closed.` : "Only when you press Run now."}</p>
               {t.askedSchedule && !schedule ? <p className="mt-1 text-[12.5px] text-muted-foreground">You said “{t.askedSchedule.said ?? describeSchedule(t.askedSchedule)}”.</p> : null}
+              {t.handled ? (
+                <p className="mt-2 text-[12.5px] text-muted-foreground">It remembers the {t.handled} it already did and only does new ones.{" "}
+                  <button type="button" className="underline-offset-2 hover:text-foreground hover:underline" disabled={!!busy}
+                    onClick={() => (forgetting ? run("forget", async () => { await api(`/sessions/${id}/forget`, "POST"); setForgetting(false); toast("Starting fresh: the next run does the whole list."); reload(); }) : setForgetting(true))}>
+                    {forgetting ? `Yes, forget all ${t.handled}` : "Start fresh"}</button>
+                </p>
+              ) : null}
               <Button size="sm" variant="outline" className="mt-3 rounded-full" onClick={() => setEditing("schedule")}><CalendarClock />{schedule ? "Change" : t.askedSchedule ? `Repeat ${describeSchedule(t.askedSchedule)}` : "Repeat by itself"}</Button>
             </section>
             <Safety spec={spec} />

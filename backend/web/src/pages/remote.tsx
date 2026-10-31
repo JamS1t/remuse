@@ -21,7 +21,7 @@ type Task = {
   practice: PracticeState | null;
 };
 type Rec = { recording: boolean; rec?: { id?: string; audioError?: string }; waitingForMic?: boolean };
-type Schedule = { id: number; specId: number; sessionId: string; time: string; days: string; everyMinutes: number | null };
+type Schedule = { id: number; specId: number; sessionId: string; time: string; days: string; everyMinutes: number | null; watchFolder?: string | null };
 
 const AGENT = location.origin;
 const open = (hash: string) => (inPanel ? ext("openTab", { url: `${AGENT}/${hash}` }) : window.open(`/${hash}`, "_blank"));
@@ -38,7 +38,7 @@ const markSeen = (id: string) => { try { localStorage.setItem(seenKey(id), "1");
 const DAYS = ["M", "T", "W", "T", "F", "S", "S"];
 const NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 const every = (m: number) => (m % 60 === 0 ? (m === 60 ? "every hour" : `every ${m / 60} hours`) : `every ${m} minutes`);
-const describeSchedule = (s: { everyMinutes?: number | null; days?: string; time?: string }) => (s.everyMinutes ? every(s.everyMinutes) : when(s.days ?? "1234567", s.time ?? "09:00"));
+const describeSchedule = (s: { everyMinutes?: number | null; days?: string; time?: string; watchFolder?: string | null }) => (s.watchFolder ? `whenever a new file lands in ${s.watchFolder}` : s.everyMinutes ? every(s.everyMinutes) : when(s.days ?? "1234567", s.time ?? "09:00"));
 function when(days: string, time: string) {
   const at = new Date(`2000-01-01T${time}`).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
   const d = days === "1234567" ? "every day" : days === "12345" ? "every weekday" : days === "67" ? "every weekend" : `every ${[...days].map((x) => NAMES[Number(x) - 1]).join(", ")}`;
@@ -394,6 +394,12 @@ function TaskRow({ t, schedule, onSchedule }: { t: Task; schedule: Schedule | nu
           <Button className="w-full rounded-full" onClick={go} disabled={!!busy}>{busy === "run" ? <LoaderCircle className="animate-spin" /> : <Play className="fill-current" />}Do it now</Button>
           <div className="rounded-xl border border-dashed px-3 py-2.5">
             <p className="text-[12.5px] text-muted-foreground">Or on its own, even with Chrome closed</p>
+            {schedule?.watchFolder ? (
+              <div className="mt-2 flex items-center gap-2 text-[13px]">
+                <span className="min-w-0 flex-1">Runs whenever a new file lands in <span className="font-medium">{schedule.watchFolder}</span>. Change it in Full view.</span>
+                <Button size="sm" variant="ghost" className="rounded-full" onClick={unschedule} disabled={!!busy}>Stop</Button>
+              </div>
+            ) : <>
             <div className="mt-2 flex gap-1 text-[12px]">
               {[["Every few hours", 60], ["On days", null]].map(([label, v]) => (
                 <button key={String(label)} type="button" aria-pressed={hourly === null ? v === null : v !== null} onClick={() => setHourly(v as number | null)}
@@ -419,6 +425,7 @@ function TaskRow({ t, schedule, onSchedule }: { t: Task; schedule: Schedule | nu
               <Button size="sm" variant="outline" className="flex-1 rounded-full" onClick={repeat} disabled={!!busy || !days}><CalendarClock />{schedule ? "Update" : "Repeat it"}</Button>
               {schedule ? <Button size="sm" variant="ghost" className="rounded-full" onClick={unschedule} disabled={!!busy}>Stop repeating</Button> : null}
             </div>
+            </>}
           </div>
         </div>
       ) : null}
