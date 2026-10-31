@@ -294,8 +294,9 @@ async function openSignIn(url: string) {
 async function openGoogleSignIn(site: string, email = "") {
   if (active && !["done", "failed", "stopped"].includes(active.run.status)) throw new HttpError(409, "wait for the run to finish first");
   if (signIn) { await signIn.close().catch(() => {}); signIn = null; }
-  // login_hint fills in the account, so Google goes straight to a passkey or "tap Yes on your phone".
-  const url = `https://accounts.google.com/ServiceLogin?continue=${encodeURIComponent(`https://www.${site}/`)}${email ? `&login_hint=${encodeURIComponent(email)}` : ""}`;
+  // login_hint fills in the account, so Google goes straight to a passkey or "tap Yes on your phone". Once an account
+  // is signed in, AddSession adds another instead of going straight back to the first.
+  const url = `https://accounts.google.com/${google.signedIn ? "AddSession" : "ServiceLogin"}?continue=${encodeURIComponent(`https://www.${site}/`)}${email ? `&login_hint=${encodeURIComponent(email)}` : ""}`;
   googleOpenedAt = Date.now(); // the next status check looks again, once that window is closed
   if (!openPlainChrome(url)) return openSignIn(url); // ponytail: no installed Chrome, fall back to the driven window
 }

@@ -1076,7 +1076,7 @@ export class Runner {
       await p.goto(u.href);
       await p.waitForLoadState("domcontentloaded").catch(() => {});
       const after = await shown(8000);
-      if (after !== want) throw new Error(after ? `this page is signed in as ${after}, not ${want} as in your demo. Sign in ${want} in Remuse's browser (Connected sites), then try again` : `I couldn't tell which account this page uses after switching to ${want}, so I stopped`);
+      if (after !== want) throw new Error(after ? `this page is signed in as ${after}, not ${want} as in your demo. Add ${want} under Connected sites › Google › Add another account, then try again` : `I couldn't tell which account this page uses after switching to ${want}, so I stopped`);
       this.log(`Now using ${want}.`, "ok", undefined, { why: "the account button shows it", how: "page" });
       return;
     }
@@ -1094,7 +1094,7 @@ export class Runner {
       const loggedIn = await p.evaluate(() => (window as any).ytcfg?.get?.("LOGGED_IN")).catch(() => undefined);
       if (!got || loggedIn === false) break; // past the last signed-in account
     }
-    throw new Error("the YouTube channel from your demo isn't signed in to Remuse's browser. Sign in the Google account that owns it (Connected sites), then try again");
+    throw new Error("the YouTube channel from your demo isn't signed in to Remuse's browser. Add the Google account that owns it under Connected sites › Google › Add another account, then try again");
   }
 
   /** Acting after a plan: before doing anything, make sure this is still the item that was planned (lists move;

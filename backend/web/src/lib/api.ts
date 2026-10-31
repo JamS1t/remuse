@@ -82,6 +82,18 @@ export function useApi<T>(path: string | null, everyMs = 0, keepPolling: (d: T) 
   return { data, error, reload };
 }
 
+export type GoogleStatus = { signedIn: boolean | null; accounts?: string[]; at: number };
+/** The Google accounts signed in to Remuse's own browser. add() opens Google's sign-in (to add another account once one
+ *  is in) and watch() keeps asking until the new account shows up, which is after you close that window. */
+export function useGoogle(enabled = true) {
+  const [from, setFrom] = useState<number | null>(null); // how many accounts there were when the window opened
+  const more = (d: GoogleStatus) => !!d.signedIn && (!d.accounts || d.accounts.length > (from ?? 0));
+  const q = useApi<GoogleStatus>(enabled ? "/logins/google" : null, from !== null ? 4000 : 0, (d) => from !== null && !more(d));
+  const watch = () => setFrom(q.data?.signedIn ? q.data.accounts?.length ?? 0 : 0);
+  const add = async () => { await api("/browser/google?site=google.com", "POST"); watch(); };
+  return { ...q, add, watch, waiting: from !== null && !(q.data && more(q.data)) };
+}
+
 export function useHash() {
   const [hash, setHash] = useState(location.hash);
   useEffect(() => {

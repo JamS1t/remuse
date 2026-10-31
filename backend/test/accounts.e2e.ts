@@ -98,7 +98,7 @@ try {
   // 3. It can't switch (that account isn't signed in here): it stops, and nothing is saved.
   r = await run(await add("/locked/sheet"));
   check("if it can't switch, it stops instead of acting as someone else", r.items[0].status === "failed" && saved.length === 1, `${r.items[0].status}, ${saved.length} saved`);
-  check("…and says which account to sign in", /signed in as ana@example\.com, not ben@example\.com.*Sign in ben@example\.com/.test(r.items[0].log.map((l: any) => l.msg).join(" ")), r.items[0].log.at(-1)?.msg);
+  check("…and says which account to sign in", /signed in as ana@example\.com, not ben@example\.com.*Add ben@example\.com under Connected sites/.test(r.items[0].log.map((l: any) => l.msg).join(" ")), r.items[0].log.at(-1)?.msg);
 
   // 4. A page that shows no account (not a Google page) isn't held up.
   r = await run(await add("/plain/sheet"));
