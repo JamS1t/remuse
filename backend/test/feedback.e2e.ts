@@ -58,6 +58,26 @@ try {
   // Then it tries the changed task once by itself, and finishes without waiting on anyone.
   for (let i = 0; i < 60; i++) { t = (await get("/tasks")).find((x: any) => x.sessionId === s.id); if (t?.practice && !["starting", "running"].includes(t.practice.status)) break; await sleep(2000); }
   check("a practice of the changed task follows by itself and finishes", !!t?.practice?.result && t.practice.status !== "running", JSON.stringify(t?.practice)?.slice(0, 220));
+
+  // In the review: Remuse reads the plan and asks its questions one at a time. An answer (typed here) changes the
+  // task, closes that question, keeps the others, and starts no practice (that waits for "looks right").
+  const s2 = await post("/sessions", { title: "Video stats 2", startedAt: Date.now() });
+  const asked = { ...spec, questions: [{ id: "q-cover-1", text: "Should I do this for every video, or only the newest one?", quote: "my videos" }, { id: "q-cover-2", text: "What time should I tell you?" }] };
+  const db2 = new DatabaseSync(join(data, "showrun.db"));
+  const v1 = Number(db2.prepare("INSERT INTO specs (session_id, version, note, json, code, tests, created_at) VALUES (?, 1, 'test', ?, '', '[]', ?)").run(s2.id, JSON.stringify(asked), Date.now()).lastInsertRowid);
+  db2.close();
+  const rb = await get(`/specs/${v1}/readback`);
+  check("the readback is the plan, then the questions", rb.plan?.[0]?.text === "Here's my plan." && rb.questions?.length === 2 && rb.questions[0].question === "q-cover-1", JSON.stringify(rb).slice(0, 200));
+  const ans = await post(`/specs/${v1}/feedback`, { text: "Only the newest video.", practice: false, answered: "q-cover-1" });
+  if (!ans.specId) console.log("   feedback answer:", JSON.stringify(ans));
+  const after = (await get(`/specs/${ans.specId}`)).spec ?? {};
+  check("an answer closes its question and keeps the rest", JSON.stringify((after.questions ?? []).map((q: any) => q.id)) === '["q-cover-2"]', JSON.stringify(after.questions));
+  check("the answer is in the new version's note", /Q: Should I do this for every video/.test((await get(`/specs/${ans.specId}`)).note ?? ""));
+  let t2: any;
+  for (let i = 0; i < 60; i++) { t2 = (await get("/tasks")).find((x: any) => x.sessionId === s2.id); if (t2?.learnStage === "ready" || t2?.learnStage === "failed") break; await sleep(2000); }
+  await sleep(3000);
+  t2 = (await get("/tasks")).find((x: any) => x.sessionId === s2.id);
+  check("in the review, a change starts no practice by itself", t2?.learnStage === "ready" && !t2?.practice, JSON.stringify({ stage: t2?.learnStage, practice: t2?.practice }));
 } finally {
   agent.kill();
   const failed = results.filter(([, ok]) => !ok);

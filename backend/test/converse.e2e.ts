@@ -38,6 +38,15 @@ for (const [said, want] of process.env.SKIP_SORT ? [] : [["looks good, that's ex
   const r = await sortSaid(spec as any, said);
   check(`"${said}" is taken as ${want}`, r.intent === want, r.intent + (r.schedule ? ` ${JSON.stringify(r.schedule)}` : ""));
 }
+// With a question open (the review asks one at a time), an answer is an answer, and "looks good" is still approval.
+if (!process.env.SKIP_SORT) {
+  const q = "Should I do this for every video, or only the newest one?";
+  const a = await sortSaid(spec as any, "yes, every video", q);
+  check(`with a question open, "yes, every video" is an answer`, a.intent === "answer", a.intent);
+  const b = await sortSaid(spec as any, "looks good, that's it", q);
+  check(`with a question open, "looks good" is still approve`, b.intent === "approve", b.intent);
+}
+if (process.env.SORT_ONLY) { const failed = results.filter(([, ok]) => !ok); console.log(`\n${results.length - failed.length}/${results.length} passed`); process.exit(failed.length ? 1 : 0); }
 
 const data = mkdtempSync(join(tmpdir(), "remuse-converse-"));
 const agent = spawn(process.execPath, ["--env-file-if-exists=../.env", "src/server.ts"], {

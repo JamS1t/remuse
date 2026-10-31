@@ -8,6 +8,7 @@ import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { transcribe, calls, type Turn } from "./meta.ts";
 import { coverage } from "./evidence.ts";
+import { readback } from "./readback.ts";
 import { revise, sortSaid, understand, type Spec } from "./understand.ts";
 import { endLive, heard as hearLive, liveCards, liveState } from "./live.ts";
 import { build } from "./build.ts";
@@ -206,17 +207,21 @@ async function learn(id: string, offsetMs: number) {
 
 /** Feedback in plain words (typed or said): Muse Spark updates the task as a new version and says what it
  *  changed; the rules are rebuilt and checked in the background ("thinking", like after a recording). */
-async function applyFeedback(row: ReturnType<typeof specRow>, said: string) {
+// practice: false in the review, where practice waits until you say it's right. answered: the question this was an
+// answer to; the new version keeps only the questions still open.
+async function applyFeedback(row: ReturnType<typeof specRow>, said: string, opts: { practice?: boolean; answered?: string } = {}) {
   // The last real run is what the person is talking about; a practice only if there was no real run yet.
   const last = db.prepare("SELECT json FROM runs WHERE spec_id IN (SELECT id FROM specs WHERE session_id = ?) ORDER BY json_extract(json, '$.mode') IS NULL DESC, updated_at DESC LIMIT 1").get(row.sessionId) as any;
   const lastRun = last ? (JSON.parse(last.json) as Run).items.slice(0, 3).map((it) => `${it.label}: ${it.log.map((l) => (l.why ? `${l.msg} (${l.why})` : l.msg)).join(" / ")}`).join("\n").slice(0, 4000) : "";
   const { spec, changes } = await revise(full(row.sessionId), row.spec, said, lastRun);
+  const open = (row.spec.questions ?? []).filter((q) => q.id !== opts.answered);
+  if (open.length) spec.questions = open; else delete spec.questions;
   const specId = saveSpec(row.sessionId, spec, `You said: "${said.slice(0, 140)}"`);
   stage(row.sessionId, "building");
   build(spec, pagesOf(row.sessionId), new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Manila" }))
     .then((b) => {
       db.prepare("UPDATE specs SET code = ?, tests = ? WHERE id = ?").run(b.code, JSON.stringify(b.tests), specId); stage(row.sessionId, "ready");
-      autoPractice(specId); // try the changed task once
+      if (opts.practice !== false) autoPractice(specId); // try the changed task once
     })
     .catch((e) => stage(row.sessionId, "failed", (e as Error).message));
   // Schedules follow the task to its new version.
@@ -227,8 +232,11 @@ async function applyFeedback(row: ReturnType<typeof specRow>, said: string) {
 // Hands-free conversation about a learned task (the sidebar keeps listening after it's learned). Each thing
 // the person says is heard, sorted (a change, "looks right", a schedule, "do it now", "let me show you
 // again", or not meant for Remuse) and acted on; the sidebar shows the latest and does the rest.
-type Heard = { n: number; at: number; text: string; intent: string; changes?: string[]; schedule?: { everyMinutes?: number; time?: string; days?: string }; error?: string };
+// In the review, the first open question is the one Remuse is waiting on; "speak" is what it says back.
+type Heard = { n: number; at: number; text: string; intent: string; changes?: string[]; schedule?: { everyMinutes?: number; time?: string; days?: string }; error?: string; speak?: string[]; answered?: string };
 const heard = new Map<string, Heard>();
+// An answer goes to Muse Spark as the question and the answer, with the step it took out when that's what it asked.
+const asAnswer = (q: { text: string; step?: unknown }, said: string) => `Q: ${q.text}${q.step ? ` (the step I took out: ${JSON.stringify(q.step)})` : ""}\nA: ${said}`;
 async function hearSaid(sessionId: string, wav: Uint8Array) {
   const text = (await transcribe(wav)).transcript.trim();
   if (!text) return;
@@ -237,11 +245,20 @@ async function hearSaid(sessionId: string, wav: Uint8Array) {
   const latest = (db.prepare("SELECT id FROM specs WHERE session_id = ? ORDER BY version DESC LIMIT 1").get(sessionId) as any)?.id;
   if (!latest) return heard.set(sessionId, { n, at: Date.now(), text, intent: "none" });
   const row = specRow(latest);
+  const set = (h: Omit<Heard, "n" | "at" | "text">) => heard.set(sessionId, { n, at: Date.now(), text, ...h });
   try {
-    const r = await sortSaid(row.spec, text);
-    if (r.intent === "change") heard.set(sessionId, { n, at: Date.now(), text, intent: "change", changes: (await applyFeedback(row, text)).changes });
-    else heard.set(sessionId, { n, at: Date.now(), text, intent: r.intent, schedule: r.schedule });
-  } catch (e) { heard.set(sessionId, { n, at: Date.now(), text, intent: "none", error: (e as Error).message }); }
+    const open = row.spec.questions?.[0];
+    const r = await sortSaid(row.spec, text, open?.text);
+    if (r.intent === "answer" && open) {
+      const { changes } = await applyFeedback(row, asAnswer(open, text), { practice: false, answered: open.id });
+      set({ intent: "answer", changes, answered: open.id, speak: changes.length ? changes : ["Got it."] });
+    } else if (r.intent === "change" || r.intent === "answer") {
+      const { changes } = await applyFeedback(row, text, { practice: false });
+      set({ intent: "change", changes, speak: changes.length ? changes : ["I changed it."] });
+    } else if (r.intent === "approve" || r.intent === "run") set({ intent: r.intent, speak: ["Okay, I'll try it once on your example."] });
+    else if (r.intent === "schedule") set({ intent: r.intent, schedule: r.schedule, speak: ["Okay, it'll repeat on that schedule."] });
+    else set({ intent: r.intent });
+  } catch (e) { set({ intent: "none", error: (e as Error).message }); }
 }
 
 // What a list task has already handled, kept between runs: an hourly inbox task does each email once. Saved as
@@ -785,10 +802,15 @@ async function route(req: IncomingMessage, res: ServerResponse) {
     // Feedback in plain words: Muse Spark updates the task (a new version) and says what it changed; the
     // rules are then rebuilt and checked in the background, shown as "thinking" like after a recording.
     if (m === "POST" && p[3] === "feedback") {
-      const said = String((await json(req)).text ?? "").trim().slice(0, 2000);
+      const b = await json(req);
+      const said = String(b.text ?? "").trim().slice(0, 2000);
       if (!said) throw new HttpError(400, "say what should change");
-      return send(res, 201, await applyFeedback(row, said));
+      // Typed in the review: no practice until it's right, and an answer to the question it asked.
+      const q = b.answered ? row.spec.questions?.find((x) => x.id === b.answered) : undefined;
+      return send(res, 201, await applyFeedback(row, q ? asAnswer(q, said) : said, { practice: b.practice !== false, answered: q?.id }));
     }
+    // What Remuse says when it reads this task back: the plan, then its questions (asked one at a time).
+    if (m === "GET" && p[3] === "readback") return send(res, 200, readback(row.spec));
     // The task's file settings (which folder and rule each upload uses; where downloads go). Saved as a new
     // version that keeps the built code, since the rules didn't change.
     if (m === "POST" && p[3] === "files") {

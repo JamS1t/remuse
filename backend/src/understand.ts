@@ -193,10 +193,11 @@ export async function understand(s: Session, dir: string, folders: FolderHint[] 
 }
 
 /** Something the person said out loud while looking at a learned task, sorted by what they meant. */
-export async function sortSaid(spec: Spec, said: string): Promise<{ intent: "change" | "approve" | "schedule" | "run" | "teach" | "none"; schedule?: { everyMinutes?: number; time?: string; days?: string } }> {
+/** `question`: what Remuse just asked out loud, when it's waiting for the answer. */
+export async function sortSaid(spec: Spec, said: string, question?: string): Promise<{ intent: "change" | "approve" | "schedule" | "run" | "teach" | "answer" | "none"; schedule?: { everyMinutes?: number; time?: string; days?: string } }> {
   const r = await askJson<any>([text(`You are Remuse. You just learned a browser task from a person's demo and they're looking at your summary of it in a sidebar. The microphone is open, so what they say may be meant for you or for someone else in the room. They said: "${said}"
 
-What do they mean? Pick one:
+What do they mean? Pick one:${question ? `\n- "answer": you just asked them "${question}", and this answers it (yes, no, a choice, a value, a short reply). Prefer this over "change" and "approve" for anything that answers your question; "approve" is only for the whole task being right ("looks good", "that's it").` : ""}
 - "change": they want something about the task different, added, removed or fixed ("no, take the views from the Reach tab", "also send me the subscribers", "skip the ones that are already done").
 - "approve": it's right ("looks good", "yes that's it", "perfect", "okay").
 - "schedule": they want it to repeat ("do this every hour", "every weekday at 9"). Give everyMinutes (15 to 1440) or time "HH:MM" (24h) and days ("1234567" = every day, "12345" = weekdays).
@@ -206,7 +207,7 @@ What do they mean? Pick one:
 
 The task: ${spec.goal}. Steps: ${[...spec.steps, ...Object.values(spec.outcomes).flatMap((o) => o.steps)].map((s) => s.describe).join("; ")}.
 Reply with ONLY JSON: {"intent": "...", "schedule": {"everyMinutes": n} or {"time": "HH:MM", "days": "..."} or null}`)], "sort-said");
-  const intent = ["change", "approve", "schedule", "run", "teach", "none"].includes(r?.intent) ? r.intent : "none";
+  const intent = ["change", "approve", "schedule", "run", "teach", ...(question ? ["answer"] : []), "none"].includes(r?.intent) ? r.intent : "none";
   return { intent, schedule: intent === "schedule" && r?.schedule ? r.schedule : undefined };
 }
 
