@@ -22,7 +22,9 @@ const dur = (i: Item, now: number) => {
   const k = i.log.findIndex((l) => l.msg.startsWith("Doing it now"));
   return k > 0 ? i.log[k - 1].at - i.log[0].at + (end - i.log[k].at) : end - i.log[0].at;
 };
-const matches = (i: Item) => (i.expected === "ask" ? i.decidedBy !== "rules" : i.outcome === i.expected);
+// Test sites only: an outcome by what it means, whatever the model named it (same as meaning() in runner.ts).
+const meaning = (o?: string) => (!o ? o : /lost/i.test(o) ? "lost_refund" : /declin/i.test(o) ? "decline" : /replac/i.test(o) ? "replace" : /refund/i.test(o) ? "refund" : o);
+const matches = (i: Item) => (i.expected === "ask" ? i.decidedBy !== "rules" : meaning(i.outcome) === i.expected);
 const words = (s?: string) => s?.replaceAll("_", " ");
 // "avg_view_duration" -> "Avg view duration", with short forms in capitals ("ctr" -> "CTR").
 const nice = (name: string) => name.split("_").map((w, i) => (/^(ctr|avd|url|id|sku|rpm|cpm)$/i.test(w) ? w.toUpperCase() : i ? w : w[0].toUpperCase() + w.slice(1))).join(" ");

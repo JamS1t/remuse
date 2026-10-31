@@ -1,0 +1,357 @@
+{
+  "at": "2026-10-30T17:10:38.042Z",
+  "results": [
+    {
+      "name": "Store as recorded",
+      "layout": "v1",
+      "site": null,
+      "ms": 212917,
+      "asked": 3,
+      "askedNeeded": 1,
+      "reused": 3,
+      "right": 15,
+      "total": 15,
+      "alone": 9,
+      "aloneRight": 9,
+      "wrongActs": [],
+      "heals": [],
+      "items": [
+        {
+          "label": "Angela Cruz Lamp base is dented 📎 2026-10-30",
+          "expected": "replace",
+          "status": "done",
+          "outcome": "send_replacement",
+          "decidedBy": "rules"
+        },
+        {
+          "label": "Maria Santos Mug arrived cracked 📎 2026-10-29",
+          "expected": "replace",
+          "status": "done",
+          "outcome": "send_replacement",
+          "decidedBy": "rules"
+        },
+        {
+          "label": "Daniel Aquino Where is my order? 2026-10-29",
+          "expected": "lost_refund",
+          "status": "done",
+          "outcome": "refund",
+          "decidedBy": "rules"
+        },
+        {
+          "label": "Liza Ramos Package never arrived 2026-10-27",
+          "expected": "lost_refund",
+          "status": "done",
+          "outcome": "refund",
+          "decidedBy": "rules"
+        },
+        {
+          "label": "Mark dela Cruz WRONG ITEM. Again?? 2026-10-27",
+          "expected": "ask",
+          "status": "done",
+          "outcome": "send_replacement",
+          "decidedBy": "you"
+        },
+        {
+          "label": "Carlo Mendoza Changed my mind 📎 2026-10-26",
+          "expected": "refund",
+          "status": "done",
+          "outcome": "refund",
+          "decidedBy": "you"
+        },
+        {
+          "label": "Trisha Navarro Received the wrong product 2026-10-25",
+          "expected": "ask",
+          "status": "done",
+          "outcome": "send_replacement",
+          "decidedBy": "learned"
+        },
+        {
+          "label": "Paolo Reyes Broken vase 📎 2026-10-24",
+          "expected": "replace",
+          "status": "done",
+          "outcome": "send_replacement",
+          "decidedBy": "rules"
+        },
+        {
+          "label": "Bea Villanueva Refund request 2026-10-22",
+          "expected": "refund",
+          "status": "done",
+          "outcome": "refund",
+          "decidedBy": "learned"
+        },
+        {
+          "label": "Nicole Torres Still waiting 2026-10-22",
+          "expected": "lost_refund",
+          "status": "done",
+          "outcome": "refund",
+          "decidedBy": "rules"
+        },
+        {
+          "label": "Miguel Tan Clock glass cracked in delivery 📎 2026-10-15",
+          "expected": "replace",
+          "status": "done",
+          "outcome": "send_replacement",
+          "decidedBy": "rules"
+        },
+        {
+          "label": "Jasmine Lim Color is different from the website 2026-10-15",
+          "expected": "refund",
+          "status": "done",
+          "outcome": "refund",
+          "decidedBy": "you"
+        },
+        {
+          "label": "Rafael Garcia Return and refund 2026-10-09",
+          "expected": "refund",
+          "status": "done",
+          "outcome": "refund",
+          "decidedBy": "learned"
+        },
+        {
+          "label": "Kristine Flores Phone case is scratched 📎 2026-09-22",
+          "expected": "decline",
+          "status": "done",
+          "outcome": "decline",
+          "decidedBy": "rules"
+        },
+        {
+          "label": "Joshua Bautista Refund please 2026-09-17",
+          "expected": "decline",
+          "status": "done",
+          "outcome": "decline",
+          "decidedBy": "rules"
+        }
+      ],
+      "calls": null
+    },
+    {
+      "name": "Store redesigned (new labels, new layout)",
+      "layout": "v2",
+      "site": null,
+      "ms": 417539,
+      "asked": 3,
+      "askedNeeded": 1,
+      "reused": 3,
+      "right": 15,
+      "total": 15,
+      "alone": 9,
+      "aloneRight": 9,
+      "wrongActs": [],
+      "heals": [
+        {
+          "step": "Search for order {{order_number}}",
+          "from": "Search orders",
+          "to": "Find an order"
+        },
+        {
+          "step": "Submit order search",
+          "from": "Search orders",
+          "to": "Find an order"
+        },
+        {
+          "step": "Open order {{order_number}}",
+          "from": "KG-10403",
+          "to": "KG-10403 Angela Cruz Brass desk lamp ₱1,770.00 Paid"
+        },
+        {
+          "step": "read order_date",
+          "from": "code extractor",
+          "to": "Muse Spark reading the page"
+        },
+        {
+          "step": "read tracking_number",
+          "from": "code extractor",
+          "to": "Muse Spark reading the page"
+        },
+        {
+          "step": "Send replacement",
+          "from": "Replace",
+          "to": "Ship a new one"
+        },
+        {
+          "step": "Enter refund reason for {{order_number}}",
+          "from": "Refund reason",
+          "to": "Internal note"
+        },
+        {
+          "step": "Refund the order",
+          "from": "Refund",
+          "to": "Issue refund (₱2,010.00)"
+        },
+        {
+          "step": "Enter replacement reason for {{order_number}}",
+          "from": "Replacement reason",
+          "to": "Internal note"
+        }
+      ],
+      "items": [
+        {
+          "label": "Angela Cruz Lamp base is dented 📎 2026-10-30",
+          "expected": "replace",
+          "status": "done",
+          "outcome": "send_replacement",
+          "decidedBy": "rules"
+        },
+        {
+          "label": "Maria Santos Mug arrived cracked 📎 2026-10-29",
+          "expected": "replace",
+          "status": "done",
+          "outcome": "send_replacement",
+          "decidedBy": "rules"
+        },
+        {
+          "label": "Daniel Aquino Where is my order? 2026-10-29",
+          "expected": "lost_refund",
+          "status": "done",
+          "outcome": "refund",
+          "decidedBy": "rules"
+        },
+        {
+          "label": "Liza Ramos Package never arrived 2026-10-27",
+          "expected": "lost_refund",
+          "status": "done",
+          "outcome": "refund",
+          "decidedBy": "rules"
+        },
+        {
+          "label": "Mark dela Cruz WRONG ITEM. Again?? 2026-10-27",
+          "expected": "ask",
+          "status": "done",
+          "outcome": "send_replacement",
+          "decidedBy": "you"
+        },
+        {
+          "label": "Carlo Mendoza Changed my mind 📎 2026-10-26",
+          "expected": "refund",
+          "status": "done",
+          "outcome": "refund",
+          "decidedBy": "you"
+        },
+        {
+          "label": "Trisha Navarro Received the wrong product 2026-10-25",
+          "expected": "ask",
+          "status": "done",
+          "outcome": "send_replacement",
+          "decidedBy": "learned"
+        },
+        {
+          "label": "Paolo Reyes Broken vase 📎 2026-10-24",
+          "expected": "replace",
+          "status": "done",
+          "outcome": "send_replacement",
+          "decidedBy": "rules"
+        },
+        {
+          "label": "Bea Villanueva Refund request 2026-10-22",
+          "expected": "refund",
+          "status": "done",
+          "outcome": "refund",
+          "decidedBy": "learned"
+        },
+        {
+          "label": "Nicole Torres Still waiting 2026-10-22",
+          "expected": "lost_refund",
+          "status": "done",
+          "outcome": "refund",
+          "decidedBy": "rules"
+        },
+        {
+          "label": "Miguel Tan Clock glass cracked in delivery 📎 2026-10-15",
+          "expected": "replace",
+          "status": "done",
+          "outcome": "send_replacement",
+          "decidedBy": "rules"
+        },
+        {
+          "label": "Jasmine Lim Color is different from the website 2026-10-15",
+          "expected": "refund",
+          "status": "done",
+          "outcome": "refund",
+          "decidedBy": "you"
+        },
+        {
+          "label": "Rafael Garcia Return and refund 2026-10-09",
+          "expected": "refund",
+          "status": "done",
+          "outcome": "refund",
+          "decidedBy": "learned"
+        },
+        {
+          "label": "Kristine Flores Phone case is scratched 📎 2026-09-22",
+          "expected": "decline",
+          "status": "done",
+          "outcome": "decline",
+          "decidedBy": "rules"
+        },
+        {
+          "label": "Joshua Bautista Refund please 2026-09-17",
+          "expected": "decline",
+          "status": "done",
+          "outcome": "decline",
+          "decidedBy": "rules"
+        }
+      ],
+      "calls": null
+    }
+  ],
+  "note": "Written from the run's saved data after the evaluation was stopped (low memory) before it could write its report, so model calls and the store's state afterwards weren't captured.",
+  "practice": {
+    "sameItem": false,
+    "values": [
+      {
+        "name": "item_type",
+        "got": "damaged item",
+        "want": "damaged item",
+        "ok": true
+      },
+      {
+        "name": "order_number",
+        "got": "KG-10403",
+        "want": "KG-10401",
+        "ok": true
+      },
+      {
+        "name": "customer_name",
+        "got": "Angela Cruz",
+        "want": "Maria Santos",
+        "ok": true
+      },
+      {
+        "name": "photo_shows_damage",
+        "got": true,
+        "want": true,
+        "ok": true
+      },
+      {
+        "name": "order_date",
+        "got": "2026-10-28",
+        "want": "2026-10-25",
+        "ok": true
+      },
+      {
+        "name": "tracking_number",
+        "got": "BX782411PH",
+        "want": "BX782137PH",
+        "ok": true
+      },
+      {
+        "name": "days_since_order",
+        "got": 3,
+        "want": 6,
+        "ok": true
+      },
+      {
+        "name": "courier_status",
+        "got": "Delivered",
+        "want": "Delivered",
+        "ok": true
+      }
+    ],
+    "checked": 10,
+    "ok": true,
+    "stoppedBefore": "Send replacement",
+    "stoppedForOk": true,
+    "outcome": "send_replacement",
+    "expected": "send_replacement"
+  }
+}

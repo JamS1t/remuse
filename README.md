@@ -74,6 +74,22 @@ Model calls go through the Remuse proxy (`proxy/`, hosted at showrun.sitsit.dev)
 
 For development: `cd backend && npm start` runs the Agent in a terminal (http://127.0.0.1:3200), and `HEADLESS=1` hides its browser. The full-page UI is a React + shadcn/ui app in `backend/web`; a built copy is committed in `backend/public`. After changing it, run `cd backend/web && npm install && npm run build`.
 
+## How well it works
+
+Measured on the test sites with `node backend/test/eval.ts` (full write-up, every email, in [docs/eval.md](docs/eval.md)). Remuse learned the task from **one** recorded demo: one customer complaint handled across an inbox, a store admin and a courier tracker, with the rules said out loud. It then handled all 15 complaints by itself, without stopping for approvals, so a wrong decision would really have acted:
+
+| | Store as recorded | Store redesigned (new labels, new layout) |
+|---|---|---|
+| Right decisions | **15 / 15** | **15 / 15** |
+| Decided by itself (by your rules), and right | 9 / 9 | 9 / 9 |
+| Wrong irreversible actions (by its own record) | **0** | **0** |
+| Asked you | 3 (1 a request its rules weren't about) | 3 |
+| Reused your answer instead of asking again | 3 | 3 |
+| Buttons and fields found again after the redesign | – | 6 |
+| Time per email | 14 s | 28 s |
+
+Your answers were given the way a person would, so the emails it asked about count as right; "decided by itself" is the honest number for what it did alone. The evaluation found bugs, now fixed: an answer you gave for one kind of request could override your other rules, a kind check ran before your own rules, a photo that couldn't be captured counted as "no damage", and a moved button could be confused with its neighbour. These numbers were measured just before the last two of those fixes; `eval.ts` now also checks the store itself (order status and reply) after each run.
+
 ## Meta models
 
 | Stage | Model | Job |
@@ -103,6 +119,8 @@ For development: `cd backend && npm start` runs the Agent in a terminal (http://
 | `cd backend && node test/clicklist.e2e.ts` | A list whose items open by clicking, not links (forum posts, cards): found by role, each opened and read; planned first, and if the list moves before Go, only posts still in their place are done |
 | `cd backend && node test/chrome.e2e.ts` | With the extension linked, a run happens in your own Chrome: uses its existing login, follows a tab the site opens, closes its tabs after |
 | `cd backend && node test/feedback.e2e.ts` | Feedback in plain words updates a task: only what was asked changes, you're told what changed, the rules are rebuilt, and a practice of the changed task follows by itself |
+| `cd backend && node test/eval.ts [--relearn]` | The evaluation above: learns the hero task once from a recorded demo (kept in `docs/eval/hero-task.json`), runs all 15 emails on both store layouts, writes `docs/eval.md`. Needs the test sites; uses real model calls |
+| `cd backend && node test/decide.e2e.ts` | The order Remuse decides in: your rules first (an old order is declined whatever kind it is), a kind your rules weren't about is asked only when it would fall to "otherwise", and your answer is reused for that kind but never over your other rules |
 | `cd backend && node test/second.e2e.ts` | The second model: with a partner key, Muse Spark Open answers the same judgement on its own before an irreversible act (agrees → carries on; disagrees → asks you, even in a run started without asking), checks the screen after, gets exactly the same prompt and photo over Chat Completions with the partner key (which goes nowhere else); no key → no second opinion; partner down → the run finishes and says so |
 | `cd backend && node --env-file-if-exists=../.env test/open.check.ts` | The checker model for real: a refunded screen gives ok, a failed one doesn't |
 | `cd backend && node test/reasons.e2e.ts [out.png]` | On a redesigned store: every step carries its reason and how it was checked, typing shows what the field now holds, the decision lists what it read, finding the moved button keeps the marked-up screenshot (Muse Spark + SAM 3.1), and a picture never leaks to the next item |

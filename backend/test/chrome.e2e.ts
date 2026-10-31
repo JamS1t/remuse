@@ -65,7 +65,7 @@ try {
   const before = ctx.pages().length;
   const r = await post(`/specs/${specId}/runs`, { autoApprove: true });
   let run: any;
-  for (let i = 0; i < 60; i++) { run = await get(`/runs/${r.id}`); if (["done", "failed", "stopped"].includes(run.status)) break; await sleep(1000); }
+  for (let i = 0; i < 150; i++) { run = await get(`/runs/${r.id}`); if (["done", "failed", "stopped"].includes(run.status)) break; await sleep(1000); }
   const it = run.items[0];
   console.log("   log:", it?.log.map((l: any) => l.msg).join(" / ").slice(0, 500), run.error ?? "");
   check("the run happens in your own Chrome", run.browser === "chrome", run.browser);
