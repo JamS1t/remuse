@@ -75,7 +75,7 @@ export type Practice = {
 
 const VIEW = { width: 1440, height: 900 };
 const MOCK = process.env.MOCK_URL ?? "http://localhost:3100";
-const IRREVERSIBLE = /\b(refund|replace|send|pay|submit|ship|confirm|delete|place order|issue|buy|checkout|check out|purchase|book|transfer|message seller|post|share|publish|approve|merge|archive|resolve)\b/i;
+export const IRREVERSIBLE = /\b(turn in|turn it in|hand in|mark as done|refund|replace|send|pay|submit|ship|confirm|delete|place order|issue|buy|checkout|check out|purchase|book|transfer|message seller|post|share|publish|approve|merge|archive|resolve)\b/i;
 // The browser profile runs use (its sign-ins live here). Tests point BROWSER_PROFILE at a throwaway one.
 export const PROFILE = process.env.BROWSER_PROFILE ? resolve(process.env.BROWSER_PROFILE) : fileURLToPath(new URL("../data/browser", import.meta.url));
 
@@ -165,7 +165,7 @@ export function itemKey(i: { url: string; label: string }) {
 }
 
 /** A step that waits for the person's OK in a real run: marked irreversible, a word like "refund", or such a site tool. */
-const gatedStep = (s: Step) => !!s.irreversible || (s.do === "click" && IRREVERSIBLE.test(s.target?.name ?? "")) || (!!s.tool && IRREVERSIBLE.test(s.tool.name.replace(/_/g, " ")));
+export const gatedStep = (s: Step) => !!s.irreversible || (s.do === "click" && IRREVERSIBLE.test(s.target?.name ?? "")) || (!!s.tool && IRREVERSIBLE.test(s.tool.name.replace(/_/g, " ")));
 
 /** Test sites only: an outcome by what it means ("send_replacement" is "replace", "refund_lost" is "lost_refund"),
  *  so a run can be scored whatever names the model gave the outcomes. */
