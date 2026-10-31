@@ -13,7 +13,8 @@ const FILLER = new Set(["na", "now", "po", "please", "remuse", "okay", "ok"]);
 /** Does this sentence end with "I'm done" (or the like)? Only at the end: "I'm done with this tab" doesn't count.
  *  A match is only a candidate: the note-taker confirms they meant the whole demo. */
 export function endPhrase(said: string): boolean {
-  let words = said.toLowerCase().replace(/[’‘]/g, "'").replace(/[^\p{L}\p{N}' ]+/gu, " ").split(/\s+/).filter(Boolean);
+  let words = said.toLowerCase().replace(/[’‘]/g, "'").replace(/[^\p{L}\p{N}' ]+/gu, " ").split(/\s+/).filter(Boolean)
+    .filter((w, i, all) => w !== all[i - 1]); // a stutter or an echo in the transcript: "that's it. it."
   for (let strip = 0; strip <= 2 && words.length; strip++) {
     const s = words.join(" ");
     if (END_PHRASES.some((p) => s === p || s.endsWith(` ${p}`))) return true;

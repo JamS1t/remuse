@@ -7,8 +7,9 @@ import { Textarea } from "@/components/ui/textarea";
 import { ItemLabel, Lockup, Orb, PracticeLines, Said, useAction, type OrbState } from "@/components/bits";
 import { PendingCard } from "@/pages/run";
 import { parseCsv } from "@/pages/spec";
-import { api, isLive, saved, useApi, type PracticeState, type Run, type RunRow, type SpecRow, useGoogle } from "@/lib/api";
+import { api, isLive, saved, useApi, type LiveState, type PracticeState, type Run, type RunRow, type SpecRow, useGoogle } from "@/lib/api";
 import { ext, inPanel, useTabChanges } from "@/lib/bridge";
+import { TeachMode } from "@/pages/teach";
 import { cn } from "@/lib/utils";
 
 type Task = {
@@ -67,6 +68,12 @@ export function Remote() {
     return () => clearInterval(t);
   }, [rec?.recording]);
 
+  // Teaching takes the whole sidebar, from the moment a recording starts until its review is done. Remembered, so
+  // reopening the sidebar comes back to it.
+  const [teachId, setTeachId] = useState<string | null>(() => { try { return localStorage.getItem("remuse.teach"); } catch { return null; } });
+  useEffect(() => { if (rec?.recording && rec.rec?.id) setTeachId(rec.rec.id); }, [rec?.recording, rec?.rec?.id]);
+  useEffect(() => { try { if (teachId) localStorage.setItem("remuse.teach", teachId); else localStorage.removeItem("remuse.teach"); } catch { /* private window */ } }, [teachId]);
+
   const learning = tasks?.find((t) => t.learnStage && LEARNING.includes(t.learnStage));
   const fresh = tasks?.find((t) => (t.learnStage === "ready" || t.learnStage === "failed") && t.endedAt && Date.now() - t.endedAt < 6 * 3600_000 && !seen(t.sessionId));
   const live = run && isLive(run.status) ? run : null;
@@ -90,6 +97,8 @@ export function Remote() {
   });
   const answer = (body: object) => act("answer", async () => { await api(`/runs/${live!.id}/answer`, "POST", body); reloadRun(); });
   const dismiss = (id: string) => { markSeen(id); setTick((n) => n + 1); };
+
+  if (inPanel && teachId) return <TeachMode key={teachId} sessionId={teachId} task={tasks?.find((x) => x.sessionId === teachId)} onExit={() => { dismiss(teachId); setTeachId(null); reloadTasks(); }} />;
 
   const done = live ? live.items.filter((i) => ["done", "skipped", "failed"].includes(i.status)).length : 0;
   const practicing = live?.mode === "practice";
@@ -153,8 +162,6 @@ export function Remote() {
   );
 }
 
-type LiveDraft = { goal: string; steps: string[]; rules: { said: string; then: string }[]; question: string | null };
-type LiveState = { turns: { startMs: number; text: string }[]; draft: LiveDraft | null; drafting: boolean; error: string | null };
 
 /** Remuse thinking out loud, in the sidebar, from the moment you start recording: what it heard, the steps
  *  as it works them out, and a question if it has one (you answer out loud). After you stop it checks its
@@ -209,19 +216,19 @@ function FollowAlong({ sessionId, t, recording, onDone, onRetry }: { sessionId: 
     </section>
   );
 
-  // The real task once it's written; until then, the live draft.
+  // The task once it's written (while teaching, the teaching screen shows the notes instead).
   const s = spec?.spec;
-  const steps = s ? [...s.steps.map((x) => x.describe), ...Object.values(s.outcomes).flatMap((o) => o.steps.map((x) => x.describe))] : live?.draft?.steps ?? [];
-  const rules = s ? s.rules.filter((r) => r.if !== "otherwise" || r.said).map((r) => ({ said: r.said ?? `If ${r.if}`, then: words(r.then) ?? "" })) : live?.draft?.rules ?? [];
+  const steps = s ? [...s.steps.map((x) => x.describe), ...Object.values(s.outcomes).flatMap((o) => o.steps.map((x) => x.describe))] : [];
+  const rules = s ? s.rules.filter((r) => r.if !== "otherwise" || r.said).map((r) => ({ said: r.said ?? `If ${r.if}`, then: words(r.then) ?? "" })) : [];
   const heard = (live?.turns ?? []).map((x) => x.text).join(" ").slice(-260);
-  const status = recording ? (live?.drafting ? "Thinking about what you said" : "Following along") : stage === "listening" ? "Listening back to all of it" : stage === "understanding" ? "Writing the steps properly" : stage === "building" ? "Checking it against what you did" : "Here's what I'll do";
+  const status = recording ? (live?.thinking ? "Thinking about what you said" : "Following along") : stage === "listening" ? "Listening back to all of it" : stage === "understanding" ? "Writing the steps properly" : stage === "building" ? "Checking it against what you did" : "Here's what I'll do";
   const ok = !!t && t.checks.total > 0 && t.checks.passed === t.checks.total;
 
   return (
     <section className="glass rounded-2xl p-4" aria-live="polite">
       <p className={cn("text-[13px] text-muted-foreground", thinking && "shimmer")}>{status}{thinking ? "…" : ""}</p>
       {heard && thinking ? <p className="mt-2 line-clamp-3 text-[13px]"><span className="text-muted-foreground">I heard </span><Said>{heard.length >= 260 ? `…${heard}` : heard}</Said></p> : null}
-      {s?.goal || live?.draft?.goal ? <p className="mt-3 leading-snug">{s?.goal ?? live?.draft?.goal}</p> : null}
+      {s?.goal ? <p className="mt-3 leading-snug">{s.goal}</p> : null}
       {steps.length ? (
         <ol className="mt-2 space-y-1.5">
           {steps.map((x, i) => (
@@ -235,9 +242,6 @@ function FollowAlong({ sessionId, t, recording, onDone, onRetry }: { sessionId: 
         <ul className="mt-3 space-y-1.5">
           {rules.slice(0, 4).map((r, i) => <li key={i} className="text-[13px]"><Said>{r.said}</Said><span className="text-muted-foreground"> → {r.then}</span></li>)}
         </ul>
-      ) : null}
-      {recording && live?.draft?.question ? (
-        <p className="mt-3 border-t border-rule pt-3 text-[13.5px]"><span className="font-medium">Quick question: </span>{live.draft.question}<span className="text-muted-foreground"> Just say it.</span></p>
       ) : null}
 
       {stage === "ready" && t ? (

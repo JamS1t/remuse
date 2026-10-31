@@ -55,6 +55,19 @@ try {
   await page.bringToFront(); await sleep(2500);
   await page.getByRole("link", { name: "Report" }).click();
 
+  // The sidebar while teaching: a screen of its own, with Stop, the voice hint and the cards with their evidence.
+  const side = await ctx.newPage();
+  await side.setViewportSize({ width: 400, height: 860 });
+  await side.goto(`chrome-extension://${extId}/sidepanel.html`);
+  const ui = side.frameLocator("#ui");
+  await ui.getByRole("button", { name: /Stop/ }).waitFor({ timeout: 15000 }).catch(() => {});
+  check("Stop and the voice hint are on screen", await ui.getByRole("button", { name: /Stop/ }).isVisible().catch(() => false) && await ui.getByText(/say .I.m done./i).isVisible().catch(() => false));
+  check("teaching shows its own screen: no Connected sites, no start button", !(await ui.getByText("Connected sites").count()) && !(await ui.getByText("Watch me do a task").count()));
+  await ui.getByText(/you (said|clicked)/i).first().waitFor({ timeout: 30000 }).catch(() => {});
+  check("the cards show their evidence", await ui.getByText(/you (said|clicked)/i).first().isVisible().catch(() => false));
+  const shot = join(process.env.SHOTS ?? data, "teach-recording.png");
+  await side.screenshot({ path: shot }); console.log("   screenshot:", shot);
+
   // The test microphone talks for about 12 s, then says it's done: the recording should end by itself.
   let lv: any = null, stoppedByVoice = false;
   for (let i = 0; i < 60; i++) {

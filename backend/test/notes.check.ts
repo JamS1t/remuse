@@ -5,7 +5,7 @@ import { applyOps, endPhrase } from "../src/notes.ts";
 let fails = 0;
 const check = (name: string, ok: boolean, detail?: unknown) => { console.log(`${ok ? "PASS" : "FAIL"}  ${name}${ok ? "" : `  (${JSON.stringify(detail)})`}`); if (!ok) fails++; };
 
-for (const s of ["Okay, that's it.", "tapos na", "Alright, proceed.", "I'm done now", "okay so that's all Remuse", "sige na po", "Okay Remuse.", "Ayan na."]) check(`"${s}" ends the demo`, endPhrase(s));
+for (const s of ["Okay, that's it.", "tapos na", "Alright, proceed.", "I'm done now", "okay so that's all Remuse", "sige na po", "Okay Remuse.", "Ayan na.", "Okay, that's it. it.", "I'm done, done."]) check(`"${s}" ends the demo`, endPhrase(s));
 for (const s of ["I'm done with this tab", "that's it for the title", "proceed to the next page and click", "go ahead and click Reach", "", "na"]) check(`"${s}" doesn't`, !endPhrase(s));
 
 const known = new Set([12, 13]);
