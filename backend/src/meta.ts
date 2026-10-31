@@ -132,7 +132,11 @@ export async function transcribe(wav: Uint8Array): Promise<{ transcript: string;
   const form = new FormData();
   form.append("request", new Blob([JSON.stringify(transcribeRequest())], { type: "application/json" }));
   form.append("audio", new Blob([wav], { type: "audio/wav" }), "narration.wav");
-  const res = await fetch(`${BASE}/asr/transcribe`, { method: "POST", headers: { Authorization: `Bearer ${key()}` }, body: form });
+  // A transcription that never answers would swallow what was said (like "I'm done") without a trace: give up after a
+  // while and say so. A whole recording gets longer than one sentence.
+  const limit = Math.max(30_000, Math.round((wav.length / 32000) * 2000));
+  const res = await fetch(`${BASE}/asr/transcribe`, { method: "POST", headers: { Authorization: `Bearer ${key()}` }, body: form, signal: AbortSignal.timeout(limit) })
+    .catch((e) => { calls.push({ at: t0, model: "muse-voice-transcribe-1.0", label: "transcribe", ms: Date.now() - t0, error: (e as Error).name === "TimeoutError" ? `no answer in ${Math.round(limit / 1000)} s` : (e as Error).message }); throw e; });
   const body = await res.text();
   calls.push({ at: t0, model: "muse-voice-transcribe-1.0", label: "transcribe", ms: Date.now() - t0, error: res.ok ? undefined : `HTTP ${res.status}` });
   if (!res.ok) throw new Error(`transcribe: HTTP ${res.status} ${body.slice(0, 300)}`);

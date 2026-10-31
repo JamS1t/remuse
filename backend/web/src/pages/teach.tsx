@@ -11,7 +11,7 @@ import { practiceSay } from "@/lib/say";
 import { cn } from "@/lib/utils";
 
 type Status = {
-  recording: boolean; rec?: { id?: string; t0?: number; audioError?: string | null }; hearing?: boolean;
+  recording: boolean; rec?: { id?: string; t0?: number; audioError?: string | null }; hearing?: boolean; level?: number;
   speaking?: { line: number; total: number } | null; last?: { id: string; byVoice?: boolean; discarded?: boolean; cancelled?: boolean; learning?: boolean; error?: string | null; at?: number } | null;
 };
 export type TeachTask = { sessionId: string; specId?: number; title?: string; learnStage?: string | null; learnError?: string | null; practice?: PracticeState | null };
@@ -133,7 +133,7 @@ export function TeachMode({ sessionId, task, onExit }: { sessionId: string; task
     <Frame orb={view.orb} word={view.word} sub={<>{view.sub}{recording && st?.rec?.audioError ? <p className="mt-2 text-[13px] text-warn">No voice: {st.rec.audioError}</p> : null}</>} shimmer={view.word === "Thinking"}
       right={recording ? (
         <span className="ml-auto inline-flex items-center gap-2 font-mono text-[13px] tabular-nums text-muted-foreground">
-          <span className="size-2 rounded-full bg-tally" aria-hidden />{clock(secs)}<span className="sr-only">recording</span>
+          <Meter level={st?.level ?? 0} /><span className="size-2 rounded-full bg-tally" aria-hidden />{clock(secs)}<span className="sr-only">recording</span>
         </span>
       ) : <Button variant="ghost" size="sm" className="ml-auto rounded-full text-muted-foreground" onClick={onExit}>Close</Button>}
       footer={recording ? (
@@ -435,5 +435,15 @@ function Review({ sessionId, task, st, events, onExit }: { sessionId: string; ta
         ) : null}
       </section>
     </Frame>
+  );
+}
+
+/** How loud the microphone is right now: four bars, so you can see it hears you. */
+function Meter({ level }: { level: number }) {
+  const on = [0.004, 0.01, 0.025, 0.06].filter((x) => level > x).length;
+  return (
+    <span className="mr-1 inline-flex h-3.5 items-end gap-[2px]" role="img" aria-label={on ? "the microphone hears you" : "the microphone hears nothing"}>
+      {[0, 1, 2, 3].map((i) => <span key={i} className={cn("w-[3px] rounded-full transition-colors duration-150", i < on ? "bg-foreground/80" : "bg-foreground/15")} style={{ height: `${5 + i * 3}px` }} />)}
+    </span>
   );
 }

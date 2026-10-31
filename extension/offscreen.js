@@ -19,7 +19,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
 // t0: when the recording started (session clock), so each sentence is placed on the same clock as the clicks.
 async function start(id, talk = false, sessionT0 = Date.now()) {
   if (ctx) await stop().catch(() => {}); // one microphone user at a time: a new recording ends the conversation
-  sessionId = id; parts = []; drops = 0; converse = talk; speaking = false; loud = 0; quiet = 0; held = false;
+  sessionId = id; parts = []; drops = 0; converse = talk; vad = makeVad(); held = false; level = 0;
   ctx = new AudioContext();
   await ctx.resume();
   await ctx.audioWorklet.addModule("recorder-worklet.js");
@@ -41,8 +41,8 @@ async function listen() {
 // While Remuse speaks, what the mic picks up is Remuse itself: not heard until it's done.
 function hold(on) {
   held = on;
-  if (on && speaking) { speaking = false; tell(false); }
-  loud = 0; quiet = 0;
+  if (on && vad.state.speaking) tell(false);
+  vad.reset();
   return { ok: true };
 }
 const tell = (on) => chrome.runtime.sendMessage({ type: "hearing", on }).catch(() => {});
@@ -51,25 +51,24 @@ const tell = (on) => chrome.runtime.sendMessage({ type: "hearing", on }).catch((
 // quiet for 1.2 s) and sent to the Agent whole. While recording, the Agent takes notes from it and listens for
 // "I'm done"; the whole track is still kept for learning. After learning (a conversation), the Agent works out
 // what you meant, and nothing is kept between things you say.
-let speaking = false, loud = 0, quiet = 0, noise = 0.004, from = 0;
+// Speech detection is in vad.js (checked in node). Here: what each event means for the blocks kept so far.
+let vad = makeVad(), from = 0, level = 0, levelAt = 0;
 function hearing(p) {
-  if (held) { if (converse && parts.length > 40) parts.splice(0, parts.length - 10); return; }
   let sum = 0; for (const v of p.pcm) sum += v * v;
   const rms = Math.sqrt(sum / p.pcm.length), dt = p.pcm.length / ctx.sampleRate, block = Math.ceil(0.4 / dt);
-  // The room's level: drops at once to anything quieter, creeps up over seconds, so a voice never becomes "the room".
-  if (!speaking) noise += (rms - noise) * (rms < noise ? 0.05 : 0.0005);
-  const voice = rms > Math.max(0.012, noise * 3);
-  // Speech has tiny gaps between sounds: they only wear the count down, they don't reset it.
-  if (voice) { loud += dt; quiet = 0; } else { quiet += dt; if (!speaking) loud = Math.max(0, loud - dt); }
-  // Someone who talks on and on still gets heard: after 12 s a short breath (0.3 s) ends it, and 20 s always does.
-  const long = speaking ? (parts.length - from) * dt : 0;
-  if (!speaking && loud > 0.15) { speaking = true; tell(true); from = Math.max(0, parts.length - block - Math.ceil(loud / dt)); }
-  else if (speaking && (quiet > 1.2 || (long > 12 && quiet > 0.3) || long > 20)) {
-    speaking = false; loud = 0; tell(false);
+  // The sidebar shows how loud the mic is, so you can see it hears you (a few times a second).
+  level = Math.max(rms, level * 0.9);
+  if (p.at - levelAt > 0.25) { levelAt = p.at; chrome.runtime.sendMessage({ type: "level", level: held ? 0 : level }).catch(() => {}); }
+  if (held) { if (converse && parts.length > 40) parts.splice(0, parts.length - 10); return; }
+  const e = vad.step(rms, dt);
+  if (e === "start") { tell(true); from = Math.max(0, parts.length - block - Math.ceil(vad.state.loud / dt)); }
+  else if (e === "end") {
+    tell(false);
     const said = parts.slice(from);
     if (converse) parts = []; // a recording keeps every block for the whole track
     send(said).catch(() => {});
-  } else if (!speaking && converse && parts.length > block * 4) parts.splice(0, parts.length - block); // keep just a moment before you speak
+  } else if (e === "flush" && !converse) send(parts.slice(-Math.ceil(VAD_FLUSH / dt))).catch(() => {}); // sound that never became a sentence
+  else if (!vad.state.speaking && converse && parts.length > block * 4) parts.splice(0, parts.length - block); // keep just a moment before you speak
 }
 async function send(said) {
   const raw = new Float32Array(said.reduce((n, p) => n + p.pcm.length, 0));
@@ -85,7 +84,7 @@ async function send(said) {
 
 async function stop() {
   if (!ctx) return { bytes: 0 };
-  if (speaking) { speaking = false; tell(false); }
+  if (vad.state.speaking) { vad.reset(); tell(false); }
   if (converse) { converse = false; const c = ctx; ctx = null; node.disconnect(); stream.getTracks().forEach((t) => t.stop()); await c.close(); return { ok: true }; }
   const rate = ctx.sampleRate, total = ctx.currentTime - t0;
   const c = ctx; ctx = null;
