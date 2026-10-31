@@ -10,19 +10,29 @@ export type CardOp = { op: "add"; card: Omit<Card, "id"> } | { op: "edit"; id: s
 export const END_PHRASES = ["i'm done", "im done", "i am done", "that's it", "thats it", "that's all", "thats all", "proceed", "go ahead", "you can start", "tapos na", "ayan na", "sige na", "done showing", "okay remuse", "ok remuse"];
 const FILLER = new Set(["na", "now", "po", "please", "remuse", "okay", "ok"]);
 
-/** Does this sentence end with "I'm done" (or the like)? Only at the end: "I'm done with this tab" doesn't count.
- *  A match is only a candidate: the note-taker confirms they meant the whole demo. */
-export function endPhrase(said: string): boolean {
+// Said at the end of what they say: throw this recording away. English and Tagalog.
+export const CANCEL_PHRASES = ["cancel", "cancel that", "cancel it", "never mind", "nevermind", "forget it", "throw it away", "scrap that", "huwag na", "wag na", "huwag na lang", "wag na lang"];
+const NOT = new Set(["don't", "dont", "not", "never"]);
+
+// Does the sentence end with one of these phrases (a stutter and a filler word or two after it are fine)?
+function saidLast(said: string, phrases: string[]): boolean {
   let words = said.toLowerCase().replace(/[’‘]/g, "'").replace(/[^\p{L}\p{N}' ]+/gu, " ").split(/\s+/).filter(Boolean)
     .filter((w, i, all) => w !== all[i - 1]); // a stutter or an echo in the transcript: "that's it. it."
   for (let strip = 0; strip <= 2 && words.length; strip++) {
     const s = words.join(" ");
-    if (END_PHRASES.some((p) => s === p || s.endsWith(` ${p}`))) return true;
+    const p = phrases.find((x) => s === x || s.endsWith(` ${x}`));
+    if (p) return !NOT.has(words[words.length - p.split(" ").length - 1] ?? ""); // "don't forget it" isn't "forget it"
     if (!FILLER.has(words.at(-1)!)) return false;
     words = words.slice(0, -1); // "tapos na po", "I'm done now"
   }
   return false;
 }
+
+/** Does this sentence end with "I'm done" (or the like)? Only at the end: "I'm done with this tab" doesn't count.
+ *  A match is only a candidate: the note-taker confirms they meant the whole demo. */
+export const endPhrase = (said: string) => saidLast(said, END_PHRASES);
+/** Does it end with "cancel" / "never mind" / "huwag na"? Confirmed by the note-taker too: the recording is dropped. */
+export const cancelPhrase = (said: string) => saidLast(said, CANCEL_PHRASES);
 
 const KINDS = new Set(["step", "rule", "read", "question"]);
 // A card counts only with words and something real behind it: their quote, or events that happened.
@@ -66,14 +76,15 @@ Rules:
 - If they correct themselves or you ("scratch that", "no, not that one"), edit or remove the card they mean and set "control" to "undo".
 - At most one "question" card at a time, only when something important is unclear (which items, how often, what to do when...). Remove it once they answer.
 - "control" is "done" only when they say they are finished teaching ("okay, that's it", "I'm done", "tapos na", "proceed"), not when they are done with a tab, a field or a page. The words that end the demo never become a card.
+- "control" is "cancel" when they want the whole recording thrown away ("cancel", "never mind", "forget it", "huwag na"), not when they cancel something on the page (an order, a dialog).
 - If the moment adds nothing new, reply with no ops.
 
-Reply with ONLY JSON: {"ops": [{"op": "add", "card": {...}} | {"op": "edit", "id": "c2", "card": {<fields to change>}} | {"op": "remove", "id": "c3"}], "control": "done" | "undo" | null}`;
+Reply with ONLY JSON: {"ops": [{"op": "add", "card": {...}} | {"op": "edit", "id": "c2", "card": {<fields to change>}} | {"op": "remove", "id": "c3"}], "control": "done" | "cancel" | "undo" | null}`;
 
 /** One note-taking turn: the cards so far and the newest moment in, changes and "did they say they're done" out. */
-export async function noteTake(cards: Card[], momentText: string): Promise<{ ops: CardOp[]; control: "done" | "undo" | null }> {
+export async function noteTake(cards: Card[], momentText: string): Promise<{ ops: CardOp[]; control: "done" | "cancel" | "undo" | null }> {
   const list = cards.map((c) => `${c.id} [${c.kind}] ${c.text}${c.quote ? ` (said "${c.quote}")` : ""}${c.events?.length ? ` (events ${c.events.map((e) => `#${e}`).join(" ")})` : ""}`);
   const r = await askJson<any>([text(PROMPT), text(`Cards so far:\n${list.join("\n") || "(none yet)"}`), text(`New moment:\n${momentText}`)], "notes");
   const ops = Array.isArray(r?.ops) ? r.ops.filter((o: any) => o && ["add", "edit", "remove"].includes(o.op)) : [];
-  return { ops, control: r?.control === "done" || r?.control === "undo" ? r.control : null };
+  return { ops, control: ["done", "cancel", "undo"].includes(r?.control) ? r.control : null };
 }

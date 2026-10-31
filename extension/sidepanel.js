@@ -13,7 +13,7 @@ async function load() {
 document.getElementById("retry").onclick = load;
 load();
 
-const ALLOWED = ["start", "stop", "status", "sites", "connect", "disconnect", "currentTab", "openTab", "listen", "unlisten", "mode", "keys", "speak", "hush"];
+const ALLOWED = ["start", "stop", "status", "sites", "connect", "disconnect", "currentTab", "openTab", "listen", "unlisten", "mode", "keys", "speak", "hush", "cancel"];
 addEventListener("message", async (e) => {
   if (e.source !== frame.contentWindow || e.origin !== AGENT) return;
   const { id, type, args } = e.data ?? {};

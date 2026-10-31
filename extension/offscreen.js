@@ -78,8 +78,9 @@ async function send(said) {
   const id = sessionId, wav = await toWav(raw, ctx.sampleRate);
   if (converse) { await fetch(`${API}/sessions/${id}/say`, { method: "POST", body: wav }); return; }
   const r = await fetch(`${API}/sessions/${id}/heard?at=${Math.round(said[0].at * 1000 + offsetMs)}`, { method: "POST", body: wav }).then((x) => x.json(), () => null);
-  // "Okay, that's it": the recording ends just as if Stop was pressed.
+  // "Okay, that's it": the recording ends just as if Stop was pressed. "Never mind": it ends and is thrown away.
   if (r?.control === "done") chrome.runtime.sendMessage({ type: "saidDone", sessionId: id }).catch(() => {});
+  if (r?.control === "cancel") chrome.runtime.sendMessage({ type: "saidCancel", sessionId: id }).catch(() => {});
 }
 
 async function stop() {

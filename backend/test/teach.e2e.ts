@@ -62,6 +62,7 @@ try {
   const ui = side.frameLocator("#ui");
   await ui.getByRole("button", { name: /Stop/ }).waitFor({ timeout: 15000 }).catch(() => {});
   check("Stop and the voice hint are on screen", await ui.getByRole("button", { name: /Stop/ }).isVisible().catch(() => false) && await ui.getByText(/say .I.m done./i).isVisible().catch(() => false));
+  check("a Cancel is on screen while teaching", await ui.getByRole("button", { name: "Cancel" }).isVisible().catch(() => false));
   check("teaching shows its own screen: no Connected sites, no start button", !(await ui.getByText("Connected sites").count()) && !(await ui.getByText("Watch me do a task").count()));
   await ui.getByText(/you (said|clicked)/i).first().waitFor({ timeout: 30000 }).catch(() => {});
   check("the cards show their evidence", await ui.getByText(/you (said|clicked)/i).first().isVisible().catch(() => false));
@@ -104,7 +105,7 @@ try {
   check("learning doesn't start a practice by itself", !task?.practice, JSON.stringify(task?.practice));
   // Then the review: the plan on screen (read aloud in a real Chrome), and Remuse waiting for "looks good" or a change.
   await ui.getByRole("button", { name: /Looks right, try it once/ }).waitFor({ timeout: 20000 }).catch(() => {});
-  check("after learning, the review shows the plan and waits for you", await ui.getByRole("button", { name: /Looks right, try it once/ }).isVisible().catch(() => false) && await ui.getByText(/what I'll do/i).isVisible().catch(() => false) && await ui.getByRole("button", { name: /Type instead/ }).isVisible().catch(() => false));
+  check("after learning, the review shows the plan and waits for you", await ui.getByRole("button", { name: /Looks right, try it once/ }).isVisible().catch(() => false) && await ui.getByText(/what I'll do/i).isVisible().catch(() => false) && await ui.getByRole("button", { name: /Type instead/ }).isVisible().catch(() => false) && await ui.getByRole("button", { name: /Remove task/ }).isVisible().catch(() => false));
   const shot2 = join(process.env.SHOTS ?? data, "teach-review.png");
   await side.screenshot({ path: shot2 }); console.log("   screenshot:", shot2);
 

@@ -1,12 +1,16 @@
 // Live notes while teaching: cards must cite words or real events, and only a real "I'm done" ends the demo.
 // No model calls. Run: node test/notes.check.ts
-import { applyOps, endPhrase } from "../src/notes.ts";
+import { applyOps, cancelPhrase, endPhrase } from "../src/notes.ts";
 
 let fails = 0;
 const check = (name: string, ok: boolean, detail?: unknown) => { console.log(`${ok ? "PASS" : "FAIL"}  ${name}${ok ? "" : `  (${JSON.stringify(detail)})`}`); if (!ok) fails++; };
 
 for (const s of ["Okay, that's it.", "tapos na", "Alright, proceed.", "I'm done now", "okay so that's all Remuse", "sige na po", "Okay Remuse.", "Ayan na.", "Okay, that's it. it.", "I'm done, done."]) check(`"${s}" ends the demo`, endPhrase(s));
 for (const s of ["I'm done with this tab", "that's it for the title", "proceed to the next page and click", "go ahead and click Reach", "", "na"]) check(`"${s}" doesn't`, !endPhrase(s));
+
+for (const s of ["Cancel.", "Never mind.", "Okay, forget it.", "Huwag na.", "wag na lang", "Cancel that, Remuse.", "Throw it away."]) check(`"${s}" cancels the demo`, cancelPhrase(s));
+for (const s of ["Cancel the order", "I'm done", "never mind the title, keep going and click Save", "don't forget it"]) check(`"${s}" doesn't cancel`, !cancelPhrase(s));
+check("an end phrase is not a cancel", !cancelPhrase("Okay, that's it.") && !endPhrase("Never mind."));
 
 const known = new Set([12, 13]);
 const c = applyOps([], [

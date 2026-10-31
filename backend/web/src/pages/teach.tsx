@@ -12,7 +12,7 @@ import { cn } from "@/lib/utils";
 
 type Status = {
   recording: boolean; rec?: { id?: string; t0?: number; audioError?: string | null }; hearing?: boolean;
-  speaking?: { line: number; total: number } | null; last?: { id: string; byVoice?: boolean; discarded?: boolean; at?: number } | null;
+  speaking?: { line: number; total: number } | null; last?: { id: string; byVoice?: boolean; discarded?: boolean; cancelled?: boolean; at?: number } | null;
 };
 export type TeachTask = { sessionId: string; specId?: number; title?: string; learnStage?: string | null; learnError?: string | null; practice?: PracticeState | null };
 type Ev = SessionFull["events"][number] & { targets?: { label?: string; text?: string }[] };
@@ -39,6 +39,15 @@ function did(e?: Ev): string | null {
   if (e.kind === "upload") return "you chose a file";
   if (e.kind === "page" || e.kind === "start") { try { const u = new URL(e.url!); return `you opened ${u.host}${u.pathname === "/" ? "" : u.pathname}`; } catch { return "you opened a page"; } }
   return null;
+}
+
+/** Throw a task away: its recording, every version and run. A practice still running is stopped first. */
+async function removeTask(sessionId: string, runId?: string | null) {
+  if (runId) await api(`/runs/${runId}/stop`, "POST").catch(() => {});
+  for (let i = 0; ; i++) {
+    try { await api(`/sessions/${sessionId}`, "DELETE"); return; }
+    catch (e) { if (!/stop its run first/.test((e as Error).message) || i >= 4) throw e; await new Promise((r) => setTimeout(r, 1000)); }
+  }
 }
 
 /** The status from the extension, twice a second: recording, whether you're talking, whether Remuse is. */
@@ -98,9 +107,11 @@ export function TeachMode({ sessionId, task, onExit }: { sessionId: string; task
 
   // Nothing was done: the Agent didn't keep it, so there's nothing to learn.
   const last = st?.last?.id === sessionId ? st.last : null;
-  useEffect(() => { if (last?.discarded) { toast("Nothing was recorded, so I didn't keep it."); onExit(); } }, [last?.discarded]);
+  useEffect(() => { if (last?.discarded) { toast(last.cancelled ? "Okay, I threw that away." : "Nothing was recorded, so I didn't keep it."); onExit(); } }, [last?.discarded]);
   // The shortcut follows what's on screen: it never starts a new recording over this one's review.
-  useEffect(() => { ext("mode", { mode: recording ? "idle" : reviewing ? "review" : stage === "failed" ? "idle" : "learning" }).catch(() => {}); }, [recording, reviewing, stage]);
+  useEffect(() => { ext("mode", { mode: recording ? "idle" : reviewing ? "review" : stage === "failed" || stage === "unsure" ? "idle" : "learning" }).catch(() => {}); }, [recording, reviewing, stage]);
+  // Throw this task away (while learning, or when it wasn't really a task) and go back to the dashboard.
+  const remove = (then?: () => void) => run("remove", async () => { await removeTask(sessionId); toast("Okay, I threw that away."); onExit(); then?.(); });
   useEffect(() => () => { ext("mode", { mode: "idle" }).catch(() => {}); }, []);
 
   const events = (session?.events ?? []) as Ev[];
@@ -114,6 +125,7 @@ export function TeachMode({ sessionId, task, onExit }: { sessionId: string; task
     recording ? (st?.hearing ? { orb: "watching", word: "Hearing you" } : { orb: "watching", word: "Listening", sub: "Do the task once. Say why as you go." })
     : justDone ? { orb: "thinking", word: last?.byVoice ? "Got it, you're done" : "Got it" }
     : stage === "failed" ? { orb: "idle", word: "I couldn't learn that one", sub: task?.learnError ?? undefined }
+    : stage === "unsure" ? { orb: "idle", word: "Was that a task?", sub: task?.learnError ?? undefined }
     : { orb: "thinking", word: "Thinking", sub: (stage && STAGE[stage]) || "Getting ready" };
 
   return (
@@ -133,21 +145,34 @@ export function TeachMode({ sessionId, task, onExit }: { sessionId: string; task
             {keys.teach ? <span className="inline-flex items-center gap-1.5"><Kbd>{keys.teach}</Kbd>stop</span> : null}
             {keys.pen ? <span className="inline-flex items-center gap-1.5"><Kbd>{keys.pen}</Kbd>draw</span> : null}
           </p>
+          <p className="mt-1 text-center text-[13px] text-muted-foreground">
+            Changed your mind? <button type="button" className="underline-offset-2 hover:text-foreground hover:underline" disabled={!!busy} onClick={() => run("cancel", () => ext("cancel"))}>Cancel</button> or say “never mind”
+          </p>
         </>
       ) : stage === "failed" ? (
         <div className="flex gap-2">
           <Button className="flex-1 rounded-full" onClick={() => run("relearn", () => api(`/sessions/${sessionId}/learn`, "POST"))} disabled={!!busy}><RotateCcw />Try again</Button>
-          <Button variant="ghost" className="rounded-full" onClick={onExit}>Close</Button>
+          <Button variant="ghost" className="rounded-full" onClick={() => remove()} disabled={!!busy}>Throw it away</Button>
         </div>
+      ) : stage === "unsure" ? (
+        <>
+          <Button className="h-11 w-full rounded-full text-[15px]" onClick={() => remove()} disabled={!!busy}>Throw it away</Button>
+          <div className="mt-2 flex items-center justify-center gap-1">
+            <Button variant="ghost" size="sm" className="rounded-full text-muted-foreground" disabled={!!busy} onClick={() => remove(() => { ext("start").catch((e) => toast.error(e.message)); })}>Show you again</Button>
+            <Button variant="ghost" size="sm" className="rounded-full text-muted-foreground" disabled={!!busy} onClick={() => run("relearn", () => api(`/sessions/${sessionId}/learn`, "POST"))}>Learn it anyway</Button>
+          </div>
+        </>
       ) : (
-        <p className="py-1.5 text-center text-[13px] text-muted-foreground">Learning from your demo. This takes about a minute.</p>
+        <p className="py-1.5 text-center text-[13px] text-muted-foreground">
+          Learning from your demo. This takes about a minute. <button type="button" className="underline-offset-2 hover:text-foreground hover:underline" disabled={!!busy} onClick={() => remove()}>Cancel</button>
+        </p>
       )}>
       {(recording || learning) && (st?.hearing || lastSaid) ? (
         <div className="mx-auto mt-7 max-w-[34ch] text-center">
           {recording && st?.hearing && !lastSaid ? <p className="shimmer text-[15px]">Hearing you…</p> : <Heard text={lastSaid!} k={live?.turns?.length} />}
         </div>
       ) : null}
-      <Notes cards={cards} events={events} recording={recording} />
+      {stage === "unsure" && !cards.length ? null : <Notes cards={cards} events={events} recording={recording} />}
     </Frame>
   );
 }
@@ -212,6 +237,7 @@ function Review({ sessionId, task, st, events, onExit }: { sessionId: string; ta
   const [typing, setTyping] = useState(false);
   const [text, setText] = useState("");
   const [note, setNote] = useState<string | null>(null);
+  const [confirmRemove, setConfirmRemove] = useState(false);
   const { busy, run } = useAction();
   const since = useRef(Date.now());
   const askWhenUpdated = useRef(false);
@@ -265,6 +291,9 @@ function Review({ sessionId, task, st, events, onExit }: { sessionId: string; ta
   }, [p?.runId, p?.status]);
 
   const finish = () => { ext("unlisten").catch(() => {}); ext("hush").catch(() => {}); onExit(); };
+  // "Remove the task": throw it away and go back to the dashboard. The mic and the voice stop first.
+  const removeIt = () => run("remove", async () => { ext("unlisten").catch(() => {}); ext("hush").catch(() => {}); setListening(false); await removeTask(sessionId, practiceRun); toast("Okay, I threw that task away."); onExit(); });
+  const stopListening = () => { ext("unlisten").catch(() => {}); ext("hush").catch(() => {}); setListening(false); setPhase("paused"); setNote(null); };
   const showAgain = () => { ext("unlisten").catch(() => {}); ext("hush").catch(() => {}); onExit(); ext("start").catch((e) => toast.error(e.message)); };
   const approve = () => (practiced ? finish() : startPractice());
 
@@ -280,6 +309,8 @@ function Review({ sessionId, task, st, events, onExit }: { sessionId: string; ta
       else if (said.intent === "approve" || said.intent === "run") { if (practiced && said.intent === "approve") return finish(); await say(back); startPractice(); }
       else if (said.intent === "schedule" && said.schedule) { await api("/schedules", "POST", { specId, ...said.schedule }).catch((e) => toast.error(e.message)); await say(back); }
       else if (said.intent === "teach") showAgain();
+      else if (said.intent === "discard") { await say(back); removeIt(); }
+      else if (said.intent === "stop") { await say(back); stopListening(); }
     })();
   }, [said?.n, said?.intent]);
   const thinking = said?.intent === "thinking" && said.at >= since.current;
@@ -330,11 +361,16 @@ function Review({ sessionId, task, st, events, onExit }: { sessionId: string; ta
           <Button className="h-11 w-full rounded-full text-[15px]" onClick={approve} disabled={phase === "practicing" || building || busy === "practice"}>
             {busy === "practice" ? <LoaderCircle className="animate-spin" /> : null}{practiced ? "Looks right" : "Looks right, try it once"}
           </Button>
-          <div className="mt-2 flex items-center justify-center gap-1 text-[13px]">
+          <div className="mt-2 flex flex-wrap items-center justify-center gap-1 text-[13px]">
             <Button variant="ghost" size="sm" className="rounded-full text-muted-foreground" onClick={showAgain}>Show you again</Button>
             {listening ? <Button variant="ghost" size="sm" className="rounded-full text-muted-foreground" onClick={() => { ext("unlisten").catch(() => {}); ext("hush").catch(() => {}); setListening(false); setPhase("paused"); setNote(null); }}>Stop listening</Button>
               : <Button variant="ghost" size="sm" className="rounded-full text-muted-foreground" onClick={() => { setNote(null); setPhase(question ? "asking" : "listening"); listen(); }}>Listen again</Button>}
             <Button variant="ghost" size="sm" className="rounded-full text-muted-foreground" onClick={() => setTyping((x) => !x)}>Type instead</Button>
+            {/* Two taps, so a stray click never throws a task away. Saying "remove the task" does it too. */}
+            <Button variant="ghost" size="sm" className={cn("rounded-full text-muted-foreground", confirmRemove && "text-destructive")} disabled={busy === "remove"}
+              onClick={() => { if (confirmRemove) removeIt(); else { setConfirmRemove(true); setTimeout(() => setConfirmRemove(false), 4000); } }}>
+              {busy === "remove" ? <LoaderCircle className="animate-spin" /> : null}{confirmRemove ? "Tap again to remove" : "Remove task"}
+            </Button>
           </div>
           {typing ? (
             <div className="mt-2">

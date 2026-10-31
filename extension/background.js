@@ -115,9 +115,11 @@ async function start(title, { skipMicCheck = false } = {}) {
 }
 
 // Stop can come from the button, the shortcut and "I'm done" at the same moment: they all share one stop.
+// Cancel is a stop that throws the recording away instead of learning it.
 let stopping = null;
 function stop(opts) { return (stopping ??= finish(opts).finally(() => { stopping = null; })); }
-async function finish({ byVoice = false } = {}) {
+const cancel = (opts) => stop({ ...opts, discard: true });
+async function finish({ byVoice = false, discard = false } = {}) {
   const r = await current();
   if (!r) throw new Error("not recording");
   await save(null);
@@ -127,6 +129,12 @@ async function finish({ byVoice = false } = {}) {
     const a = await chrome.runtime.sendMessage({ target: "offscreen", type: "stop" });
     if (a?.error) r.audioError = a.error;
     await chrome.offscreen.closeDocument();
+  }
+  if (discard) {
+    await api(`/sessions/${r.id}`, "DELETE").catch(() => {});
+    const result = { id: r.id, learning: false, discarded: true, cancelled: true, error: null, byVoice, at: Date.now() };
+    await chrome.storage.local.set({ last: result });
+    return result;
   }
   await sleep(1000); // last "after" shots
   // The Agent learns the task on its own from here: names it, writes the spec, builds and tests it.
@@ -273,7 +281,7 @@ async function currentTab() {
 chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {});
 
 // Exposed for tests and the DevTools console.
-globalThis.showrun = { start, stop, status, connect, disconnect, command, setMode, speak, hush };
+globalThis.showrun = { start, stop, cancel, status, connect, disconnect, command, setMode, speak, hush };
 
 // Whether you are talking right now (the offscreen recorder hears it first), for the sidebar to show.
 let hearing = false;
@@ -284,6 +292,10 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
   // You said you're done. Only for the recording that is still running: a late one (Stop was pressed) is ignored.
   if (msg.type === "saidDone") {
     current().then((r) => { if (r?.id === msg.sessionId) return stop({ byVoice: true }); }).catch((e) => console.warn("couldn't stop:", e.message));
+    return;
+  }
+  if (msg.type === "saidCancel") {
+    current().then((r) => { if (r?.id === msg.sessionId) return cancel({ byVoice: true }); }).catch((e) => console.warn("couldn't cancel:", e.message));
     return;
   }
   if (msg.type === "micGranted") {
@@ -301,7 +313,7 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
     return;
   }
   const fn = {
-    start: () => start(msg.title), stop, status: async () => ({ ...(await status()), waitingForMic: !!(pendingStart ?? (await chrome.storage.session.get("pendingStart")).pendingStart) }),
+    start: () => start(msg.title), stop, cancel: () => cancel(), status: async () => ({ ...(await status()), waitingForMic: !!(pendingStart ?? (await chrome.storage.session.get("pendingStart")).pendingStart) }),
     sites: async () => ({ sites: await sites() }),
     connect: async () => connect(msg.site ?? (await currentTab()).site),
     disconnect: () => disconnect(msg.site),

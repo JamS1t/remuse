@@ -145,6 +145,8 @@ const hasVoice = (id: string) => { const f = join(sessionDir(id), "voice.wav"); 
 const isEmpty = (id: string) =>
   !(db.prepare(`SELECT 1 FROM events WHERE session_id = ? AND ${ACTIONS} LIMIT 1`).get(id)) &&
   !(db.prepare("SELECT 1 FROM specs WHERE session_id = ? LIMIT 1").get(id)) && !hasVoice(id);
+// A task thrown away while it was being learned: learning stops at its next step instead of writing to nothing.
+const gone = (id: string) => !db.prepare("SELECT 1 FROM sessions WHERE id = ?").get(id);
 function discard(id: string) {
   db.prepare("DELETE FROM events WHERE session_id = ?").run(id);
   db.prepare("DELETE FROM turns WHERE session_id = ?").run(id);
@@ -183,6 +185,7 @@ async function learn(id: string, offsetMs: number) {
     const cards = await liveCards(id);
     if (cards.length) db.prepare("UPDATE sessions SET cards = ? WHERE id = ?").run(JSON.stringify(cards), id);
     await transcribeSession(id, offsetMs);
+    if (gone(id)) return;
     stage(id, "understanding");
     // Marks drawn on a chart or canvas: SAM 3.1 finds what was circled, kept on the mark.
     await resolveMarks(full(id).events, sessionDir(id), (eventId, extra) => {
@@ -194,10 +197,12 @@ async function learn(id: string, offsetMs: number) {
     // What they asked for that the task doesn't do yet: asked out loud in the review, with the steps it wasn't sure of.
     const missing = await coverage(spec, s.turns as Turn[], s.cards);
     if (missing.length) spec.questions = [...(spec.questions ?? []), ...missing];
+    if (gone(id)) return;
     if (spec.title && !session(id).title) db.prepare("UPDATE sessions SET title = ? WHERE id = ?").run(spec.title, id);
     const specId = saveSpec(id, spec, "Learned by Muse Spark from your recording");
     stage(id, "building");
     const r = await build(spec, pagesOf(id), new Date(session(id).started_at).toLocaleDateString("en-CA", { timeZone: "Asia/Manila" }));
+    if (gone(id)) return;
     db.prepare("UPDATE specs SET code = ?, tests = ? WHERE id = ?").run(r.code, JSON.stringify(r.tests), specId);
     stage(id, "ready");
     endLive(id);
@@ -205,8 +210,9 @@ async function learn(id: string, offsetMs: number) {
     // ponytail: no practice by itself any more. Learning always follows teaching, and the review that follows reads the
     // plan aloud first: practice starts when you say it looks right ("Practice once" is one tap if the sidebar was closed).
   } catch (e) {
-    stage(id, "failed", (e as Error).message);
     endLive(id);
+    if (gone(id)) return;
+    stage(id, "failed", (e as Error).message);
     notify("Remuse couldn't learn that task", (e as Error).message, `http://127.0.0.1:${PORT}/#/session/${id}`);
   }
 }
@@ -262,6 +268,8 @@ async function hearSaid(sessionId: string, wav: Uint8Array) {
       const { changes } = await applyFeedback(row, text, { practice: false });
       set({ intent: "change", changes, speak: changes.length ? changes : ["I changed it."] });
     } else if (r.intent === "approve" || r.intent === "run") set({ intent: r.intent, speak: ["Okay, I'll try it once on your example."] });
+    else if (r.intent === "discard") set({ intent: r.intent, speak: ["Okay, I've thrown that task away."] });
+    else if (r.intent === "stop") set({ intent: r.intent, speak: ["Okay, I'll stop listening."] });
     else if (r.intent === "schedule") set({ intent: r.intent, schedule: r.schedule, speak: ["Okay, it'll repeat on that schedule."] });
     else set({ intent: r.intent });
   } catch (e) { set({ intent: "none", error: (e as Error).message }); }
@@ -780,8 +788,20 @@ async function route(req: IncomingMessage, res: ServerResponse) {
       const { endedAt, audioOffsetMs, learn: auto } = await json(req);
       db.prepare("UPDATE sessions SET ended_at = ?, audio_offset_ms = ? WHERE id = ?").run(endedAt ?? Date.now(), audioOffsetMs ?? null, id);
       if (isEmpty(id)) { discard(id); return send(res, 200, { id, discarded: true }); }
-      // Proactive: learn the whole task in the background (name, spec, tested code). The sidebar follows along.
-      if (auto !== false) { learn(id, audioOffsetMs ?? 0); return send(res, 202, { id, learning: true }); }
+      if (auto !== false) {
+        // Nothing done and nothing understood (a misclick, a start by mistake, words it couldn't make out): ask
+        // whether that was a task instead of learning something made up.
+        const cards = await liveCards(id);
+        const acted = (db.prepare("SELECT COUNT(*) AS n FROM events WHERE session_id = ? AND kind IN ('click', 'input', 'key', 'upload', 'mark')").get(id) as any).n as number;
+        if (!cards.length && acted <= 1) {
+          endLive(id);
+          stage(id, "unsure", acted ? "I saw one click and couldn't make out what you wanted." : "I didn't see you do anything, and I couldn't make out what you wanted.");
+          return send(res, 200, { id, unsure: true });
+        }
+        // Proactive: learn the whole task in the background (name, spec, tested code). The sidebar follows along.
+        learn(id, audioOffsetMs ?? 0);
+        return send(res, 202, { id, learning: true });
+      }
       await transcribeSession(id, audioOffsetMs ?? 0);
       return send(res, 200, full(id));
     }

@@ -34,14 +34,40 @@ try {
   const extId = new URL(sw.url()).host;
   const call = (fn: string, ...a: unknown[]) => sw.evaluate(([f, args]) => (globalThis as any).showrun[f as string](...(args as unknown[])), [fn, a] as const) as Promise<any>;
   const recording = async () => !!(await call("status")).recording;
+  // The sidebar is open (in its own tab here), as it is when the shortcut opens it.
+  const side = await ctx.newPage();
+  await side.setViewportSize({ width: 400, height: 860 });
+  await side.goto(`chrome-extension://${extId}/sidepanel.html`);
+  const ui = side.frameLocator("#ui");
   const page = await ctx.newPage();
   await page.goto(SITE);
 
   await call("command", "teach");
   for (let i = 0; i < 20 && !(await recording()); i++) await sleep(500);
   check("the teach shortcut starts a recording", await recording());
+  await sleep(2500);
   await call("command", "teach");
   check("pressed again, it stops", !(await recording()));
+  // Nothing done, nothing understood: not learned. Remuse asks whether that was a task.
+  const first = (await call("status")).last;
+  let t0: any;
+  for (let i = 0; i < 30; i++) { t0 = ((await (await fetch(`${API}/tasks`)).json()) as any[]).find((x) => x.sessionId === first?.id); if (t0?.learnStage) break; await sleep(500); }
+  check("a recording with nothing done or understood isn't learned; Remuse asks", t0?.learnStage === "unsure" && !t0?.specId, JSON.stringify({ last: first, task: t0 }));
+  await ui.getByText("Was that a task?").waitFor({ timeout: 20000 }).catch(() => {});
+  const asks = await ui.getByText("Was that a task?").isVisible().catch(() => false);
+  if (!asks) console.log("   sidebar sees:", await side.frames()[1]?.evaluate(() => fetch("/api/tasks").then((r) => r.json()).then((t) => JSON.stringify({ teach: localStorage.getItem("remuse.teach"), tasks: t.map((x: any) => [x.sessionId, x.learnStage]) }))).catch((e) => String(e)));
+  check("the sidebar asks \"Was that a task?\"", asks);
+  await side.screenshot({ path: join(tmp, "unsure.png") }); console.log("   screenshot:", join(tmp, "unsure.png"));
+  await ui.getByRole("button", { name: "Throw it away" }).click({ timeout: 5000 }).catch(() => {});
+  await ui.getByRole("button", { name: /Watch me do a task/ }).waitFor({ timeout: 8000 }).catch(() => {});
+  check("\"Throw it away\" removes it and goes back to the dashboard", (await fetch(`${API}/sessions/${first?.id}`)).status === 404 && await ui.getByRole("button", { name: /Watch me do a task/ }).isVisible().catch(() => false));
+  await page.bringToFront();
+  // Cancel while teaching: the recording is thrown away, nothing to learn.
+  await call("command", "teach");
+  for (let i = 0; i < 20 && !(await recording()); i++) await sleep(500);
+  const cid = (await call("status")).rec?.id;
+  await call("cancel");
+  check("cancel throws the recording away", !(await recording()) && (await fetch(`${API}/sessions/${cid}`)).status === 404 && (await call("status")).last?.cancelled === true, JSON.stringify((await call("status")).last));
   await call("setMode", "review");
   await call("command", "teach"); await sleep(1500);
   check("during a review it never starts a new recording", !(await recording()));
