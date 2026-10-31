@@ -2,7 +2,7 @@
 // Run: npm start   (port 3200, reads MODEL_API_KEY from ../.env)
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { DatabaseSync } from "node:sqlite";
-import { mkdirSync, readFileSync, writeFileSync, existsSync, rmSync, statSync, realpathSync, watch, type FSWatcher } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync, writeFileSync, existsSync, rmSync, statSync, realpathSync, watch, type FSWatcher } from "node:fs";
 import { join, dirname, extname } from "node:path";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
@@ -666,6 +666,12 @@ async function route(req: IncomingMessage, res: ServerResponse) {
   }
   if (p[1] === "schedules" && p[2] && m === "DELETE") { db.prepare("DELETE FROM schedules WHERE id = ?").run(Number(p[2])); watchFolders(); return send(res, 200, schedules()); }
   // Saved tasks for the sidebar: every recording with its latest Task Spec.
+  // The extension writes down every mic drop and reconnect, with the mic's state then (see offscreen.js mend()).
+  if (url.pathname === "/api/mic-log" && m === "POST") {
+    const b = await json(req);
+    appendFileSync(join(DATA, "mic.log"), `${JSON.stringify({ at: new Date().toISOString(), session: b.session ?? null, ok: b.ok ?? null, note: !!b.note, why: String(b.why ?? "").slice(0, 300), detail: b.detail ?? null })}\n`);
+    return send(res, 200, { ok: true });
+  }
   if (url.pathname === "/api/tasks" && m === "GET")
     return send(res, 200, (db.prepare(`SELECT s.id AS sessionId, s.title, s.started_at AS startedAt, s.ended_at AS endedAt, s.learn_stage AS learnStage, s.learn_error AS learnError,
       x.id AS specId, x.version, x.json, x.tests, x.code IS NOT NULL AS built

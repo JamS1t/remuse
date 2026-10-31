@@ -304,7 +304,12 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
   if (msg.type === "event") { onEvent(msg.ev, sender).catch((e) => console.warn("event dropped:", e.message)); return; }
   if (msg.type === "hearing") { hearing = !!msg.on; return; }
   if (msg.type === "level") { micLevel = msg.level; return; }
-  if (msg.type === "mic") { mic = msg.ok ? null : msg.why ?? "the microphone stopped"; return; } // null: working
+  if (msg.type === "mic") {
+    if (!msg.note) mic = msg.ok ? null : msg.why ?? "the microphone stopped"; // null: working
+    // Written down on the Agent (data/mic.log), so a drop can be traced to its cause afterwards.
+    current().then((r) => api("/mic-log", "POST", { session: r?.id ?? null, ok: msg.ok ?? null, note: !!msg.note, why: msg.why, detail: msg.detail ?? null })).catch(() => {});
+    return;
+  }
   // You said you're done. Only for the recording that is still running: a late one (Stop was pressed) is ignored.
   if (msg.type === "saidDone") {
     current().then((r) => { if (r?.id === msg.sessionId) return stop({ byVoice: true }); }).catch((e) => console.warn("couldn't stop:", e.message));

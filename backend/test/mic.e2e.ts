@@ -62,6 +62,11 @@ try {
   const silent: number[] = [];
   for (let i = 0; i + rate * 5 <= n; i += rate * 5) { let s = 0; for (let j = i; j < i + rate * 5; j++) { const v = b.readInt16LE(44 + 2 * j); s += v * v; } if (Math.sqrt(s / (rate * 5)) < 30) silent.push(i / rate); }
   check("the mic page was reached", !!off);
+  // Every drop is written down with the mic's state, so a real one can be told apart from the others.
+  const diag = existsSync(join(data, "mic.log")) ? readFileSync(join(data, "mic.log"), "utf8").trim().split("\n").map((l) => JSON.parse(l)) : [];
+  const drop = diag.find((d) => d.ok === false);
+  check("the drop is logged with the mic's state", !!drop && drop.session === stopped.id && drop.why && "enabled" in (drop.detail ?? {}) && "context" in (drop.detail ?? {}), JSON.stringify(diag).slice(0, 400));
+  check("and so is the reconnect", diag.some((d) => d.ok === true), JSON.stringify(diag.map((d) => d.ok)));
   check("after the mic goes silent at 15 s, it comes back: sound again in the last 30 s", silent.every((t) => t < 30) && n / rate > 55, `${(n / rate).toFixed(0)} s; silent from: ${silent.join(", ") || "none"}`);
 } catch (e) {
   check("the test ran to the end", false, (e as Error).stack ?? String(e));

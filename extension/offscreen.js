@@ -43,29 +43,35 @@ async function listen() {
     parts.push(p); hearing(p);
   };
   source.connect(node);
-  stream.getAudioTracks()[0].onended = () => mend("the microphone stopped");
+  const track = stream.getAudioTracks()[0];
+  track.onended = () => mend("the microphone stopped");
+  // Chrome or Windows muting the track is one of the possible causes: noted when it happens.
+  track.onmute = () => chrome.runtime.sendMessage({ type: "mic", note: true, why: "track muted", detail: micState() }).catch(() => {});
+  track.onunmute = () => chrome.runtime.sendMessage({ type: "mic", note: true, why: "track unmuted", detail: micState() }).catch(() => {});
   lastBlock = Date.now(); zeros = 0;
 }
 
 // A real mic always picks up something, even in a quiet room. No sound at all for a few seconds (no blocks, or only
 // exact zeros) means the connection broke: reconnect it, and tell the sidebar, so you're never talking to nothing.
+// What the mic looked like at that moment, for the log: which of the possible causes it was.
+const micState = () => { const t = stream?.getAudioTracks()[0]; return { track: t?.readyState, muted: t?.muted, enabled: t?.enabled, label: t?.label, context: ctx?.state, sinceBlockMs: Date.now() - lastBlock, zerosS: +zeros.toFixed(1), recordingS: ctx ? +(ctx.currentTime - t0).toFixed(1) : null }; };
 async function mend(why) {
   if (!ctx || Date.now() - mendAt < 4000) return;
   mendAt = Date.now(); drops++;
-  chrome.runtime.sendMessage({ type: "mic", ok: false, why }).catch(() => {});
+  chrome.runtime.sendMessage({ type: "mic", ok: false, why, detail: micState() }).catch(() => {});
   try { node?.disconnect(); source?.disconnect(); } catch { /* already gone */ }
   stream?.getTracks().forEach((t) => t.stop());
   try {
     if (ctx.state === "suspended") await ctx.resume();
     await listen();
-    chrome.runtime.sendMessage({ type: "mic", ok: true }).catch(() => {});
+    chrome.runtime.sendMessage({ type: "mic", ok: true, why: "reconnected", detail: micState() }).catch(() => {});
   } catch (e) { chrome.runtime.sendMessage({ type: "mic", ok: false, why: `${why}, and couldn't reconnect: ${e.message}` }).catch(() => {}); }
 }
 setInterval(() => {
   if (!ctx) return;
   if (ctx.state === "suspended") ctx.resume().catch(() => {});
   if (Date.now() - lastBlock > 2500) mend("no sound came from the microphone");
-  else if (zeros > 3) { zeros = 0; mend("the microphone went silent"); }
+  else if (zeros > 3) { mend("the microphone went silent"); zeros = 0; }
 }, 1000);
 
 // While Remuse speaks, what the mic picks up is Remuse itself: not heard until it's done.
