@@ -56,6 +56,7 @@ try {
   await call("start", "");
   for (let i = 0; i < 30 && !(await call("status"))?.recording; i++) await sleep(500);
   const recId = (await call("status")).rec?.id;
+  const startedAt = (await call("status")).rec?.t0 ?? Date.now();
   await page.bringToFront(); await sleep(2500);
   await page.getByRole("link", { name: "Report" }).click();
 
@@ -85,6 +86,10 @@ try {
   check("while recording, each sentence is heard whole", !!lv?.turns?.some((t: any) => /report/i.test(t.text)), JSON.stringify(lv?.turns));
   check("cards appear, each citing words or a click", lv?.cards?.length > 0 && lv.cards.every((c: any) => c.quote || c.events?.length), JSON.stringify(lv?.cards));
   check("saying \"okay, that's it\" ends the recording by itself", stoppedByVoice);
+  // "Okay, that's it." ends about 10.5 s into the clip. It must end the recording within a few seconds of that,
+  // not after the note-taking queue (James waited half a minute).
+  const endedAfter = (((await call("status")).last?.at ?? Date.now()) - startedAt) / 1000;
+  check("and soon after it's said, not after the notes queue", endedAfter < 22, `ended ${endedAfter.toFixed(1)} s into the recording`);
 
   let saved: any = null;
   for (let i = 0; i < 20; i++) { saved = await get(`/sessions/${recId}`); if (saved.cards?.length) break; await sleep(1000); }

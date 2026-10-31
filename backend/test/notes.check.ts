@@ -1,6 +1,6 @@
 // Live notes while teaching: cards must cite words or real events, and only a real "I'm done" ends the demo.
 // No model calls. Run: node test/notes.check.ts
-import { applyOps, cancelPhrase, endPhrase } from "../src/notes.ts";
+import { applyOps, cancelPhrase, endPhrase, endStrength } from "../src/notes.ts";
 
 let fails = 0;
 const check = (name: string, ok: boolean, detail?: unknown) => { console.log(`${ok ? "PASS" : "FAIL"}  ${name}${ok ? "" : `  (${JSON.stringify(detail)})`}`); if (!ok) fails++; };
@@ -11,6 +11,10 @@ for (const s of ["I'm done with this tab", "that's it for the title", "proceed t
 for (const s of ["Cancel.", "Never mind.", "Okay, forget it.", "Huwag na.", "wag na lang", "Cancel that, Remuse.", "Throw it away."]) check(`"${s}" cancels the demo`, cancelPhrase(s));
 for (const s of ["Cancel the order", "I'm done", "never mind the title, keep going and click Save", "don't forget it"]) check(`"${s}" doesn't cancel`, !cancelPhrase(s));
 check("an end phrase is not a cancel", !cancelPhrase("Okay, that's it.") && !endPhrase("Never mind."));
+// Clear ones end it at once; loose ones ("proceed" is also "let's proceed to the reach") get a quick check.
+for (const s of ["so that will be my task I'm done", "I am done.", "Tapos na po.", "Okay, that's all."]) check(`"${s}" is a clear end`, endStrength(s) === "strong", endStrength(s));
+for (const s of ["proceed", "Okay, that's it.", "go ahead", "sige na"]) check(`"${s}" needs a quick check`, endStrength(s) === "weak", endStrength(s));
+check(`"then next one let's proceed to the reach" isn't an end at all`, endStrength("then next one let's proceed to the reach") === null);
 
 const known = new Set([12, 13]);
 const c = applyOps([], [

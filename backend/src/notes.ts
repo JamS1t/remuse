@@ -6,8 +6,11 @@ import { askJson, text } from "./meta.ts";
 export type Card = { id: string; kind: "step" | "rule" | "read" | "question"; text: string; quote?: string; events?: number[] }; // events: event DB ids
 export type CardOp = { op: "add"; card: Omit<Card, "id"> } | { op: "edit"; id: string; card: Partial<Omit<Card, "id">> } | { op: "remove"; id: string };
 
-// Said at the end of what they say: they're done showing. English and Tagalog.
-export const END_PHRASES = ["i'm done", "im done", "i am done", "that's it", "thats it", "that's all", "thats all", "proceed", "go ahead", "you can start", "tapos na", "ayan na", "sige na", "done showing", "okay remuse", "ok remuse"];
+// Said at the end of what they say: they're done showing. English and Tagalog. Clear ones end the recording at once;
+// loose ones ("proceed" is also "let's proceed to the reach") get a quick check first.
+export const CLEAR_END = ["i'm done", "im done", "i am done", "that's all", "thats all", "tapos na", "done showing"];
+export const LOOSE_END = ["that's it", "thats it", "proceed", "go ahead", "you can start", "ayan na", "sige na", "okay remuse", "ok remuse"];
+export const END_PHRASES = [...CLEAR_END, ...LOOSE_END];
 const FILLER = new Set(["na", "now", "po", "please", "remuse", "okay", "ok"]);
 
 // Said at the end of what they say: throw this recording away. English and Tagalog.
@@ -31,6 +34,18 @@ function saidLast(said: string, phrases: string[]): boolean {
 /** Does this sentence end with "I'm done" (or the like)? Only at the end: "I'm done with this tab" doesn't count.
  *  A match is only a candidate: the note-taker confirms they meant the whole demo. */
 export const endPhrase = (said: string) => saidLast(said, END_PHRASES);
+/** "strong": clearly done, end now. "weak": maybe done, check quickly. null: not an end. */
+export const endStrength = (said: string): "strong" | "weak" | null => (saidLast(said, CLEAR_END) ? "strong" : saidLast(said, LOOSE_END) ? "weak" : null);
+
+/** A quick check, on its own (never behind the note-taking queue): did they mean they're done teaching, or that the
+ *  recording should be thrown away? A few seconds at most; no answer counts as no. */
+export async function confirmEnd(said: string, kind: "done" | "cancel"): Promise<boolean> {
+  const ask = askJson<any>([text(`A person is teaching a browser task to an assistant by voice, and it is being recorded. They just said: "${said}". ${kind === "done"
+    ? "Are they saying they have finished teaching and the recording should stop now? Not that they are done with a page, a tab, a field or one step."
+    : "Are they saying to stop and throw this whole recording away? Not cancelling something on the page."} Reply with ONLY JSON: {"yes": true} or {"yes": false}`)], "end-check");
+  const r = await Promise.race([ask, new Promise((ok) => setTimeout(() => ok(null), 8000))]).catch(() => null);
+  return (r as any)?.yes === true;
+}
 /** Does it end with "cancel" / "never mind" / "huwag na"? Confirmed by the note-taker too: the recording is dropped. */
 export const cancelPhrase = (said: string) => saidLast(said, CANCEL_PHRASES);
 

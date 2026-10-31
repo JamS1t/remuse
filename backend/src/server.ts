@@ -8,6 +8,7 @@ import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { silent, transcribe, calls, type Turn } from "./meta.ts";
 import { coverage } from "./evidence.ts";
+import type { Card } from "./notes.ts";
 import { readback } from "./readback.ts";
 import { resolveMarks } from "./marks.ts";
 import { revise, sortSaid, understand, type Spec } from "./understand.ts";
@@ -182,7 +183,8 @@ async function learn(id: string, offsetMs: number) {
   try {
     stage(id, "listening");
     // The notes taken while you taught (what you said you want): kept with the recording. A retry keeps the old ones.
-    const cards = await liveCards(id);
+    // Notes still being taken when you stopped: waited for 10 s at most, so learning starts promptly.
+    const cards = await Promise.race([liveCards(id), new Promise<Card[]>((ok) => setTimeout(() => ok(liveState(id)?.cards ?? []), 10_000))]);
     if (cards.length) db.prepare("UPDATE sessions SET cards = ? WHERE id = ?").run(JSON.stringify(cards), id);
     await transcribeSession(id, offsetMs);
     if (gone(id)) return;
@@ -784,7 +786,7 @@ async function route(req: IncomingMessage, res: ServerResponse) {
       return send(res, 202, { ok: true });
     }
     if (m === "GET" && p[3] === "say") return send(res, 200, heard.get(id) ?? null);
-    if (m === "GET" && p[3] === "live") return send(res, 200, liveState(id) ?? { turns: [], cards: [], thinking: false, error: null });
+    if (m === "GET" && p[3] === "live") return send(res, 200, liveState(id) ?? { turns: [], cards: [], thinking: false, error: null, ending: null });
     if (m === "PUT" && p[3] === "audio") {
       const wav = await body(req);
       if (wav.subarray(0, 4).toString() !== "RIFF") throw new HttpError(400, "audio must be WAV");

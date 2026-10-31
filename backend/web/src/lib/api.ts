@@ -22,7 +22,7 @@ export type SessionFull = {
 };
 // Notes taken while you teach: each from your words (quote) or what you did (event ids). See backend/src/notes.ts.
 export type Card = { id: string; kind: "step" | "rule" | "read" | "question"; text: string; quote?: string; events?: number[] };
-export type LiveState = { turns: { startMs: number; endMs: number; text: string }[]; cards: Card[]; thinking: boolean; error: string | null };
+export type LiveState = { turns: { startMs: number; endMs: number; text: string }[]; cards: Card[]; thinking: boolean; error: string | null; ending?: string | null };
 export type LogLine = { at: number; msg: string; level: "info" | "ok" | "warn" | "error"; shot?: string; why?: string; how?: "page" | "screen"; by?: string };
 export type ItemStatus = "waiting" | "running" | "approval" | "asking" | "planned" | "done" | "skipped" | "failed";
 export type Candidate = { url: string; title: string; vars: Record<string, unknown>; score: number | null; shot?: string; best?: boolean };

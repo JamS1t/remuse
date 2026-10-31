@@ -123,7 +123,8 @@ export function TeachMode({ sessionId, task, onExit }: { sessionId: string; task
   const secs = recording && st?.rec?.t0 ? Math.max(0, Math.floor((Date.now() - st.rec.t0) / 1000)) : 0;
   const justDone = !!last?.at && Date.now() - last.at < 1800 && !recording;
   const view: { orb: OrbState; word: string; sub?: string } =
-    recording ? (st?.hearing ? { orb: "watching", word: "Hearing you" } : { orb: "watching", word: "Listening", sub: "Do the task once. Say why as you go." })
+    recording && live?.ending ? { orb: "thinking", word: "Finishing", sub: `You said “${live.ending}”` }
+    : recording ? (st?.hearing ? { orb: "watching", word: "Hearing you" } : { orb: "watching", word: "Listening", sub: "Do the task once. Say why as you go." })
     : justDone ? { orb: "thinking", word: last?.byVoice ? "Got it, you're done" : "Got it" }
     : last?.error && !last.learning && !stage ? { orb: "idle", word: "That didn't save", sub: last.error }
     : stage === "failed" ? { orb: "idle", word: "I couldn't learn that one", sub: task?.learnError ?? undefined }
