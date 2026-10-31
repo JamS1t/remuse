@@ -521,7 +521,9 @@ export class Runner {
     for (const [i, step] of this.spec.steps.entries()) if (!(await this.step(step, this.spec.steps[i + 1]?.tab))) return;
     for (const v of this.spec.variables.filter((x) => x.kind === "computed" && !x.candidate)) {
       it.vars[v.name] = this.rules.compute[v.name]?.(it.vars);
-      this.log(`${v.name} = ${JSON.stringify(it.vars[v.name])} (computed)`, "info");
+      // A change since last time has nothing to compare with on the first run: say so rather than show a bare "null".
+      const firstRun = this.spec.variables.every((x) => it.vars[`prev_${x.name}`] == null);
+      this.log(`${v.name} = ${JSON.stringify(it.vars[v.name])} (computed)${it.vars[v.name] == null ? (firstRun ? ": nothing to compare with yet, this is the first run" : ": couldn't be worked out") : ""}`, "info");
     }
 
     // Decide. Your own rules come first: one that clearly applies (anything but the "otherwise" catch-all) decides,
