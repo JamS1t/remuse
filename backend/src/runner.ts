@@ -5,11 +5,14 @@ import { execFileSync, spawn } from "node:child_process";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { askJson, checker, ground, sam, text, png, type Box, type Part } from "./meta.ts";
+import { askJson, checker, ground, respond, sam, text, png, type Box, type Part } from "./meta.ts";
+import { BUDGET, canRecover, diagnose, firstRung, movePrompt, parseMove, repeated, unsafe, type Attempt, type Move, type Seen } from "./recover.ts";
+import { shownSteps } from "./readback.ts";
 import { load, same, type Rules } from "./build.ts";
 import type { Spec, Step, Target } from "./understand.ts";
 import { applyLogins } from "./logins.ts";
-import { combine, newlyAppeared, writes, type Verdict } from "./proof.ts";
+import { combine, gatedStep, IRREVERSIBLE, newlyAppeared, writes, type Verdict } from "./proof.ts";
+export { gatedStep, IRREVERSIBLE };
 import { handleFor, pluginFor } from "./plugins.ts";
 import { notify } from "./notify.ts";
 import { chromeReady, relayUrl } from "./chrome.ts";
@@ -81,7 +84,6 @@ export type Practice = {
 
 const VIEW = { width: 1440, height: 900 };
 const MOCK = process.env.MOCK_URL ?? "http://localhost:3100";
-export const IRREVERSIBLE = /\b(turn in|turn it in|hand in|mark as done|refund|replace|send|pay|submit|ship|confirm|delete|place order|issue|buy|checkout|check out|purchase|book|transfer|message seller|post|share|publish|approve|merge|archive|resolve)\b/i;
 // The browser profile runs use (its sign-ins live here). Tests point BROWSER_PROFILE at a throwaway one.
 export const PROFILE = process.env.BROWSER_PROFILE ? resolve(process.env.BROWSER_PROFILE) : fileURLToPath(new URL("../data/browser", import.meta.url));
 
@@ -171,7 +173,6 @@ export function itemKey(i: { url: string; label: string }) {
 }
 
 /** A step that waits for the person's OK in a real run: marked irreversible, a word like "refund", or such a site tool. */
-export const gatedStep = (s: Step) => !!s.irreversible || (s.do === "click" && IRREVERSIBLE.test(s.target?.name ?? "")) || (!!s.tool && IRREVERSIBLE.test(s.tool.name.replace(/_/g, " ")));
 
 /** Test sites only: an outcome by what it means ("send_replacement" is "replace", "refund_lost" is "lost_refund"),
  *  so a run can be scored whatever names the model gave the outcomes. */
@@ -769,6 +770,245 @@ export class Runner {
     this.log(`In the ${name} tab`, "info");
   }
 
+  /** The step with this item's values filled in ({{file_name}} → Lab5.pdf). */
+  private renderStep(raw: Step): Step {
+    const v = this.item.vars;
+    return { ...raw, url: render(raw.url, v), value: render(raw.value, v),
+      target: raw.target && { ...raw.target, name: render(raw.target.name, v) },
+      expect: raw.expect && { ...raw.expect, urlIncludes: render(raw.expect.urlIncludes, v), textIncludes: render(raw.expect.textIncludes, v) } };
+  }
+
+  /** The step's group as a person names it (keypresses fold into the step they finish): its goal, and its keys. */
+  private groupOf(s: Step): { text: string; keys: string[] } {
+    const all = [...this.spec.steps, ...Object.values(this.spec.outcomes).flatMap((o) => o.steps)];
+    const g = shownSteps(all).find((x) => x.ids.includes(s.id));
+    const ids = new Set(g?.ids ?? [s.id]);
+    return { text: g?.text ?? s.describe, keys: all.filter((x) => ids.has(x.id) && x.key).map((x) => x.key!) };
+  }
+
+  /** What's on the page that a try can use, numbered for the model. Each is stamped so the chosen one is found again. */
+  private elements(): Promise<Seen[]> {
+    return this.page.evaluate(() => {
+      document.querySelectorAll("[data-remuse-i]").forEach((e) => e.removeAttribute("data-remuse-i"));
+      const sel = 'button, a[href], input:not([type=hidden]), textarea, select, [role=button], [role=link], [role=menuitem], [role=menuitemradio], [role=tab], [role=checkbox], [role=textbox], [role=combobox], [role=option], [contenteditable=""], [contenteditable=true]';
+      const W = innerWidth, H = innerHeight;
+      const out: any[] = [];
+      for (const el of document.querySelectorAll<HTMLElement>(sel)) {
+        const r = el.getBoundingClientRect();
+        if (r.width < 2 || r.height < 2 || r.bottom < 0 || r.top > H * 2 || getComputedStyle(el).visibility === "hidden") continue;
+        const tag = el.tagName.toLowerCase();
+        const role = el.getAttribute("role") || (tag === "a" ? "link" : tag === "select" ? "combobox" : tag === "input" || tag === "textarea" ? "textbox" : "button");
+        const name = (el.getAttribute("aria-label") || el.getAttribute("placeholder") || el.getAttribute("title") || (tag === "input" || tag === "textarea" ? "" : el.innerText) || "").replace(/\s+/g, " ").trim().slice(0, 60);
+        const editable = tag === "input" || tag === "textarea" || el.isContentEditable || ["textbox", "searchbox", "combobox"].includes(el.getAttribute("role") ?? "");
+        const where = `${r.top < H / 3 ? "top" : r.top < (2 * H) / 3 ? "middle" : "bottom"} ${r.left < W / 3 ? "left" : r.left < (2 * W) / 3 ? "centre" : "right"}`;
+        el.setAttribute("data-remuse-i", String(out.length + 1));
+        out.push({ i: out.length + 1, role, name, id: el.id || undefined, editable, where, disabled: (el as HTMLButtonElement).disabled || el.getAttribute("aria-disabled") === "true" || undefined, href: (el as HTMLAnchorElement).href || undefined });
+        if (out.length >= 120) break;
+      }
+      return out;
+    }).catch(() => []);
+  }
+
+  private lastTried = ""; // what the last recovery that ran out of ideas tried, for the report
+
+  /** The proof picture for a fix: the control it used, outlined. The control is known (no model has to point), and
+   *  SAM 3.1 gives its exact edges when it can; otherwise its own box is outlined, and the note says which. */
+  private async outlined(loc: Locator | null): Promise<{ file: string; note: string }> {
+    const b = loc ? await loc.boundingBox().catch(() => null) : null;
+    const shot = await this.shot();
+    if (!b) return { file: shot.file, note: "" };
+    const [vw, vh] = await this.page.evaluate(() => [innerWidth, innerHeight]).catch(() => [VIEW.width, VIEW.height]);
+    const box: Box = { x_min: (b.x / vw) * 1000, y_min: (b.y / vh) * 1000, x_max: ((b.x + b.width) / vw) * 1000, y_max: ((b.y + b.height) / vh) * 1000 };
+    let use = box, note = "SAM 3.1 unavailable, so its own edges are outlined";
+    try {
+      const kind = /textbox|combobox|searchbox/.test((await loc!.getAttribute("role").catch(() => null)) ?? "") ? "text box" : "button";
+      const cx = (box.x_min + box.x_max) / 2, cy = (box.y_min + box.y_max) / 2;
+      const area = (q: Box) => (q.x_max - q.x_min) * (q.y_max - q.y_min);
+      const hit = (await sam(shot.buf, kind)).filter((q) => cx >= q.x_min && cx <= q.x_max && cy >= q.y_min && cy <= q.y_max).sort((p, q) => area(p) - area(q))[0];
+      if (hit) { use = hit; note = "SAM 3.1 outlined it"; } else note = "SAM 3.1 found no edges there, so its own edges are outlined";
+    } catch { /* SAM 3.1 couldn't be reached: its own box */ }
+    const seen = await this.marked([{ box: use, kind: "pick", label: note === "SAM 3.1 outlined it" ? "SAM 3.1" : "used" }]);
+    return { file: seen.file, note };
+  }
+
+  /** A step failed: work out another way to its goal before giving up or asking (rules in recover.ts). Cheapest,
+   *  most predictable tries first; each counts only once the page proves the step done (or, with nothing on the page
+   *  to read, a look at the screen agrees). True when the step is now done. Never for steps that wait for your OK. */
+  private async recover(raw: Step, err: Error): Promise<boolean> {
+    if (!canRecover(raw) || this.stopped || !["click", "fill", "press", "upload"].includes(raw.do)) return false;
+    if (/account|signed in as|isn't signed in|sign-in page|run stopped/i.test(err.message)) return false;
+    const step = this.renderStep(raw);
+    const t = step.target;
+    const t0 = Date.now();
+    const group = this.groupOf(raw);
+    // The step's own click or key press already happened (its check is what failed): pressing that control again
+    // could do it twice, so it's never pressed again here. Typing may be redone: the read-back showed it didn't land.
+    const ran = /^step didn't work/.test(err.message) && (step.do === "click" || step.do === "press");
+    const same = (name?: string) => ran && !!name && !!t?.name && name.trim().toLowerCase() === t.name.trim().toLowerCase();
+    const tried: Attempt[] = [];
+    let calls = 0;
+    const here = () => this.page.url();
+    const snap = async () => `${this.page.url()}|${(await this.page.innerText("body").catch(() => "")).length}`;
+
+    // What's wrong, from the page itself (no model): the first thing you read.
+    const sig = await this.page.evaluate(() => ({
+      overlay: [...document.querySelectorAll('[role=dialog], [aria-modal="true"], dialog[open]')].some((d) => { const r = (d as HTMLElement).getBoundingClientRect(); return r.width > 0 && r.height > 0; }),
+      loading: document.readyState !== "complete", width: innerWidth,
+    })).catch(() => ({ overlay: false, loading: false, width: VIEW.width }));
+    const named = t?.role && t.name ? this.page.getByRole(t.role as any, { name: t.name }) : null;
+    const hidden = named ? (await named.count().catch(() => 0)) > 0 && !(await named.first().isVisible().catch(() => false)) : false;
+    const d = diagnose({ signin: false, ...sig, urlMatches: true, targetHidden: hidden });
+    this.log(`Working it out: ${d.say} Goal: ${group.text.replace(/[.\s]+$/, "")}.`, "info", (await this.shot()).file);
+
+    const one = async (l: Locator) => ((await l.count().catch(() => 0)) === 1 && (await l.isVisible().catch(() => false)) ? l : null);
+    const nameOf = (l: Locator) => l.evaluate((el: any) => (el.getAttribute("aria-label") || el.innerText || el.value || "").replace(/\s+/g, " ").trim().slice(0, 60)).catch(() => "");
+    const isSafe = async (l: Locator) => !IRREVERSIBLE.test(await nameOf(l));
+    // The step's own action on a control that does its job, then the page's proof (quiet: the trace says it).
+    const finish = async (loc: Locator | null): Promise<Verdict | null> => {
+      const before = await this.page.innerText("body").catch(() => "");
+      if (loc && step.do === "click") await loc.click({ timeout: 5000 });
+      else if (loc && step.do === "fill") await loc.fill(step.value ?? "", { timeout: 5000 });
+      else if (loc && step.do === "press") await loc.press(step.key ?? "Enter", { timeout: 5000 });
+      if (step.do === "upload") await this.upload(raw, step);
+      await this.page.waitForLoadState("load").catch(() => {});
+      return this.check(step, undefined, before, { look: true, quiet: true });
+    };
+    // A proven single swap (no earlier try changed the page) becomes the step's target, as a found button does.
+    const keep = (role?: string, name?: string) => {
+      if (!role || !name || name === t?.name || tried.slice(0, -1).some((a) => a.changed)) return;
+      const from = raw.target?.name ?? "";
+      raw.target = { role, name }; raw.healed = `was "${from}"`;
+      this.heal({ step: step.describe, from, to: name });
+      this.log(`Updated the task: “${name}” does what “${from}” did, proven above. The next ${this.spec.inputs.itemName ?? "item"} uses it directly.`, "ok");
+    };
+    // One try: skipped if already tried; logged as an idea with what the page showed; true when proven.
+    const attempt = async (rung: number, strategy: string, target: string | undefined, act: () => Promise<Verdict | null>, used?: Locator | null) => {
+      if (tried.length >= BUDGET.attempts || Date.now() - t0 > BUDGET.ms || this.stopped || repeated(tried, strategy, target)) return false;
+      const was = await snap();
+      let v: Verdict | null = null, why = "";
+      try { v = await act(); } catch (e) { why = (e as Error).message.split("\n")[0].replace(/^locator\.\w+: /, "").slice(0, 120); }
+      const changed = (await snap()) !== was;
+      const ok = v?.result === "verified";
+      why = v?.why ?? (why || (changed ? "the page changed, but the step isn't done yet" : "nothing changed on the page"));
+      tried.push({ rung, strategy, target, changed, verdict: v?.result ?? "error", why });
+      // A fix's picture has the control it used outlined (SAM 3.1's edges when it can); a miss is a plain screenshot.
+      const pic = ok ? await this.outlined(used ?? null) : { file: (await this.shot()).file, note: "" };
+      const more = v ? { why: v.why, how: v.proof === "none" ? undefined : v.proof, by: v.by } : undefined;
+      this.log(`Idea ${tried.length}: ${strategy}${target ? ` “${target}”` : ""} → ${ok ? "✓" : "✗"} ${ok ? "it worked" : why}`, ok ? "ok" : "warn", pic.file, more);
+      if (ok) this.log(`✓ ${step.describe}`, "ok", pic.file, { why: `fixed it myself (${strategy}${target ? ` “${target}”` : ""}): ${v!.why}${pic.note ? `; ${pic.note}` : ""}`, how: more!.how, by: more!.by });
+      return ok;
+    };
+    const dom = async () => (await this.locate(raw, step).catch(() => null))?.loc ?? null;
+
+    // 1. Still loading: wait, then look again.
+    if (firstRung(d) <= 1 && !ran) {
+      await this.page.waitForLoadState("networkidle", { timeout: 8000 }).catch(() => {});
+      const l = await dom();
+      if (l && (await isSafe(l)) && (await attempt(1, "waited for the page, then looked again", t?.name, () => finish(l), l))) return true;
+    }
+    // 2. Something in the way: close it, then look again.
+    if (firstRung(d) <= 2 && !ran) {
+      await this.page.keyboard.press("Escape").catch(() => {});
+      const close = await one(this.page.locator('[role=dialog] [aria-label*="close" i], [aria-modal="true"] [aria-label*="close" i], dialog[open] [aria-label*="close" i]').first());
+      if (close && (await isSafe(close))) await close.click({ timeout: 3000 }).catch(() => {});
+      const l = await dom();
+      if (l && (await isSafe(l)) && (await attempt(2, "closed what was in the way, then looked again", t?.name, () => finish(l), l))) return true;
+    }
+    // 3. The same thing found another way: a looser name, its words, its label.
+    if (t?.name && !ran) {
+      const alts: [string, Locator][] = [["found it by a looser name", t.role ? this.page.getByRole(t.role as any, { name: t.name }) : this.page.getByText(t.name)],
+        ["found it by its words", this.page.getByText(t.name, { exact: true })], ["found it by its label", this.page.getByLabel(t.name)]];
+      for (const [how, l] of alts) {
+        const loc = await one(l);
+        if (loc && (await isSafe(loc)) && (await attempt(3, how, await nameOf(loc) || t.name, () => finish(loc), loc))) { keep(t.role, await nameOf(loc)); return true; }
+      }
+    }
+    // 4. A keyboard route the site's plug-in knows for this purpose (Sheets: Ctrl+J to the Name Box).
+    if (step.do === "fill" || (step.do === "press" && !ran)) {
+      for (const r of pluginFor(here())?.routes ?? []) {
+        if (!r.purpose.test(`${group.text} ${step.describe}`) || r.keys.some((k) => unsafe({ action: "press", key: k, why: "" }, undefined, raw, group.keys, here()))) continue;
+        const ok = await attempt(4, `${r.keys.join(", then ")} (${r.why})`, undefined, async () => {
+          const before = await this.page.innerText("body").catch(() => "");
+          for (const k of r.keys) await this.page.keyboard.press(k);
+          if (step.do === "fill") { await this.page.keyboard.press("Control+A"); await this.page.keyboard.type(step.value ?? ""); }
+          else await this.page.keyboard.press(step.key ?? "Enter"); // the step's own key
+          return this.check(step, undefined, before, { look: true, quiet: true });
+        }, this.page.locator(":focus"));
+        if (ok) return true;
+      }
+    }
+    // 5. Muse Spark chooses from what's really on the page (or says nothing fits); repeated with what each try showed.
+    let none = 0;
+    while (calls < BUDGET.calls && tried.length < BUDGET.attempts && Date.now() - t0 < BUDGET.ms && !this.stopped && none < 2) {
+      const els = await this.elements();
+      const { buf } = await this.shot();
+      calls++;
+      let m: Move;
+      try {
+        m = parseMove(await respond([text(movePrompt({ goal: group.text, why: raw.evidence?.quote, task: this.spec.goal ?? this.spec.title ?? "", tried, els, value: step.do === "fill" ? step.value : undefined, diagnosis: d.say })), png(buf)], "heal"), els.length);
+      } catch (e) { m = { action: "none", why: `Muse Spark couldn't be asked (${(e as Error).message.slice(0, 60)})` }; }
+      const el = m.el ? els[m.el - 1] : undefined;
+      const label = m.action === "press" ? `pressed ${m.key}` : m.action === "done" ? "checked whether it's already done" : m.action === "none" ? "asked Muse Spark" : `${m.action === "click" ? "clicked" : m.action === "fill" ? "typed into" : m.action === "scroll" ? "scrolled" : "waited"}`;
+      if (m.action === "none") {
+        none++;
+        tried.push({ rung: 5, strategy: label, changed: false, verdict: "failed", why: m.why });
+        this.log(`Idea ${tried.length}: ${label} → ✗ ${m.why}`, "warn");
+        continue;
+      }
+      const refused = unsafe(m, el, raw, group.keys, here(), el?.href) ?? (repeated(tried, label, el?.name) ? "already tried that" : null)
+        ?? (m.action === "click" && same(el?.name) ? "it was pressed once already; pressing it again could do it twice" : null);
+      if (refused) {
+        tried.push({ rung: 5, strategy: label, target: el?.name, changed: false, verdict: "refused", why: refused });
+        this.log(`Idea ${tried.length}: ${label}${el ? ` “${el.name}”` : ""} → not done: ${refused}`, "warn");
+        continue;
+      }
+      const loc = el ? this.page.locator(`[data-remuse-i="${el.i}"]`) : null;
+      const ok = await attempt(5, label, el?.name, async () => {
+        const before = await this.page.innerText("body").catch(() => "");
+        if (m.action === "click") await loc!.click({ timeout: 5000 });
+        else if (m.action === "fill") await loc!.fill(step.value ?? "", { timeout: 5000 });
+        else if (m.action === "press") await this.page.keyboard.press(m.key!);
+        else if (m.action === "scroll") await this.page.mouse.wheel(0, 600);
+        else if (m.action === "wait") await this.page.waitForTimeout(2000);
+        await this.page.waitForLoadState("load").catch(() => {});
+        // The move may do the step's job itself, or set it up (a menu opened, the page settled): an upload, or a
+        // step whose own control is now there, is done again, then the page has to prove it.
+        if (step.do === "upload") await this.upload(raw, step).catch(() => {});
+        else if (!ran && (m.action !== "click" || step.do !== "click")) {
+          const again = await dom();
+          if (again && (await isSafe(again))) {
+            if (step.do === "click") await again.click({ timeout: 5000 });
+            else if (step.do === "fill" && m.action !== "fill") await again.fill(step.value ?? "", { timeout: 5000 });
+            else if (step.do === "press") await again.press(step.key ?? "Enter", { timeout: 5000 });
+          }
+        }
+        return this.check(step, undefined, before, { look: true, quiet: true });
+      }, loc);
+      if (ok) { if (m.action === "click" || m.action === "fill") keep(el?.role, el?.name); return true; }
+    }
+    // 6. Last: point at it on the screen (Muse Spark + SAM 3.1), only when nothing on the list fit.
+    if (t?.name && tried.length < BUDGET.attempts && Date.now() - t0 < BUDGET.ms && !this.stopped) {
+      const f = await this.findByVision(raw, step).catch(() => null);
+      if (f && (IRREVERSIBLE.test(f.healedName ?? "") || same(f.healedName))) {
+        const why = same(f.healedName) ? `“${f.healedName}” was pressed once already; pressing it again could do it twice` : `“${f.healedName}” can't be undone, so it waits for you`;
+        tried.push({ rung: 6, strategy: "pointed at it on the screen", target: f.healedName, changed: false, verdict: "refused", why });
+        this.log(`Idea ${tried.length}: pointed at it on the screen “${f.healedName}” → not done: ${why}`, "warn");
+      } else if (f && (f.loc || f.point)) {
+        const ok = await attempt(6, "pointed at it on the screen", f.healedName, async () => {
+          if (f.loc) return finish(f.loc);
+          const before = await this.page.innerText("body").catch(() => "");
+          await this.page.mouse.click(f.point!.x, f.point!.y);
+          if (step.do === "fill") { await this.page.keyboard.press("Control+A"); await this.page.keyboard.type(step.value ?? ""); }
+          return this.check(step, undefined, before, { look: true, quiet: true });
+        }, f.loc ?? null);
+        if (ok) { keep(f.proposed?.role, f.proposed?.name); return true; }
+      }
+    }
+    this.lastTried = tried.map((a) => `${a.strategy}${a.target ? ` “${a.target}”` : ""}`).join("; ");
+    this.log(`Out of ideas for "${step.describe}" after ${tried.length} ${tried.length === 1 ? "try" : "tries"}.`, "warn");
+    return false;
+  }
+
   private hasTool(name: string) {
     return this.page.evaluate((n) => !!(window as any).__showrunTools?.has(n), name).catch(() => false);
   }
@@ -781,12 +1021,16 @@ export class Runner {
       catch (e) {
         if (e instanceof PracticeEnd || e instanceof Ready) throw e;
         if (e instanceof Skip) { this.item.status = "skipped"; this.log(e.message, "info"); return false; }
+        // Before giving up or asking: work out another way to this step's goal (never for steps that wait for your OK).
+        this.lastTried = "";
+        if (!this.stopped && !(await this.onSignInPage()) && (await this.recover(s, e as Error))) return true;
+        const tried = this.lastTried ? `. I tried: ${this.lastTried}` : "";
         // A practice never waits on the person: whatever is in the way is what it reports.
         if (this.practicing) {
           if (await this.onSignInPage()) throw new Error(`a sign-in page is in the way (${new URL(this.page.url()).hostname}); sign in there once, then practice again`);
           // Said out loud in the review: the step, in plain words, not the browser library's error.
           const m = (e as Error).message.split("\n")[0];
-          throw new Error(`at "${s.describe}", ${/locator\.|page\.|Timeout \d+ms|<\w+>|Error:/.test(m) ? "the page didn't let me do it" : m}`);
+          throw new Error(`at "${s.describe}", ${/locator\.|page\.|Timeout \d+ms|<\w+>|Error:/.test(m) ? "the page didn't let me do it" : m}${tried}`);
         }
         // A sign-in page in the way: hidden or not, pause and let the person sign in once in plain Chrome.
         if (!this.stopped && !this.inChrome && (await this.onSignInPage())) {
@@ -795,13 +1039,13 @@ export class Runner {
         }
         // A hidden run has no window to hand over: the item fails and says why instead of waiting forever.
         // In your Chrome there's always a window to hand over; in Remuse's hidden browser there isn't.
-        if (this.stopped || (!this.inChrome && (process.env.HEADLESS === "1" || !this.run.visible))) throw e;
+        if (this.stopped || (!this.inChrome && (process.env.HEADLESS === "1" || !this.run.visible))) throw tried ? new Error(`${(e as Error).message}${tried}`) : e;
         if (this.inChrome) await this.page.bringToFront().catch(() => {});
         const { file } = await this.shot();
         const it = this.item;
         this.log(`Stuck on "${s.describe}": ${(e as Error).message}`, "warn", file);
         it.status = "asking";
-        const a = await this.wait({ kind: "handoff", item: this.run.current, step: s.describe, problem: (e as Error).message, shot: file });
+        const a = await this.wait({ kind: "handoff", item: this.run.current, step: s.describe, problem: `${(e as Error).message}${tried}`, shot: file });
         it.status = "running";
         if (a.decision !== "retry") { it.status = "skipped"; this.log("Skipped, as you asked.", "info"); return false; }
         this.log("Trying again.", "info");
@@ -903,9 +1147,7 @@ export class Runner {
   private async exec(raw: Step, nextTab?: string) {
     const it = this.item;
     const v = it.vars;
-    const step: Step = { ...raw, url: render(raw.url, v), value: render(raw.value, v),
-      target: raw.target && { ...raw.target, name: render(raw.target.name, v) },
-      expect: raw.expect && { ...raw.expect, urlIncludes: render(raw.expect.urlIncludes, v), textIncludes: render(raw.expect.textIncludes, v) } };
+    const step = this.renderStep(raw);
     if (this.stopped) throw new Error("run stopped");
     let aim: string | undefined;
     let before: string | undefined; // the page's text just before acting: words already there prove nothing
@@ -1034,7 +1276,7 @@ export class Runner {
     }
     if (this.resuming) { this.log(`You approved: ${step.describe}`, "ok"); return true; }
     if (this.batch && !this.run.autoApprove) throw new Ready(step.describe);
-    if (this.run.autoApprove) { this.log(`Approved in advance: ${step.describe}`, "info"); return true; }
+    if (this.run.autoApprove && !healedName) { this.log(`Approved in advance: ${step.describe}`, "info"); return true; }
     const { file } = await this.shot(loc);
     it.status = "approval";
     const a = await this.wait({ kind: "approval", item: this.run.current, step: step.describe, target: healedName ?? step.target?.name,
@@ -1067,7 +1309,8 @@ export class Runner {
     }
     // Not there because a sign-in page is in the way: say so (the step pauses for sign-in) instead of searching the screen.
     if (await this.onSignInPage()) throw new Error(`a sign-in page is in the way (${new URL(this.page.url()).hostname})`);
-    return this.findByVision(raw, step);
+    if (gatedStep(raw)) return this.findByVision(raw, step);
+    throw new Error(`can't find "${step.target!.name ?? step.target!.role}" on the page`);
   }
 
   private async findByVision(raw: Step, step: Step) {
@@ -1128,7 +1371,7 @@ export class Runner {
     const stable = healedName.split(/[(\d₱$]/)[0].trim();
     const proposed: Target = stable && stable !== healedName ? { role: found.role, name: stable, fuzzy: true } : { role: found.role, name: healedName };
     // Only a proposal: it's saved into the task after its step is proven (exec), never on a guess.
-    this.log(`This may do the same job: the ${found.role} “${healedName}” (was “${t.name}”). Trying it; it only counts if the page proves it.`, "info", seen.file, how);
+    this.log(`This may do the same job: the ${found.role} “${healedName}” (was “${t.name}”). It only counts once the page proves it.`, "info", seen.file, how);
     return (await loc.count()) === 1 ? { loc, healedName, shot: seen.file, proposed } : { point, healedName, shot: seen.file, proposed };
   }
 
@@ -1285,7 +1528,7 @@ export class Runner {
    *  typed, the address); a look at the screen can stop a pass but never make a failed page check pass, and a step
    *  that writes needs the page's proof. Returns the verdict; a failed step throws. `before` is the page's text
    *  from just before the step. */
-  private async check(step: Step, aim?: string, before?: string, opts: { look?: boolean } = {}): Promise<Verdict> {
+  private async check(step: Step, aim?: string, before?: string, opts: { look?: boolean; quiet?: boolean } = {}): Promise<Verdict> {
     if (step.do === "extract") return { result: "verified", proof: "page", why: "read from the page" };
     const e = step.expect ?? {};
     // A plug-in's own read-back first (Classroom: the file shows as attached); else the engine's checks below.
@@ -1330,6 +1573,7 @@ export class Runner {
     }
     const gated = step.irreversible || (step.do === "click" && IRREVERSIBLE.test(step.target?.name ?? ""));
     const tell = (v: Verdict, shot?: string) => {
+      if (opts.quiet) return v;
       const more = { why: v.why, how: v.proof === "none" ? undefined : v.proof, by: v.by };
       if (v.result === "verified") this.log(`✓ ${step.describe}`, "ok", shot, more);
       else if (v.result === "unverified") {
@@ -1339,7 +1583,7 @@ export class Runner {
       return v;
     };
     if (page?.result === "verified" && !gated && !opts.look) return tell(page, aim);
-    if (page?.result === "failed") { tell(page, aim); throw new Error(`step didn't work: ${step.describe}`); }
+    if (page?.result === "failed") { tell(page, aim); if (opts.quiet) return page; throw new Error(`step didn't work: ${step.describe}`); }
     // Nothing on the page can tell, and nothing irreversible hangs on it: no model call (runs stay fast). Opening a
     // page counts as done; anything else is honestly "not proven", and a write left unproven stops what depends on it.
     if (!page && !gated && !opts.look) {
@@ -1370,7 +1614,7 @@ export class Runner {
     }
     const v = combine(page, r ? { ok: r.ok === true, why: r.why || (r.ok ? "the screen shows it worked" : "the screen doesn't show that it worked"), by } : null, writes(step));
     tell(v, file || aim);
-    if (v.result === "failed") throw new Error(`step didn't work: ${step.describe}`);
+    if (v.result === "failed" && !opts.quiet) throw new Error(`step didn't work: ${step.describe}`);
     return v;
   }
 }

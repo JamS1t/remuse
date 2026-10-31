@@ -85,7 +85,15 @@ try {
 
   const r = await post(`/specs/${specId}/runs`, { autoApprove: true });
   let run: any;
-  for (let i = 0; i < 120; i++) { run = await get(`/runs/${r.id}`); if (["done", "failed", "stopped"].includes(run.status)) break; await sleep(1000); }
+  const asked: any[] = [];
+  for (let i = 0; i < 120; i++) {
+    run = await get(`/runs/${r.id}`);
+    if (["done", "failed", "stopped"].includes(run.status)) break;
+    // A button found by looking is shown to you before it's pressed, even with approval in advance.
+    if (run.pending?.kind === "approval") { asked.push(run.pending); await post(`/runs/${r.id}/answer`, { decision: "approve" }); }
+    await sleep(1000);
+  }
+  check("a renamed irreversible button is never pressed without asking, even approved in advance", asked.length === 1 && /Issue refund/.test(asked[0].healed ?? ""), JSON.stringify(asked));
   const [first, second] = run.items;
   const line = (it: any, re: RegExp) => it.log.find((l: any) => re.test(l.msg));
   check("the run finishes on the redesigned store", run.status === "done" && run.items.every((i: any) => i.status === "done") && refunds === 2, `${run.status}, ${refunds} refunds, ${run.items.map((i: any) => i.status)}`);

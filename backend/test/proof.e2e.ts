@@ -19,13 +19,14 @@ const post = async (p: string, b: unknown = {}) => (await fetch(API + p, { metho
 if (await fetch(`${API}/sessions`).then(() => true, () => false)) { console.error(`Port ${PORT} is busy.`); process.exit(1); }
 
 const did = new Set<string>();
+const count: Record<string, number> = {};
 const page = (body: string) => `<!doctype html><meta charset="utf-8"><title>Reports</title><body style="font:16px sans-serif;padding:24px">${body}</body>`;
 const site = createServer((req, res) => {
   const u = new URL(req.url!, "http://x");
-  if (u.pathname === "/did") { did.add(u.searchParams.get("what")!); res.writeHead(200); return res.end("ok"); }
+  if (u.pathname === "/did") { const w = u.searchParams.get("what")!; did.add(w); count[w] = (count[w] ?? 0) + 1; res.writeHead(200); return res.end("ok"); }
   res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
   if (u.pathname === "/already") return res.end(page(`<h1>Monthly report</h1><button onclick="fetch('/did?what=open')">Open report</button>`));
-  if (u.pathname === "/export") return res.end(page(`<h1>Monthly report</h1><button onclick="out.textContent='✓ Export complete: your report was exported.'">Export</button><p id="out"></p>`));
+  if (u.pathname === "/export") return res.end(page(`<h1>Monthly report</h1><button onclick="fetch('/did?what=export');out.textContent='✓ Export complete: your report was exported.'">Export</button><p id="out"></p>`));
   // The editor is in its own frame (like Google Sheets' cell editor), focused on load: what's typed can't be read back.
   if (u.pathname === "/form") return res.end(page(`<h1>Request</h1><iframe id="ed" srcdoc="<body contenteditable=true style='font:16px sans-serif'></body>" style="border:1px solid #999;height:60px;width:400px"></iframe>
     <button onclick="fetch('/did?what=submit');out.textContent='Submitted'">Submit</button><p id="out"></p>
@@ -71,6 +72,8 @@ try {
     { id: "s2", do: "click", target: { role: "button", name: "Export" }, describe: "Export the report", expect: { textIncludes: "Exported OK", looks: "the report export finished" } },
   ]));
   check("a failed page check isn't overruled by the screen", r2.items?.[0]?.status === "failed", `${r2.items?.[0]?.status}: ${lines(r2).slice(-2).map((l) => l.msg).join(" / ")}`);
+  // Working it out after the click already happened: the same button is never pressed again (it could do it twice).
+  check("a button already pressed is never pressed again while working it out", count.export === 1, `${count.export} presses: ${lines(r2).map((l) => l.msg).filter((m) => /^Idea/.test(m)).join(" / ").slice(0, 300)}`);
 
   // 3. Typing into a box that can't be read back isn't proof; the irreversible Submit after it must not happen.
   const r3 = await run(await addTask("Send the request", [

@@ -25,6 +25,12 @@ export function combine(page: Verdict | null, screen: { ok: boolean; why: string
   return { result: "verified", proof: "screen", by: screen.by, why: screen.why };
 }
 
+/** What Remuse never does on its own: a step whose name says it sends, pays, submits, turns in, deletes or publishes
+ *  waits for your OK in every run, and is never worked around by healing. */
+export const IRREVERSIBLE = /\b(turn in|turn it in|hand in|mark as done|refund|replace|send|pay|submit|ship|confirm|delete|place order|issue|buy|checkout|check out|purchase|book|transfer|message seller|post|share|publish|approve|merge|archive|resolve)\b/i;
+/** A step that waits for your OK: marked irreversible, or a click or site tool named like one. */
+export const gatedStep = (s: Step) => !!s.irreversible || (s.do === "click" && IRREVERSIBLE.test(s.target?.name ?? "")) || (!!s.tool && IRREVERSIBLE.test(s.tool.name.replace(/_/g, " ")));
+
 /** Steps that put something into the site: what they wrote must be read back before the step counts as done. */
 export const writes = (s: Pick<Step, "do">) => s.do === "fill" || s.do === "upload";
 
