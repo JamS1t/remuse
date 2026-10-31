@@ -25,6 +25,10 @@ check("a sentence with nothing done is still a moment", quiet.some((x) => x.said
 const prompt = buildPrompt({ id: "x", events, turns } as any, ".").filter((p: any) => p.type === "input_text").map((p: any) => p.text).join("\n");
 check("the prompt reads moment by moment, with what was said", /Moment \d \([\d.]+-[\d.]+s\) said: "open analytics"\n#1 /.test(prompt), prompt.slice(-600));
 check("and never shows where the mouse rested", !/ point /.test(prompt));
+// A drawn mark: what it circled, in words, and the instruction that it points at something on purpose.
+const marked = buildPrompt({ id: "x", events: [ev(0, "start"), { ...ev(2500, "mark"), shape: "circle", targets: [{ role: undefined, label: undefined, text: "Views 2,607" }] }], turns } as any, ".").filter((p: any) => p.type === "input_text").map((p: any) => p.text).join("\n");
+check("a mark shows its shape and what it circled", /#1 t=2\.5s mark shape=circle .*"Views 2,607"/.test(marked), marked.split("\n").filter((l) => l.includes("mark")).join(" | ").slice(0, 300));
+check("Muse Spark is told what a mark means", /a mark is the person circling or underlining something on purpose/i.test(marked));
 
 console.log(fails ? `\n${fails} failed` : "\nall passed");
 process.exit(fails ? 1 : 0);

@@ -131,6 +131,7 @@ Rules for the spec:
 - Schedule: if the person said how often ("every hour", "every morning at 9"), fill "schedule". Don't invent one.
 - Tabs: event lines carry tab=T1, T2... when the person worked in more than one browser tab. Then give EVERY step (main and outcome steps) a "tab": a short name for what that tab is for ("inbox", "sheet", "store", "x", "tiktok"), the same name each time the person returned to that tab. The robot keeps every tab open and switches between them, so a tab is found as it was left: don't repeat a "goto" when the person just switched back. The first step in a new tab is normally a "goto" to the page it showed first. If a click made the site open a new tab, give the following steps a new tab name and no "goto"; the robot follows the tab the site opened. Values read in any tab can be used in any other tab with {{variables}}, e.g. read an order number in "inbox" and type it in "store". If the person did the same thing on several sites (posting to several networks, checking several stores), keep one tab per site and keep the irreversible steps (post, pay, send) last, after everything is prepared in every tab.
 - Spreadsheets (Google Sheets): the grid is drawn, not made of fields, so clicks on it say little; input and key lines carry cell=B2 (the cell typed into) and the voice and frames say what goes where. To write a cell: a "fill" step with target {"role":"textbox","name":"Name Box"} and the cell address as value, then "press" Enter with the same target, then a "fill" step with NO target and the value (it types into the selected cell), then "press" Enter or Tab with no target. When the person adds a new row each time (a log, a tracker), don't use a fixed row: fill the Name Box with "A1", press Enter on it, then "press" Control+End, Home and ArrowDown (each a step with no target) to land on the first empty row, then type each value with "press" Tab between them.
+- Marks: a mark is the person circling or underlining something on purpose, drawn on the page ("on" is what's inside the circle or above the line; its frame shows the ink). Treat it like a click for knowing what to read or what a rule is about; don't turn a mark into a click step. Words like "this", "here", "that number" said around a mark mean the thing marked.
 - WebMCP: "tools" lines list actions a page offers to agents directly. When a step does what one of those tools does (e.g. the Refund button and a refund_order tool), keep the step as recorded and add "tool" with the tool name and its args, using {{variables}}. The robot calls the tool when the page offers it and clicks otherwise.
 
 Reply with ONLY the JSON object, in this shape:
@@ -144,6 +145,7 @@ export function eventLine(e: any, i: number, tabs: Map<unknown, string>) {
   const v = e.value !== undefined ? ` value=${JSON.stringify(e.value)}` : "";
   const k = (e.key ? ` key=${e.key}` : "") + (e.cell ? ` cell=${e.cell}` : "");
   if (e.kind === "upload") return `#${i} t=${(e.t / 1000).toFixed(1)}s upload${tab} url=${e.url}${t} files=${JSON.stringify((e.files ?? []).map((x: any) => x.name))}`;
+  if (e.kind === "mark") return `#${i} t=${(e.t / 1000).toFixed(1)}s mark shape=${e.shape}${tab} url=${e.url} on=[${(e.targets ?? []).map((x: any) => `{role:${JSON.stringify(x.role)}, name:${JSON.stringify(x.label)}, text:${JSON.stringify(x.text)}}`).join(", ")}]${e.samPhrase ? ` sam=${JSON.stringify(e.samPhrase)} box=(${e.samBox?.x_min},${e.samBox?.y_min},${e.samBox?.x_max},${e.samBox?.y_max})` : ""}`;
   if (e.kind === "tools") return `#${i} tools${tab} url=${e.url} offered: ${(e.tools ?? []).map((x: any) => `${x.name}(${Object.keys(x.inputSchema?.properties ?? {}).join(", ")}): ${x.description ?? ""}`).join("; ")}`;
   return `#${i} t=${(e.t / 1000).toFixed(1)}s ${e.kind}${tab} url=${e.url}${t}${v}${k}`;
 }
@@ -173,6 +175,7 @@ export function buildPrompt(s: Session, dir: string, folders: FolderHint[] = [])
       // Frames: before+after each action, and pages reached without one (typed URLs). Max 50 images per request.
       const frames: [string, string][] = [];
       if (isAction && e.before) frames.push(["before", e.before]);
+      if (e.kind === "mark" && e.before) frames.push(["with the ink", e.before]);
       if ((isAction || e.kind === "start" || (e.kind === "page" && e.t - lastAction > 1500)) && e.after) frames.push(["after", e.after]);
       if (isAction) lastAction = e.t;
       for (const [when, f] of frames) {

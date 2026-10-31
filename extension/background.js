@@ -41,7 +41,7 @@ async function onEvent(ev, sender) {
   // (your messages, other accounts) is none of the recording's business.
   if (!sender.tab.active) return;
   const { at, kind, ...data } = ev;
-  const before = kind === "click" || kind === "key" || kind === "point" ? await screenshot(sender.tab.windowId) : null;
+  const before = kind === "click" || kind === "key" || kind === "mark" ? await screenshot(sender.tab.windowId) : null; // a mark's picture shows the ink
   const { id } = await api(`/sessions/${r.id}/events`, "POST", { t: at - r.t0, kind, ...data, tab: sender.tab.id, before });
   if (!AFTER_DELAY[kind]) return;
   await sleep(AFTER_DELAY[kind]);

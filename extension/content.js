@@ -153,10 +153,112 @@
   // Where the mouse rests is not recorded: hovering while talking made Remuse learn things nobody did or said.
   // To point at something on purpose, draw on the page instead (a mark).
 
+  // ---- Drawing: while teaching, drag with the right mouse button (or turn on the pen with Alt+Shift+D and drag) to
+  // circle or underline what you mean. The ink shows for a moment; Remuse gets what's under it, a picture with the
+  // ink, and what you said while drawing. A plain right-click still opens the menu.
+  let teaching = false, pen = false, stroke = null, menuOff = false, ink = null;
+  try { chrome.runtime.sendMessage({ type: "status" }).then((s) => { teaching = !!s?.recording; }, () => {}); } catch { /* orphaned */ }
+  try {
+    chrome.runtime.onMessage.addListener((m) => {
+      if (m?.type === "recording") { teaching = !!m.on; if (!teaching) setPen(false); }
+      else if (m?.type === "pen" && teaching) setPen(!pen);
+    });
+  } catch { /* orphaned */ }
+
+  function sheet() { // a full-page canvas in its own shadow root, above everything
+    if (ink) return ink;
+    const host = document.createElement("div");
+    host.style.cssText = "position:fixed;inset:0;z-index:2147483647;pointer-events:none";
+    const c = document.createElement("canvas");
+    c.style.cssText = "width:100%;height:100%;display:block;transition:opacity .3s ease-out";
+    host.attachShadow({ mode: "closed" }).append(c);
+    document.documentElement.append(host);
+    const dpr = devicePixelRatio || 1;
+    c.width = innerWidth * dpr; c.height = innerHeight * dpr;
+    const g = c.getContext("2d");
+    g.scale(dpr, dpr); g.lineWidth = 4; g.lineCap = "round"; g.lineJoin = "round"; g.strokeStyle = "#ff3b30";
+    return (ink = { host, c, g, fade: 0 });
+  }
+  function dropSheet() { if (ink) { clearTimeout(ink.fade); ink.host.remove(); ink = null; } }
+  function setPen(on) {
+    pen = on;
+    if (on) { const s = sheet(); s.host.style.pointerEvents = "auto"; s.host.style.cursor = "crosshair"; }
+    else if (ink && !stroke) dropSheet();
+  }
+  const draw = (x, y) => {
+    const s = sheet(), last = stroke.at(-1);
+    stroke.push({ x, y });
+    s.g.beginPath(); s.g.moveTo(last.x, last.y); s.g.lineTo(x, y); s.g.stroke();
+  };
+  // What a circle goes around: elements mostly inside it, smallest (and with words) first.
+  function inside(box) {
+    const area = (r) => Math.max(0, r.width) * Math.max(0, r.height);
+    const boxArea = (box.right - box.left) * (box.bottom - box.top);
+    const seen = new Set();
+    for (let i = 1; i <= 5; i++) for (let j = 1; j <= 5; j++) {
+      for (const el of document.elementsFromPoint(box.left + ((box.right - box.left) * i) / 6, box.top + ((box.bottom - box.top) * j) / 6)) seen.add(el);
+    }
+    return [...seen].filter((el) => {
+      if (el === ink?.host || el === document.body || el === document.documentElement) return false;
+      const r = el.getBoundingClientRect(), a = area(r);
+      const over = Math.max(0, Math.min(r.right, box.right) - Math.max(r.left, box.left)) * Math.max(0, Math.min(r.bottom, box.bottom) - Math.max(r.top, box.top));
+      return a > 0 && over >= 0.6 * a && a < 1.5 * boxArea;
+    }).sort((a, b) => (!!b.innerText?.trim() - !!a.innerText?.trim()) || area(a.getBoundingClientRect()) - area(b.getBoundingClientRect()));
+  }
+  // What an underline is under: the smallest thing with words just above the line.
+  function above(pts) {
+    const found = [];
+    for (const p of pts.filter((_, i) => i % Math.max(1, Math.floor(pts.length / 8)) === 0)) {
+      for (const el of document.elementsFromPoint(p.x, p.y - 8)) if (el !== ink?.host && el !== document.body && el !== document.documentElement && el.innerText?.trim() && !found.includes(el)) found.push(el);
+    }
+    const a = (el) => { const r = el.getBoundingClientRect(); return r.width * r.height; };
+    return found.sort((x, y) => a(x) - a(y));
+  }
+  const ends = (pts) => [pts[0], pts.at(-1)].map((p) => document.elementsFromPoint(p.x, p.y).find((el) => el !== ink?.host)).filter(Boolean);
+  function endStroke() {
+    const pts = stroke; stroke = null;
+    const length = pts.reduce((n, p, i) => (i ? n + Math.hypot(p.x - pts[i - 1].x, p.y - pts[i - 1].y) : 0), 0);
+    if (length < 20) { if (!pen) dropSheet(); return false; } // a click, not a drawing
+    const xs = pts.map((p) => p.x), ys = pts.map((p) => p.y);
+    const box = { left: Math.min(...xs), top: Math.min(...ys), right: Math.max(...xs), bottom: Math.max(...ys) };
+    const w = box.right - box.left, h = box.bottom - box.top;
+    const shape = h < 40 && h < 0.2 * w ? "underline" : Math.hypot(pts[0].x - pts.at(-1).x, pts[0].y - pts.at(-1).y) < 0.25 * Math.max(w, h) ? "circle" : "line";
+    // Smallest first; a box around one already kept (its paragraph, its row) adds nothing.
+    const targets = [...new Set(shape === "circle" ? inside(box) : shape === "underline" ? above(pts) : ends(pts))].filter((el, i, all) => !all.slice(0, i).some((k) => el.contains(k))).slice(0, 3);
+    const g = (v, max) => Math.round((v / max) * 1000);
+    const step = Math.max(1, Math.ceil(pts.length / 32));
+    send("mark", {
+      shape, grid: { x_min: g(box.left, innerWidth), y_min: g(box.top, innerHeight), x_max: g(box.right, innerWidth), y_max: g(box.bottom, innerHeight) },
+      path: pts.filter((_, i) => i % step === 0).map((p) => ({ x: g(p.x, innerWidth), y: g(p.y, innerHeight) })), targets: targets.map(describe),
+    });
+    // The ink stays while the picture is taken, then fades.
+    const s = ink;
+    clearTimeout(s.fade);
+    s.fade = setTimeout(() => { s.c.style.opacity = "0"; s.fade = setTimeout(() => { if (pen && ink === s) { s.g.clearRect(0, 0, innerWidth, innerHeight); s.c.style.opacity = "1"; } else if (ink === s) dropSheet(); }, 300); }, 1500);
+    return true;
+  }
+  addEventListener("pointerdown", (e) => {
+    if (!teaching || e.pointerType !== "mouse") return;
+    if (e.button === 2 || (pen && e.button === 0)) {
+      if (pen) { e.preventDefault(); e.stopImmediatePropagation(); } // the pen's press is ink, not a click on the page
+      const s = sheet(); clearTimeout(s.fade); s.c.style.opacity = "1";
+      stroke = [{ x: e.clientX, y: e.clientY }];
+    }
+  }, true);
+  addEventListener("pointermove", (e) => { if (stroke) draw(e.clientX, e.clientY); }, true);
+  addEventListener("pointerup", (e) => {
+    if (!stroke) return;
+    const drew = endStroke();
+    if (drew && e.button === 2) menuOff = true; // a right-button drawing doesn't open the menu
+    if (pen) { e.preventDefault(); e.stopImmediatePropagation(); }
+  }, true);
+  addEventListener("contextmenu", (e) => { if (menuOff) { menuOff = false; e.preventDefault(); } }, true);
+  addEventListener("click", (e) => { if (pen) { e.preventDefault(); e.stopImmediatePropagation(); } }, true);
+
   // pointerdown fires before the click lands, so the "before" screenshot still shows the old screen.
   // Typing is flushed first: change only fires on blur, which comes after pointerdown.
   addEventListener("pointerdown", (e) => {
-    if (!e.isPrimary || e.button !== 0) return;
+    if (!e.isPrimary || e.button !== 0 || pen) return; // the pen draws; it never clicks
     typed(document.activeElement); flush();
     const t = e.target.closest("button, a, input, select, textarea, label, summary, [role], [onclick]") ?? e.target;
     send("click", { target: describe(t) });
