@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import { transcribe, calls, type Turn } from "./meta.ts";
 import { coverage } from "./evidence.ts";
 import { readback } from "./readback.ts";
+import { resolveMarks } from "./marks.ts";
 import { revise, sortSaid, understand, type Spec } from "./understand.ts";
 import { endLive, heard as hearLive, liveCards, liveState } from "./live.ts";
 import { build } from "./build.ts";
@@ -183,6 +184,11 @@ async function learn(id: string, offsetMs: number) {
     if (cards.length) db.prepare("UPDATE sessions SET cards = ? WHERE id = ?").run(JSON.stringify(cards), id);
     await transcribeSession(id, offsetMs);
     stage(id, "understanding");
+    // Marks drawn on a chart or canvas: SAM 3.1 finds what was circled, kept on the mark.
+    await resolveMarks(full(id).events, sessionDir(id), (eventId, extra) => {
+      const e = db.prepare("SELECT data FROM events WHERE id = ? AND session_id = ?").get(eventId, id) as any;
+      if (e) db.prepare("UPDATE events SET data = ? WHERE id = ?").run(JSON.stringify({ ...JSON.parse(e.data), ...extra }), eventId);
+    });
     const s = full(id);
     const spec = await understand(s, sessionDir(id), folderHints());
     // What they asked for that the task doesn't do yet: asked out loud in the review, with the steps it wasn't sure of.
