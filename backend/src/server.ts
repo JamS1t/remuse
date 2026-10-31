@@ -322,8 +322,8 @@ async function googleStatus() {
         let accounts: string[] = [];
         const ids: Record<string, string> = {};
         if (signedIn) {
-          const p = await ctx.newPage();
-          const body = await p.goto("https://accounts.google.com/ListAccounts?gpsia=1&source=ChromiumBrowser&json=standard", { timeout: 15_000 }).then((r) => r?.text() ?? "", () => "");
+          // Asked the way Chrome asks (POST); a plain page visit gets "400 Bad Request".
+          const body = await ctx.request.post("https://accounts.google.com/ListAccounts?gpsia=1&source=ChromiumBrowser&json=standard", { headers: { "content-type": "application/x-www-form-urlencoded" }, data: "", timeout: 15_000 }).then((r) => (r.ok() ? r.text() : ""), () => "");
           accounts = [...new Set([...body.matchAll(/"([^"\s]+@[^"\s]+\.[a-z]{2,})"/gi)].map((m) => m[1].toLowerCase()))];
           // Each account's entry also carries its numeric Google account id.
           const walk = (x: unknown): void => {
