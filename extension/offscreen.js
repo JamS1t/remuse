@@ -65,7 +65,11 @@ async function mend(why) {
     if (ctx.state === "suspended") await ctx.resume();
     await listen();
     chrome.runtime.sendMessage({ type: "mic", ok: true, why: "reconnected", detail: micState() }).catch(() => {});
-  } catch (e) { chrome.runtime.sendMessage({ type: "mic", ok: false, why: `${why}, and couldn't reconnect: ${e.message}` }).catch(() => {}); }
+  } catch (e) {
+    // NotAllowedError: Chrome took the permission back (it was "Allow this time"). The sidebar offers to ask again.
+    const lost = e.name === "NotAllowedError";
+    chrome.runtime.sendMessage({ type: "mic", ok: false, permission: lost, why: lost ? "Chrome took back the microphone permission" : `${why}, and couldn't reconnect: ${e.message}`, detail: { ...micState(), error: `${e.name}: ${e.message}` } }).catch(() => {});
+  }
 }
 setInterval(() => {
   if (!ctx) return;

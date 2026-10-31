@@ -150,7 +150,7 @@ async function finish({ byVoice = false, discard = false } = {}) {
 
 async function status() {
   const r = await current();
-  return { recording: !!r, rec: r, hearing, level: micLevel, mic, speaking: talk ? { line: talk.line, total: talk.total } : null, mode, last: (await chrome.storage.local.get("last")).last ?? null };
+  return { recording: !!r, rec: r, hearing, level: micLevel, mic, micPermission, speaking: talk ? { line: talk.line, total: talk.total } : null, mode, last: (await chrome.storage.local.get("last")).last ?? null };
 }
 
 // Every page knows whether you're teaching (drawing on the page only works then).
@@ -298,14 +298,14 @@ chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => 
 globalThis.showrun = { start, stop, cancel, status, connect, disconnect, command, setMode, speak, hush };
 
 // Whether you are talking right now (the offscreen recorder hears it first), for the sidebar to show.
-let hearing = false, micLevel = 0, mic = null; // mic: why it isn't working right now, or null
+let hearing = false, micLevel = 0, mic = null, micPermission = false; // mic: why it isn't working right now, or null
 
 chrome.runtime.onMessage.addListener((msg, sender, reply) => {
   if (msg.type === "event") { onEvent(msg.ev, sender).catch((e) => console.warn("event dropped:", e.message)); return; }
   if (msg.type === "hearing") { hearing = !!msg.on; return; }
   if (msg.type === "level") { micLevel = msg.level; return; }
   if (msg.type === "mic") {
-    if (!msg.note) mic = msg.ok ? null : msg.why ?? "the microphone stopped"; // null: working
+    if (!msg.note) { mic = msg.ok ? null : msg.why ?? "the microphone stopped"; micPermission = !msg.ok && !!msg.permission; } // null: working
     // Written down on the Agent (data/mic.log), so a drop can be traced to its cause afterwards.
     current().then((r) => api("/mic-log", "POST", { session: r?.id ?? null, ok: msg.ok ?? null, note: !!msg.note, why: msg.why, detail: msg.detail ?? null })).catch(() => {});
     return;
@@ -356,6 +356,9 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
       if (await chrome.offscreen.hasDocument()) await chrome.runtime.sendMessage({ target: "offscreen", type: "unlisten" }).catch(() => {});
       return { ok: true };
     },
+    // Chrome took the mic permission back mid-demo ("Allow this time"): ask again in a tab. The recorder reconnects
+    // by itself once it is allowed.
+    openMic: async () => { await chrome.tabs.create({ url: "mic.html" }); return { ok: true }; },
     openTab: async () => { if (/^https?:\/\//.test(msg.url ?? "")) await chrome.tabs.create({ url: msg.url }); return { ok: true }; },
   }[msg.type];
   if (!fn || msg.target === "offscreen") return;

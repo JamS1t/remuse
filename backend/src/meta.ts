@@ -127,6 +127,16 @@ export function transcribeRequest() {
   const langs = (process.env.VOICE_LANGUAGES ?? "English,Tagalog").split(",").map((x) => x.trim()).filter(Boolean);
   return { mode: "ENDPOINTING", model: "muse-voice-transcribe-1.0", audioEncoding: "WAV", ...(langs.length ? { languageBias: langs } : {}) };
 }
+/** A WAV with no voice in it: a pause, a quiet room, a mic that went dead. Speech models make words up for those
+ *  ("Hello."), so it isn't sent to one. 16-bit mono after a 44-byte header, as toWav in offscreen.js writes it. */
+export function silent(wav: Uint8Array, floor = 0.003): boolean {
+  const n = (wav.length - 44) >> 1;
+  if (n <= 0) return true;
+  const v = new DataView(wav.buffer, wav.byteOffset + 44, n * 2);
+  let sum = 0;
+  for (let i = 0; i < n; i++) { const x = v.getInt16(i * 2, true) / 32768; sum += x * x; }
+  return Math.sqrt(sum / n) < floor;
+}
 export async function transcribe(wav: Uint8Array): Promise<{ transcript: string; turns: Turn[] }> {
   const t0 = Date.now();
   const form = new FormData();

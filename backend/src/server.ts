@@ -6,7 +6,7 @@ import { appendFileSync, mkdirSync, readFileSync, writeFileSync, existsSync, rmS
 import { join, dirname, extname } from "node:path";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
-import { transcribe, calls, type Turn } from "./meta.ts";
+import { silent, transcribe, calls, type Turn } from "./meta.ts";
 import { coverage } from "./evidence.ts";
 import { readback } from "./readback.ts";
 import { resolveMarks } from "./marks.ts";
@@ -250,6 +250,7 @@ const heard = new Map<string, Heard>();
 // An answer goes to Muse Spark as the question and the answer, with the step it took out when that's what it asked.
 const asAnswer = (q: { text: string; step?: unknown }, said: string) => `Q: ${q.text}${q.step ? ` (the step I took out: ${JSON.stringify(q.step)})` : ""}\nA: ${said}`;
 async function hearSaid(sessionId: string, wav: Uint8Array) {
+  if (silent(wav)) return; // nothing said: a model would make words up
   const text = (await transcribe(wav)).transcript.trim();
   if (!text) return;
   const n = (heard.get(sessionId)?.n ?? 0) + 1;

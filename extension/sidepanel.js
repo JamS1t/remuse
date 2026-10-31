@@ -15,7 +15,7 @@ load();
 // While this is open the review may listen and talk; when it closes, the extension stops both.
 chrome.runtime.connect({ name: "panel" });
 
-const ALLOWED = ["start", "stop", "status", "sites", "connect", "disconnect", "currentTab", "openTab", "listen", "unlisten", "mode", "keys", "speak", "hush", "cancel"];
+const ALLOWED = ["start", "stop", "status", "sites", "connect", "disconnect", "currentTab", "openTab", "listen", "unlisten", "mode", "keys", "speak", "hush", "cancel", "openMic"];
 addEventListener("message", async (e) => {
   if (e.source !== frame.contentWindow || e.origin !== AGENT) return;
   const { id, type, args } = e.data ?? {};

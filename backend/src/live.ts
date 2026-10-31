@@ -2,7 +2,7 @@
 // (Muse Voice Transcribe), and Muse Spark updates the cards (notes.ts) from it and from what you did since the
 // last one. One note-taking turn at a time, in order. "Okay, that's it" ends the recording. Kept in memory: the
 // real learning still runs on the whole recording when you stop, with these cards as what you said you want.
-import { transcribe, type Turn } from "./meta.ts";
+import { silent, transcribe, type Turn } from "./meta.ts";
 import { applyOps, cancelPhrase, endPhrase, noteTake, type Card } from "./notes.ts";
 import { IGNORED } from "./moments.ts";
 import { eventLine } from "./understand.ts";
@@ -22,6 +22,7 @@ export async function liveCards(id: string): Promise<Card[]> { const l = live.ge
 export async function heard(id: string, wav: Uint8Array, atMs: number, session: () => { events: any[] }): Promise<{ text: string; control: "done" | "cancel" | null }> {
   const l = of(id);
   let said: { transcript: string; turns: Turn[] };
+  if (silent(wav)) return { text: "", control: null }; // nothing said: a model would make words up
   try { said = await transcribe(wav); } catch (e) { l.error = (e as Error).message; return { text: "", control: null }; }
   const text = said.transcript.trim();
   if (!text) return { text: "", control: null }; // a cough, a click, the room
