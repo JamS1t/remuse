@@ -2,13 +2,17 @@
 // Run: npm start   (port 3200, reads MODEL_API_KEY from ../.env)
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { DatabaseSync } from "node:sqlite";
-import { mkdirSync, readFileSync, writeFileSync, existsSync, rmSync, statSync, realpathSync, watch, type FSWatcher } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync, writeFileSync, existsSync, rmSync, statSync, realpathSync, watch, type FSWatcher } from "node:fs";
 import { join, dirname, extname } from "node:path";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
-import { transcribe, calls } from "./meta.ts";
+import { silent, transcribe, calls, type Turn } from "./meta.ts";
+import { coverage } from "./evidence.ts";
+import type { Card } from "./notes.ts";
+import { readback } from "./readback.ts";
+import { resolveMarks } from "./marks.ts";
 import { revise, sortSaid, understand, type Spec } from "./understand.ts";
-import { endLive, hear, liveState } from "./live.ts";
+import { endLive, heard as hearLive, liveCards, liveState } from "./live.ts";
 import { build } from "./build.ts";
 import { Runner, itemKey, openBrowser, openPlainChrome, plainChromeOpen, type Run } from "./runner.ts";
 import type { BrowserContext } from "playwright";
@@ -114,7 +118,7 @@ function full(id: string) {
     .map((e) => ({ id: e.id, t: e.t, kind: e.kind, url: e.url, ...JSON.parse(e.data), before: e.before_png, after: e.after_png }));
   const turns = db.prepare("SELECT start_ms AS startMs, end_ms AS endMs, text FROM turns WHERE session_id = ? ORDER BY start_ms").all(id);
   const specs = db.prepare("SELECT id, version, note, created_at FROM specs WHERE session_id = ? ORDER BY version DESC").all(id);
-  return { ...s, events, turns, specs };
+  return { ...s, events, turns, specs, cards: s.cards ? JSON.parse(s.cards) : [] };
 }
 
 const pagesOf = (sessionId: string) => (db.prepare("SELECT url, data FROM events WHERE session_id = ? AND kind = 'page' ORDER BY t").all(sessionId) as any[])
@@ -142,6 +146,8 @@ const hasVoice = (id: string) => { const f = join(sessionDir(id), "voice.wav"); 
 const isEmpty = (id: string) =>
   !(db.prepare(`SELECT 1 FROM events WHERE session_id = ? AND ${ACTIONS} LIMIT 1`).get(id)) &&
   !(db.prepare("SELECT 1 FROM specs WHERE session_id = ? LIMIT 1").get(id)) && !hasVoice(id);
+// A task thrown away while it was being learned: learning stops at its next step instead of writing to nothing.
+const gone = (id: string) => !db.prepare("SELECT 1 FROM sessions WHERE id = ?").get(id);
 function discard(id: string) {
   db.prepare("DELETE FROM events WHERE session_id = ?").run(id);
   db.prepare("DELETE FROM turns WHERE session_id = ?").run(id);
@@ -168,7 +174,7 @@ async function transcribeSession(id: string, offsetMs: number) {
 
 // Learning a recording end to end, with no input from the person: what they said, the Task Spec (which
 // also names the task), then the rules as tested code. Each stage is saved so the sidebar can show it.
-for (const col of ["learn_stage TEXT", "learn_error TEXT"]) { try { db.exec(`ALTER TABLE sessions ADD COLUMN ${col}`); } catch { /* already there */ } }
+for (const col of ["learn_stage TEXT", "learn_error TEXT", "cards TEXT"]) { try { db.exec(`ALTER TABLE sessions ADD COLUMN ${col}`); } catch { /* already there */ } }
 const stage = (id: string, s: string, err: string | null = null) => db.prepare("UPDATE sessions SET learn_stage = ?, learn_error = ? WHERE id = ?").run(s, err, id);
 // A recording that was mid-learning when the Agent stopped would show "thinking" forever.
 db.prepare("UPDATE sessions SET learn_stage = 'failed', learn_error = 'Remuse stopped while learning this. Press Try again.' WHERE learn_stage IN ('listening', 'understanding', 'building')").run();
@@ -176,39 +182,60 @@ db.prepare("UPDATE sessions SET learn_stage = 'failed', learn_error = 'Remuse st
 async function learn(id: string, offsetMs: number) {
   try {
     stage(id, "listening");
+    // The notes taken while you taught (what you said you want): kept with the recording. A retry keeps the old ones.
+    // Notes still being taken when you stopped: waited for 10 s at most, so learning starts promptly.
+    const cards = await Promise.race([liveCards(id), new Promise<Card[]>((ok) => setTimeout(() => ok(liveState(id)?.cards ?? []), 10_000))]);
+    if (cards.length) db.prepare("UPDATE sessions SET cards = ? WHERE id = ?").run(JSON.stringify(cards), id);
     await transcribeSession(id, offsetMs);
+    if (gone(id)) return;
     stage(id, "understanding");
-    const spec = await understand(full(id), sessionDir(id), folderHints());
+    // Marks drawn on a chart or canvas: SAM 3.1 finds what was circled, kept on the mark.
+    await resolveMarks(full(id).events, sessionDir(id), (eventId, extra) => {
+      const e = db.prepare("SELECT data FROM events WHERE id = ? AND session_id = ?").get(eventId, id) as any;
+      if (e) db.prepare("UPDATE events SET data = ? WHERE id = ?").run(JSON.stringify({ ...JSON.parse(e.data), ...extra }), eventId);
+    });
+    const s = full(id);
+    const spec = await understand(s, sessionDir(id), folderHints());
+    // What they asked for that the task doesn't do yet: asked out loud in the review, with the steps it wasn't sure of.
+    const missing = await coverage(spec, s.turns as Turn[], s.cards);
+    if (missing.length) spec.questions = [...(spec.questions ?? []), ...missing];
+    if (gone(id)) return;
     if (spec.title && !session(id).title) db.prepare("UPDATE sessions SET title = ? WHERE id = ?").run(spec.title, id);
     const specId = saveSpec(id, spec, "Learned by Muse Spark from your recording");
     stage(id, "building");
     const r = await build(spec, pagesOf(id), new Date(session(id).started_at).toLocaleDateString("en-CA", { timeZone: "Asia/Manila" }));
+    if (gone(id)) return;
     db.prepare("UPDATE specs SET code = ?, tests = ? WHERE id = ?").run(r.code, JSON.stringify(r.tests), specId);
     stage(id, "ready");
     endLive(id);
     notify(`Remuse learned: ${session(id).title ?? spec.goal}`, r.ok ? "Ready to do it again. Open Remuse to run or schedule it." : "Some checks failed. Open Remuse to review it.", `http://127.0.0.1:${PORT}/#/spec/${specId}`);
-    // Then, by itself, it tries the task once on your example to show it understood.
-    autoPractice(specId);
+    // ponytail: no practice by itself any more. Learning always follows teaching, and the review that follows reads the
+    // plan aloud first: practice starts when you say it looks right ("Practice once" is one tap if the sidebar was closed).
   } catch (e) {
-    stage(id, "failed", (e as Error).message);
     endLive(id);
+    if (gone(id)) return;
+    stage(id, "failed", (e as Error).message);
     notify("Remuse couldn't learn that task", (e as Error).message, `http://127.0.0.1:${PORT}/#/session/${id}`);
   }
 }
 
 /** Feedback in plain words (typed or said): Muse Spark updates the task as a new version and says what it
  *  changed; the rules are rebuilt and checked in the background ("thinking", like after a recording). */
-async function applyFeedback(row: ReturnType<typeof specRow>, said: string) {
+// practice: false in the review, where practice waits until you say it's right. answered: the question this was an
+// answer to; the new version keeps only the questions still open.
+async function applyFeedback(row: ReturnType<typeof specRow>, said: string, opts: { practice?: boolean; answered?: string } = {}) {
   // The last real run is what the person is talking about; a practice only if there was no real run yet.
   const last = db.prepare("SELECT json FROM runs WHERE spec_id IN (SELECT id FROM specs WHERE session_id = ?) ORDER BY json_extract(json, '$.mode') IS NULL DESC, updated_at DESC LIMIT 1").get(row.sessionId) as any;
   const lastRun = last ? (JSON.parse(last.json) as Run).items.slice(0, 3).map((it) => `${it.label}: ${it.log.map((l) => (l.why ? `${l.msg} (${l.why})` : l.msg)).join(" / ")}`).join("\n").slice(0, 4000) : "";
   const { spec, changes } = await revise(full(row.sessionId), row.spec, said, lastRun);
+  const open = (row.spec.questions ?? []).filter((q) => q.id !== opts.answered);
+  if (open.length) spec.questions = open; else delete spec.questions;
   const specId = saveSpec(row.sessionId, spec, `You said: "${said.slice(0, 140)}"`);
   stage(row.sessionId, "building");
   build(spec, pagesOf(row.sessionId), new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Manila" }))
     .then((b) => {
       db.prepare("UPDATE specs SET code = ?, tests = ? WHERE id = ?").run(b.code, JSON.stringify(b.tests), specId); stage(row.sessionId, "ready");
-      autoPractice(specId); // try the changed task once
+      if (opts.practice !== false) autoPractice(specId); // try the changed task once
     })
     .catch((e) => stage(row.sessionId, "failed", (e as Error).message));
   // Schedules follow the task to its new version.
@@ -219,21 +246,41 @@ async function applyFeedback(row: ReturnType<typeof specRow>, said: string) {
 // Hands-free conversation about a learned task (the sidebar keeps listening after it's learned). Each thing
 // the person says is heard, sorted (a change, "looks right", a schedule, "do it now", "let me show you
 // again", or not meant for Remuse) and acted on; the sidebar shows the latest and does the rest.
-type Heard = { n: number; at: number; text: string; intent: string; changes?: string[]; schedule?: { everyMinutes?: number; time?: string; days?: string }; error?: string };
+// In the review, the first open question is the one Remuse is waiting on; "speak" is what it says back.
+type Heard = { n: number; at: number; text: string; intent: string; specId?: number; changes?: string[]; schedule?: { everyMinutes?: number; time?: string; days?: string }; error?: string; speak?: string[]; answered?: string };
 const heard = new Map<string, Heard>();
+// An answer goes to Muse Spark as the question and the answer, with the step it took out when that's what it asked.
+const asAnswer = (q: { text: string; step?: unknown }, said: string) => `Q: ${q.text}${q.step ? ` (the step I took out: ${JSON.stringify(q.step)})` : ""}\nA: ${said}`;
 async function hearSaid(sessionId: string, wav: Uint8Array) {
+  if (silent(wav)) return; // nothing said: a model would make words up
   const text = (await transcribe(wav)).transcript.trim();
-  if (!text) return;
+  if (text) await hearText(sessionId, text);
+}
+// What you said or typed in the review, sorted and acted on. Typed words are always for Remuse: "not for me" becomes a change.
+async function hearText(sessionId: string, text: string, typed = false): Promise<Heard> {
   const n = (heard.get(sessionId)?.n ?? 0) + 1;
   heard.set(sessionId, { n, at: Date.now(), text, intent: "thinking" });
   const latest = (db.prepare("SELECT id FROM specs WHERE session_id = ? ORDER BY version DESC LIMIT 1").get(sessionId) as any)?.id;
-  if (!latest) return heard.set(sessionId, { n, at: Date.now(), text, intent: "none" });
+  if (!latest) { heard.set(sessionId, { n, at: Date.now(), text, intent: "none" }); return heard.get(sessionId)!; }
   const row = specRow(latest);
+  const set = (h: Omit<Heard, "n" | "at" | "text">) => heard.set(sessionId, { n, at: Date.now(), text, ...h });
   try {
-    const r = await sortSaid(row.spec, text);
-    if (r.intent === "change") heard.set(sessionId, { n, at: Date.now(), text, intent: "change", changes: (await applyFeedback(row, text)).changes });
-    else heard.set(sessionId, { n, at: Date.now(), text, intent: r.intent, schedule: r.schedule });
-  } catch (e) { heard.set(sessionId, { n, at: Date.now(), text, intent: "none", error: (e as Error).message }); }
+    const open = row.spec.questions?.[0];
+    const r = await sortSaid(row.spec, text, open?.text);
+    if (typed && r.intent === "none") r.intent = "change";
+    if (r.intent === "answer" && open) {
+      const { changes, specId } = await applyFeedback(row, asAnswer(open, text), { practice: false, answered: open.id });
+      set({ intent: "answer", changes, specId, answered: open.id, speak: changes.length ? changes : ["Got it."] });
+    } else if (r.intent === "change" || r.intent === "answer") {
+      const { changes, specId } = await applyFeedback(row, text, { practice: false });
+      set({ intent: "change", changes, specId, speak: changes.length ? changes : ["I changed it."] });
+    } else if (r.intent === "approve" || r.intent === "run") set({ intent: r.intent, speak: ["Okay, I'll try it once on your example."] });
+    else if (r.intent === "discard") set({ intent: r.intent, speak: ["Okay, I've thrown that task away."] });
+    else if (r.intent === "stop") set({ intent: r.intent, speak: ["Okay, I'll stop listening."] });
+    else if (r.intent === "schedule") set({ intent: r.intent, schedule: r.schedule, speak: ["Okay, it'll repeat on that schedule."] });
+    else set({ intent: r.intent });
+  } catch (e) { set({ intent: "none", error: (e as Error).message }); }
+  return heard.get(sessionId)!;
 }
 
 // What a list task has already handled, kept between runs: an hourly inbox task does each email once. Saved as
@@ -627,6 +674,12 @@ async function route(req: IncomingMessage, res: ServerResponse) {
   }
   if (p[1] === "schedules" && p[2] && m === "DELETE") { db.prepare("DELETE FROM schedules WHERE id = ?").run(Number(p[2])); watchFolders(); return send(res, 200, schedules()); }
   // Saved tasks for the sidebar: every recording with its latest Task Spec.
+  // The extension writes down every mic drop and reconnect, with the mic's state then (see offscreen.js mend()).
+  if (url.pathname === "/api/mic-log" && m === "POST") {
+    const b = await json(req);
+    appendFileSync(join(DATA, "mic.log"), `${JSON.stringify({ at: new Date().toISOString(), session: b.session ?? null, ok: b.ok ?? null, note: !!b.note, why: String(b.why ?? "").slice(0, 300), detail: b.detail ?? null })}\n`);
+    return send(res, 200, { ok: true });
+  }
   if (url.pathname === "/api/tasks" && m === "GET")
     return send(res, 200, (db.prepare(`SELECT s.id AS sessionId, s.title, s.started_at AS startedAt, s.ended_at AS endedAt, s.learn_stage AS learnStage, s.learn_error AS learnError,
       x.id AS specId, x.version, x.json, x.tests, x.code IS NOT NULL AS built
@@ -724,12 +777,16 @@ async function route(req: IncomingMessage, res: ServerResponse) {
       if (!r.changes) throw new HttpError(404, "no such event");
       return send(res, 200, { ok: true });
     }
-    // Following along while you record: a piece of your voice in, the live draft out.
-    if (m === "POST" && p[3] === "live") {
+    // While you teach: one thing you said, whole. Notes are taken from it; "control: done" means you said you're done.
+    if (m === "POST" && p[3] === "heard") {
       const wav = await body(req);
       if (wav.subarray(0, 4).toString() !== "RIFF") throw new HttpError(400, "audio must be WAV");
-      await hear(id, wav, Number(url.searchParams.get("at") ?? 0), () => full(id));
-      return send(res, 200, { ok: true });
+      const atMs = Number(url.searchParams.get("at") ?? 0), t0 = Date.now();
+      const r = await hearLive(id, wav, atMs, () => full(id));
+      // What each sentence was heard as, and whether it ended the recording: a missed "I'm done" can be checked later.
+      if (r.text) appendFileSync(join(DATA, "voice.log"), `${JSON.stringify({ at: new Date().toISOString(), session: id, atS: +(atMs / 1000).toFixed(1), text: r.text, control: r.control, ms: Date.now() - t0 })}
+`);
+      return send(res, 200, r);
     }
     // Hands-free: something said about a learned task (sorted and acted on in the background), and the latest.
     if (m === "POST" && p[3] === "say") {
@@ -739,7 +796,13 @@ async function route(req: IncomingMessage, res: ServerResponse) {
       return send(res, 202, { ok: true });
     }
     if (m === "GET" && p[3] === "say") return send(res, 200, heard.get(id) ?? null);
-    if (m === "GET" && p[3] === "live") return send(res, 200, liveState(id) ?? { turns: [], draft: null, drafting: false, error: null });
+    // Typed in the review ("Type instead"): understood like speech, and answered right away.
+    if (m === "POST" && p[3] === "say-text") {
+      const text = String((await json(req)).text ?? "").trim().slice(0, 2000);
+      if (!text) throw new HttpError(400, "type something");
+      return send(res, 200, await hearText(id, text, true));
+    }
+    if (m === "GET" && p[3] === "live") return send(res, 200, liveState(id) ?? { turns: [], cards: [], thinking: false, error: null, ending: null });
     if (m === "PUT" && p[3] === "audio") {
       const wav = await body(req);
       if (wav.subarray(0, 4).toString() !== "RIFF") throw new HttpError(400, "audio must be WAV");
@@ -750,8 +813,20 @@ async function route(req: IncomingMessage, res: ServerResponse) {
       const { endedAt, audioOffsetMs, learn: auto } = await json(req);
       db.prepare("UPDATE sessions SET ended_at = ?, audio_offset_ms = ? WHERE id = ?").run(endedAt ?? Date.now(), audioOffsetMs ?? null, id);
       if (isEmpty(id)) { discard(id); return send(res, 200, { id, discarded: true }); }
-      // Proactive: learn the whole task in the background (name, spec, tested code). The sidebar follows along.
-      if (auto !== false) { learn(id, audioOffsetMs ?? 0); return send(res, 202, { id, learning: true }); }
+      if (auto !== false) {
+        // Nothing done and nothing understood (a misclick, a start by mistake, words it couldn't make out): ask
+        // whether that was a task instead of learning something made up.
+        const cards = await liveCards(id);
+        const acted = (db.prepare("SELECT COUNT(*) AS n FROM events WHERE session_id = ? AND kind IN ('click', 'input', 'key', 'upload', 'mark')").get(id) as any).n as number;
+        if (!cards.length && acted <= 1) {
+          endLive(id);
+          stage(id, "unsure", acted ? "I saw one click and couldn't make out what you wanted." : "I didn't see you do anything, and I couldn't make out what you wanted.");
+          return send(res, 200, { id, unsure: true });
+        }
+        // Proactive: learn the whole task in the background (name, spec, tested code). The sidebar follows along.
+        learn(id, audioOffsetMs ?? 0);
+        return send(res, 202, { id, learning: true });
+      }
       await transcribeSession(id, audioOffsetMs ?? 0);
       return send(res, 200, full(id));
     }
@@ -778,10 +853,15 @@ async function route(req: IncomingMessage, res: ServerResponse) {
     // Feedback in plain words: Muse Spark updates the task (a new version) and says what it changed; the
     // rules are then rebuilt and checked in the background, shown as "thinking" like after a recording.
     if (m === "POST" && p[3] === "feedback") {
-      const said = String((await json(req)).text ?? "").trim().slice(0, 2000);
+      const b = await json(req);
+      const said = String(b.text ?? "").trim().slice(0, 2000);
       if (!said) throw new HttpError(400, "say what should change");
-      return send(res, 201, await applyFeedback(row, said));
+      // Typed in the review: no practice until it's right, and an answer to the question it asked.
+      const q = b.answered ? row.spec.questions?.find((x) => x.id === b.answered) : undefined;
+      return send(res, 201, await applyFeedback(row, q ? asAnswer(q, said) : said, { practice: b.practice !== false, answered: q?.id }));
     }
+    // What Remuse says when it reads this task back: the plan, then its questions (asked one at a time).
+    if (m === "GET" && p[3] === "readback") return send(res, 200, { specId: row.id, ...readback(row.spec) }); // which version: the review asks the next question from the new one
     // The task's file settings (which folder and rule each upload uses; where downloads go). Saved as a new
     // version that keeps the built code, since the rules didn't change.
     if (m === "POST" && p[3] === "files") {

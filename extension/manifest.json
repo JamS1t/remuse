@@ -15,7 +15,8 @@
     "debugger",
     "alarms",
     "notifications",
-    "background"
+    "background",
+    "tts"
   ],
   "host_permissions": [
     "<all_urls>"
@@ -62,5 +63,19 @@
     "32": "icons/icon-32.png",
     "48": "icons/icon-48.png",
     "128": "icons/icon-128.png"
+  },
+  "commands": {
+    "teach": {
+      "suggested_key": {
+        "default": "Alt+Shift+S"
+      },
+      "description": "Start or stop teaching Remuse a task"
+    },
+    "pen": {
+      "suggested_key": {
+        "default": "Alt+Shift+D"
+      },
+      "description": "Draw on the page while teaching"
+    }
   }
 }

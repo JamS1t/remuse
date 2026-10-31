@@ -41,13 +41,30 @@ async function onEvent(ev, sender) {
   // (your messages, other accounts) is none of the recording's business.
   if (!sender.tab.active) return;
   const { at, kind, ...data } = ev;
-  const before = kind === "click" || kind === "key" || kind === "point" ? await screenshot(sender.tab.windowId) : null;
+  const before = kind === "click" || kind === "key" || kind === "mark" ? await screenshot(sender.tab.windowId) : null; // a mark's picture shows the ink
   const { id } = await api(`/sessions/${r.id}/events`, "POST", { t: at - r.t0, kind, ...data, tab: sender.tab.id, before });
   if (!AFTER_DELAY[kind]) return;
   await sleep(AFTER_DELAY[kind]);
   const after = await screenshot(sender.tab.windowId);
   if (after) await api(`/sessions/${r.id}/events/${id}/after`, "PUT", { after });
 }
+
+// Hopping between tabs while teaching: each switch is recorded with a picture of the tab you landed on, so a tab you
+// only read from or talked about (nothing clicked there) is still part of the task.
+async function onSwitch(tabId) {
+  const r = await current();
+  if (!r || tabId == null) return;
+  const tab = await chrome.tabs.get(tabId).catch(() => null);
+  if (!tab?.active || !tab.url?.startsWith("http")) return;
+  await sleep(400); // let the tab paint
+  const after = await screenshot(tab.windowId);
+  await api(`/sessions/${r.id}/events`, "POST", { t: Date.now() - r.t0, kind: "tab", url: tab.url, title: tab.title, tab: tab.id, after }).catch(() => {});
+}
+chrome.tabs.onActivated.addListener(({ tabId }) => { onSwitch(tabId).catch(() => {}); });
+chrome.windows.onFocusChanged.addListener((windowId) => {
+  if (windowId === chrome.windows.WINDOW_ID_NONE) return;
+  chrome.tabs.query({ active: true, windowId }).then(([t]) => onSwitch(t?.id)).catch(() => {});
+});
 
 async function ensureOffscreen() {
   if (await chrome.offscreen.hasDocument()) return;
@@ -81,6 +98,7 @@ chrome.tabs.onRemoved.addListener(async (tabId) => {
 
 async function start(title, { skipMicCheck = false } = {}) {
   if (await current()) throw new Error("already recording");
+  hush(); // "let me show you again" while Remuse is still talking
   if (!skipMicCheck && !(await micAllowed())) {
     const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
     const mic = await chrome.tabs.create({ url: "mic.html" });
@@ -93,9 +111,10 @@ async function start(title, { skipMicCheck = false } = {}) {
   const { id } = await api("/sessions", "POST", { title, startedAt: t0 });
   const r = { id, t0, audioOffsetMs: null, audioError: null };
   await save(r);
+  broadcast(true);
 
   await ensureOffscreen();
-  const a = await chrome.runtime.sendMessage({ target: "offscreen", type: "start", sessionId: id });
+  const a = await chrome.runtime.sendMessage({ target: "offscreen", type: "start", sessionId: id, t0 });
   if (a?.error) {
     r.audioError = a.error;
     // Offscreen pages can't show the mic prompt; a normal tab can, once per install.
@@ -112,15 +131,27 @@ async function start(title, { skipMicCheck = false } = {}) {
   return r;
 }
 
-async function stop() {
+// Stop can come from the button, the shortcut and "I'm done" at the same moment: they all share one stop.
+// Cancel is a stop that throws the recording away instead of learning it.
+let stopping = null;
+function stop(opts) { return (stopping ??= finish(opts).finally(() => { stopping = null; })); }
+const cancel = (opts) => stop({ ...opts, discard: true });
+async function finish({ byVoice = false, discard = false } = {}) {
   const r = await current();
   if (!r) throw new Error("not recording");
   await save(null);
+  broadcast(false);
   await queue; // let pending screenshots land
   if (await chrome.offscreen.hasDocument()) {
     const a = await chrome.runtime.sendMessage({ target: "offscreen", type: "stop" });
     if (a?.error) r.audioError = a.error;
     await chrome.offscreen.closeDocument();
+  }
+  if (discard) {
+    await api(`/sessions/${r.id}`, "DELETE").catch(() => {});
+    const result = { id: r.id, learning: false, discarded: true, cancelled: true, error: null, byVoice, at: Date.now() };
+    await chrome.storage.local.set({ last: result });
+    return result;
   }
   await sleep(1000); // last "after" shots
   // The Agent learns the task on its own from here: names it, writes the spec, builds and tests it.
@@ -128,15 +159,90 @@ async function stop() {
   let finishError = null;
   const done = await api(`/sessions/${r.id}/finish`, "POST", { endedAt: Date.now(), audioOffsetMs: r.audioOffsetMs }).catch((e) => { finishError = e.message; return null; });
   // Nothing was done in the recording: the Agent dropped it rather than keep an empty task.
-  const result = { id: r.id, learning: !finishError && !done?.discarded, discarded: !!done?.discarded, error: finishError ?? r.audioError ?? null };
+  const result = { id: r.id, learning: !finishError && !done?.discarded, discarded: !!done?.discarded, error: finishError ?? r.audioError ?? null, byVoice, at: Date.now() };
+  if (result.learning) setMode("learning"); // a second press right away mustn't start another recording
   await chrome.storage.local.set({ last: result });
   return result;
 }
 
 async function status() {
   const r = await current();
-  return { recording: !!r, rec: r, last: (await chrome.storage.local.get("last")).last ?? null };
+  return { recording: !!r, rec: r, hearing, level: micLevel, mic, micPermission, speaking: talk ? { line: talk.line, total: talk.total } : null, mode, last: (await chrome.storage.local.get("last")).last ?? null };
 }
+
+// Every page knows whether you're teaching (drawing on the page only works then).
+async function broadcast(on) {
+  for (const t of await chrome.tabs.query({}).catch(() => [])) chrome.tabs.sendMessage(t.id, { type: "recording", on }).catch(() => {});
+}
+
+// ---- Remuse speaks: the review reads its plan aloud. Chrome's own voices, no click needed in the page. ----
+// While it talks the microphone holds off, so Remuse never hears itself as you.
+let talk = null; // { line, total, end } while speaking
+let voice = null; // Google US English if there is one, else the first English voice; asked again until found
+async function pickVoice() {
+  if (voice) return voice; // Chrome can list its voices late, right after it starts: an empty list isn't kept
+  const all = await chrome.tts.getVoices();
+  voice = all.find((v) => v.voiceName === "Google US English") ?? all.find((v) => (v.lang ?? "").startsWith("en")) ?? null;
+  return voice;
+}
+const hold = (on) => chrome.runtime.sendMessage({ target: "offscreen", type: "hold", on }).catch(() => {});
+async function speak(lines) {
+  hush();
+  const list = (lines ?? []).map(String).filter((l) => l.trim());
+  const v = await pickVoice();
+  if (!list.length || !v) return { spoken: 0 };
+  return new Promise((resolve) => {
+    let spoken = 0;
+    const me = { line: 0, total: list.length, end: () => { if (talk !== me) return; talk = null; hold(false); resolve({ spoken }); } };
+    talk = me;
+    hold(true);
+    list.forEach((text, i) => chrome.tts.speak(text, {
+      voiceName: v.voiceName, enqueue: true,
+      onEvent: (e) => {
+        if (talk !== me) return;
+        if (e.type === "start") me.line = i;
+        else if (e.type === "end") { spoken = i + 1; if (i === list.length - 1) me.end(); }
+        else if (e.type === "interrupted" || e.type === "cancelled" || e.type === "error") me.end();
+      },
+    }));
+  });
+}
+function hush() {
+  const t = talk;
+  if (t) { chrome.tts.stop(); t.end(); }
+  return { ok: true };
+}
+
+// What the sidebar is showing, which it says itself: "idle", "learning", "review" or "practice".
+// Kept in session storage too: Chrome stops this worker after a while, and a review mustn't be lost to a key press then.
+let mode = "idle";
+function setMode(m) {
+  mode = ["idle", "learning", "review", "practice"].includes(m) ? m : "idle";
+  chrome.storage.session.set({ mode }).catch(() => {});
+  return { mode };
+}
+const currentMode = async () => (await chrome.storage.session.get("mode").catch(() => ({}))).mode ?? mode;
+
+// Shortcuts. Teach (Alt+Shift+R) does the obvious thing: start teaching, or stop. While Remuse is learning, reviewing
+// or practicing it only opens the sidebar: a new recording would throw away the review. Pen (Alt+Shift+D): draw.
+async function command(name) {
+  if (name === "pen") {
+    if (!(await current())) return { did: "nothing" };
+    const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+    if (tab?.id != null) await chrome.tabs.sendMessage(tab.id, { type: "pen" }).catch(() => {});
+    return { did: "pen" };
+  }
+  if (name !== "teach") return { did: "nothing" };
+  if (talk) { hush(); return { did: "hush" }; } // Remuse is talking: the key cuts it off, and you talk
+  if (await current()) { await stop(); return { did: "stop" }; }
+  if ((await currentMode()) === "idle") { await start(""); return { did: "start" }; }
+  return { did: "nothing" };
+}
+chrome.commands.onCommand.addListener((name, tab) => {
+  // The side panel opens only in answer to the key press itself, so before anything is awaited.
+  if (tab?.windowId != null) chrome.sidePanel.open({ windowId: tab.windowId }).catch(() => {});
+  command(name).catch((e) => console.warn(`${name}:`, e.message));
+});
 
 // ---- Connected sites: the Agent works with your logins for these, and only these. ----
 
@@ -195,14 +301,41 @@ async function currentTab() {
   return { url: tab?.url ?? null, title: tab?.title ?? null, site: tab?.url ? siteOf(tab.url) : null };
 }
 
+// The sidebar holds a port open while it's showing. Closing it ends the review's listening and talking, so nothing
+// said in the room afterwards changes a task.
+chrome.runtime.onConnect.addListener((port) => {
+  if (port.name !== "panel") return;
+  port.onDisconnect.addListener(() => { hush(); chrome.runtime.sendMessage({ target: "offscreen", type: "unlisten" }).catch(() => {}); });
+});
+
 // The toolbar icon opens the sidebar.
 chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {});
 
 // Exposed for tests and the DevTools console.
-globalThis.showrun = { start, stop, status, connect, disconnect };
+globalThis.showrun = { start, stop, cancel, status, connect, disconnect, command, setMode, speak, hush };
+
+// Whether you are talking right now (the offscreen recorder hears it first), for the sidebar to show.
+let hearing = false, micLevel = 0, mic = null, micPermission = false; // mic: why it isn't working right now, or null
 
 chrome.runtime.onMessage.addListener((msg, sender, reply) => {
   if (msg.type === "event") { onEvent(msg.ev, sender).catch((e) => console.warn("event dropped:", e.message)); return; }
+  if (msg.type === "hearing") { hearing = !!msg.on; return; }
+  if (msg.type === "level") { micLevel = msg.level; return; }
+  if (msg.type === "mic") {
+    if (!msg.note) { mic = msg.ok ? null : msg.why ?? "the microphone stopped"; micPermission = !msg.ok && !!msg.permission; } // null: working
+    // Written down on the Agent (data/mic.log), so a drop can be traced to its cause afterwards.
+    current().then((r) => api("/mic-log", "POST", { session: r?.id ?? null, ok: msg.ok ?? null, note: !!msg.note, why: msg.why, detail: msg.detail ?? null })).catch(() => {});
+    return;
+  }
+  // You said you're done. Only for the recording that is still running: a late one (Stop was pressed) is ignored.
+  if (msg.type === "saidDone") {
+    current().then((r) => { if (r?.id === msg.sessionId) return stop({ byVoice: true }); }).catch((e) => console.warn("couldn't stop:", e.message));
+    return;
+  }
+  if (msg.type === "saidCancel") {
+    current().then((r) => { if (r?.id === msg.sessionId) return cancel({ byVoice: true }); }).catch((e) => console.warn("couldn't cancel:", e.message));
+    return;
+  }
   if (msg.type === "micGranted") {
     // Back to the page the person was on, then start the recording they asked for.
     (async () => {
@@ -218,23 +351,31 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
     return;
   }
   const fn = {
-    start: () => start(msg.title), stop, status: async () => ({ ...(await status()), waitingForMic: !!(pendingStart ?? (await chrome.storage.session.get("pendingStart")).pendingStart) }),
+    start: () => start(msg.title), stop, cancel: () => cancel(), status: async () => ({ ...(await status()), waitingForMic: !!(pendingStart ?? (await chrome.storage.session.get("pendingStart")).pendingStart) }),
     sites: async () => ({ sites: await sites() }),
     connect: async () => connect(msg.site ?? (await currentTab()).site),
     disconnect: () => disconnect(msg.site),
     currentTab,
+    mode: async () => setMode(msg.mode),
+    speak: () => speak(msg.lines),
+    hush: async () => hush(),
+    keys: async () => Object.fromEntries((await chrome.commands.getAll()).map((c) => [c.name, c.shortcut || ""])),
     // Hands-free conversation about a learned task: listen until told to stop (see offscreen.js).
     listen: async () => {
       if (await current()) return { ok: false };
       if (!(await micAllowed())) throw new Error("Allow the microphone first: press Watch me do a task once.");
       const a = await chrome.runtime.sendMessage({ target: "offscreen", type: "converse", sessionId: msg.sessionId });
       if (a?.error) throw new Error(a.error);
+      if (talk) hold(true); // opened while Remuse is still talking: it waits until it's done
       return { ok: true };
     },
     unlisten: async () => {
       if (await chrome.offscreen.hasDocument()) await chrome.runtime.sendMessage({ target: "offscreen", type: "unlisten" }).catch(() => {});
       return { ok: true };
     },
+    // Chrome took the mic permission back mid-demo ("Allow this time"): ask again in a tab. The recorder reconnects
+    // by itself once it is allowed.
+    openMic: async () => { await chrome.tabs.create({ url: "mic.html" }); return { ok: true }; },
     openTab: async () => { if (/^https?:\/\//.test(msg.url ?? "")) await chrome.tabs.create({ url: msg.url }); return { ok: true }; },
   }[msg.type];
   if (!fn || msg.target === "offscreen") return;

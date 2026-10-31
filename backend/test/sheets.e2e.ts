@@ -83,10 +83,10 @@ try {
   // While still recording, the sidebar can already show what Remuse heard and its draft of the task.
   const recId = ((await call("status")) as any).rec?.id;
   let lv: any = null;
-  for (let i = 0; i < 20; i++) { lv = await get(`/sessions/${recId}/live`); if (lv.draft?.steps?.length && !lv.drafting) break; await sleep(1500); }
-  console.log("   live:", JSON.stringify({ heard: lv.turns.map((x: any) => x.text).join(" ").slice(0, 120), draft: lv.draft }).slice(0, 600));
-  check("while recording, the voice is heard in pieces", lv.turns.length > 0, `${lv.turns.length} pieces ${lv.error ?? ""}`);
-  check("and a draft of the task is shown before you stop", (lv.draft?.steps?.length ?? 0) > 0, lv.error ?? "");
+  for (let i = 0; i < 20; i++) { lv = await get(`/sessions/${recId}/live`); if (lv.cards?.length && !lv.thinking) break; await sleep(1500); }
+  console.log("   live:", JSON.stringify({ heard: lv.turns.map((x: any) => x.text).join(" | ").slice(0, 200), cards: lv.cards }).slice(0, 600));
+  check("while recording, the voice is heard in sentences", lv.turns.length > 0, `${lv.turns.length} sentences ${lv.error ?? ""}`);
+  check("cards show up before you stop", (lv.cards?.length ?? 0) > 0, lv.error ?? "");
   const stopped = (await call("stop")) as any;
 
   const s = await get(`/sessions/${stopped.id}`);
@@ -96,8 +96,7 @@ try {
   check("on the spreadsheet's own address, not the hidden frame's", typed.every((e: any) => e.url.startsWith(SITE)), typed[0]?.url);
   console.log("   stop:", JSON.stringify(stopped));
   const wavPath = join(data, "sessions", stopped.id, "voice.wav");
-  const pt = s.events.find((e: any) => e.kind === "point" && e.target?.text === "Views 1,830");
-  check("pointing at something is recorded, with a screenshot", !!pt?.before, JSON.stringify(s.events.filter((e: any) => e.kind === "point").map((e: any) => e.target?.text)));
+  check("resting the mouse on something records nothing", !s.events.some((e: any) => e.kind === "point"), JSON.stringify(s.events.map((e: any) => e.kind)));
   const wav = existsSync(wavPath) ? readFileSync(wavPath) : Buffer.alloc(44);
   const secs = (wav.length - 44) / 32000, len = (s.ended_at - s.started_at) / 1000;
   check("the whole voice track is kept", secs > len - 4, `${secs.toFixed(1)} s of voice in a ${len.toFixed(1)} s recording`);

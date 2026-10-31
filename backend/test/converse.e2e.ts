@@ -18,7 +18,7 @@ const results: [string, boolean, string][] = [];
 const check = (n: string, ok: boolean, d = "") => { results.push([n, ok, d]); console.log(`${ok ? "PASS" : "FAIL"}  ${n}${d ? `  (${d})` : ""}`); };
 const get = async (p: string) => (await fetch(API + p)).json();
 const post = async (p: string, b: unknown = {}) => (await fetch(API + p, { method: "POST", body: JSON.stringify(b) })).json();
-if (await fetch(`${API}/sessions`).then(() => true, () => false)) { console.error("Port 3200 is busy: stop the Remuse Agent first."); process.exit(1); }
+if (!process.env.SORT_ONLY && await fetch(`${API}/sessions`).then(() => true, () => false)) { console.error("Port 3200 is busy: stop the Remuse Agent first."); process.exit(1); }
 
 const spec = {
   title: "Video stats", goal: "Report this video's views and CTR every hour.", scope: "", scopeTypes: [], inputs: { source: "once", itemName: "update" },
@@ -38,6 +38,19 @@ for (const [said, want] of process.env.SKIP_SORT ? [] : [["looks good, that's ex
   const r = await sortSaid(spec as any, said);
   check(`"${said}" is taken as ${want}`, r.intent === want, r.intent + (r.schedule ? ` ${JSON.stringify(r.schedule)}` : ""));
 }
+// With a question open (the review asks one at a time), an answer is an answer, and "looks good" is still approval.
+if (!process.env.SKIP_SORT) {
+  const q = "Should I do this for every video, or only the newest one?";
+  const a = await sortSaid(spec as any, "yes, every video", q);
+  check(`with a question open, "yes, every video" is an answer`, a.intent === "answer", a.intent);
+  const b = await sortSaid(spec as any, "looks good, that's it", q);
+  check(`with a question open, "looks good" is still approve`, b.intent === "approve", b.intent);
+  for (const [said, want] of [["no, revert that and remove the task, go back to the dashboard", "discard"], ["never mind, delete this one", "discard"], ["okay stop listening for now", "stop"], ["thanks, that's all for now", "stop"]] as const) {
+    const r = await sortSaid(spec as any, said);
+    check(`"${said}" is taken as ${want}`, r.intent === want, r.intent);
+  }
+}
+if (process.env.SORT_ONLY) { const failed = results.filter(([, ok]) => !ok); console.log(`\n${results.length - failed.length}/${results.length} passed`); process.exit(failed.length ? 1 : 0); }
 
 const data = mkdtempSync(join(tmpdir(), "remuse-converse-"));
 const agent = spawn(process.execPath, ["--env-file-if-exists=../.env", "src/server.ts"], {

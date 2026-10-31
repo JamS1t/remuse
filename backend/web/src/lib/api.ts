@@ -15,10 +15,14 @@ export type SpecRow = { id: number; sessionId: string; version: number; note?: s
 export type SessionRow = { id: string; title?: string; started_at: number; events: number; latest_spec?: number };
 export type SessionFull = {
   id: string; title?: string; started_at: number; transcribe_error?: string;
-  events: { t: number; kind: string; url?: string; value?: string; before?: string; after?: string; target?: { role?: string; tag?: string; label?: string; text?: string } }[];
+  events: { id?: number; t: number; kind: string; url?: string; value?: string; key?: string; before?: string; after?: string; target?: { role?: string; tag?: string; label?: string; text?: string } }[];
   turns: { startMs: number; endMs: number; text: string }[];
   specs: { id: number; version: number; note?: string }[];
+  cards?: Card[];
 };
+// Notes taken while you teach: each from your words (quote) or what you did (event ids). See backend/src/notes.ts.
+export type Card = { id: string; kind: "step" | "rule" | "read" | "question"; text: string; quote?: string; events?: number[] };
+export type LiveState = { turns: { startMs: number; endMs: number; text: string }[]; cards: Card[]; thinking: boolean; error: string | null; ending?: string | null };
 export type LogLine = { at: number; msg: string; level: "info" | "ok" | "warn" | "error"; shot?: string; why?: string; how?: "page" | "screen"; by?: string };
 export type ItemStatus = "waiting" | "running" | "approval" | "asking" | "planned" | "done" | "skipped" | "failed";
 export type Candidate = { url: string; title: string; vars: Record<string, unknown>; score: number | null; shot?: string; best?: boolean };

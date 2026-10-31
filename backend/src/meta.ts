@@ -121,12 +121,32 @@ export async function sam(image: Uint8Array, phrase: string): Promise<Box[]> {
 export type Turn = { startMs: number; endMs: number; text: string };
 
 // Muse Voice Transcribe takes WAV only: mono, 16-bit, 16 or 24 kHz. Timestamps are per turn.
+// languageBias tells it which languages to expect: English and Tagalog by default, so Taglish isn't heard as
+// Indonesian or Malay. VOICE_LANGUAGES="English, Spanish" changes it; empty leaves it to the model.
+export function transcribeRequest() {
+  const langs = (process.env.VOICE_LANGUAGES ?? "English,Tagalog").split(",").map((x) => x.trim()).filter(Boolean);
+  return { mode: "ENDPOINTING", model: "muse-voice-transcribe-1.0", audioEncoding: "WAV", ...(langs.length ? { languageBias: langs } : {}) };
+}
+/** A WAV with no voice in it: a pause, a quiet room, a mic that went dead. Speech models make words up for those
+ *  ("Hello."), so it isn't sent to one. 16-bit mono after a 44-byte header, as toWav in offscreen.js writes it. */
+export function silent(wav: Uint8Array, floor = 0.003): boolean {
+  const n = (wav.length - 44) >> 1;
+  if (n <= 0) return true;
+  const v = new DataView(wav.buffer, wav.byteOffset + 44, n * 2);
+  let sum = 0;
+  for (let i = 0; i < n; i++) { const x = v.getInt16(i * 2, true) / 32768; sum += x * x; }
+  return Math.sqrt(sum / n) < floor;
+}
 export async function transcribe(wav: Uint8Array): Promise<{ transcript: string; turns: Turn[] }> {
   const t0 = Date.now();
   const form = new FormData();
-  form.append("request", new Blob([JSON.stringify({ mode: "ENDPOINTING", model: "muse-voice-transcribe-1.0", audioEncoding: "WAV" })], { type: "application/json" }));
+  form.append("request", new Blob([JSON.stringify(transcribeRequest())], { type: "application/json" }));
   form.append("audio", new Blob([wav], { type: "audio/wav" }), "narration.wav");
-  const res = await fetch(`${BASE}/asr/transcribe`, { method: "POST", headers: { Authorization: `Bearer ${key()}` }, body: form });
+  // A transcription that never answers would swallow what was said (like "I'm done") without a trace: give up after a
+  // while and say so. A whole recording gets longer than one sentence.
+  const limit = Math.max(30_000, Math.round((wav.length / 32000) * 2000));
+  const res = await fetch(`${BASE}/asr/transcribe`, { method: "POST", headers: { Authorization: `Bearer ${key()}` }, body: form, signal: AbortSignal.timeout(limit) })
+    .catch((e) => { calls.push({ at: t0, model: "muse-voice-transcribe-1.0", label: "transcribe", ms: Date.now() - t0, error: (e as Error).name === "TimeoutError" ? `no answer in ${Math.round(limit / 1000)} s` : (e as Error).message }); throw e; });
   const body = await res.text();
   calls.push({ at: t0, model: "muse-voice-transcribe-1.0", label: "transcribe", ms: Date.now() - t0, error: res.ok ? undefined : `HTTP ${res.status}` });
   if (!res.ok) throw new Error(`transcribe: HTTP ${res.status} ${body.slice(0, 300)}`);

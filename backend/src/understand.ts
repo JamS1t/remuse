@@ -2,6 +2,9 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { askJson, text, png, type Part } from "./meta.ts";
+import { IGNORED, moments } from "./moments.ts";
+import { checkEvidence, type Question } from "./evidence.ts";
+import type { Card } from "./notes.ts";
 
 export type Target = { role?: string; name?: string; selector?: string; fuzzy?: boolean };
 export type Step = {
@@ -14,6 +17,8 @@ export type Step = {
   tab?: string;
   describe: string; expect?: { urlIncludes?: string; textIncludes?: string; looks?: string };
   irreversible?: boolean; fromEvent?: number | null; healed?: string;
+  // What this step came from: the events it repeats (indexes into the recording) and the person's words.
+  evidence?: { events: number[]; quote?: string };
   account?: string; // the Google/YouTube account this step was done as in the demo (from its event)
   // The page's own WebMCP tool for this action: used when the page offers it, else the robot clicks.
   tool?: { name: string; args: Record<string, string> };
@@ -45,6 +50,8 @@ export type Spec = {
   accounts?: Record<string, string>; accountSets?: Record<string, string[]>;
   scopeTypes: string[]; variables: Variable[]; steps: Step[]; rules: Rule[];
   outcomes: Record<string, { describe: string; steps: Step[]; reply?: string; demonstrated: boolean }>;
+  // What Remuse wasn't sure about after learning, asked out loud one at a time in the review.
+  questions?: Question[];
 };
 
 const SCHEMA = `{
@@ -87,7 +94,7 @@ const SCHEMA = `{
       "expect": { "urlIncludes": "optional, may use {{var}}", "textIncludes": "optional: words that are always there after this step (a heading, label or tab name), may use {{var}}; never a number or value that changes between runs (a count, %, duration, date, price, this item's own data)", "looks": "what the screen should show after this step" },
       "irreversible": false,
       "tool": { "name": "optional: a WebMCP tool the page offered that does this same action", "args": { "<param>": "value or {{var}}" } },
-      "fromEvent": <event # this step came from, or null> }
+      "evidence": { "events": [<the event #s this step repeats>], "quote": "<the person's words it came from, if they said it>" } }
   ],
   "rules": [ { "if": "condition in plain words using variable names", "then": "<outcome key>", "said": "the user's own words" } ],
   "outcomes": {
@@ -116,107 +123,96 @@ Rules for the spec:
 - Mark "irreversible": true on any step that pays, buys, checks out, places an order, sends a message, submits, refunds, books, transfers or deletes. Adding to a cart is not irreversible; checking out is.
 - Built-in variables: {{item_url}} (list items), {{today}} (YYYY-MM-DD), {{reply}}.
 - Every step gets an "expect" so the robot can check its own work.
+- Evidence: every step says what it came from. "evidence.events" lists the event #s of what the person did that the step repeats; goto, click, fill, press, upload, open_item and compare steps must cite at least one (a goto cites the start or page event that showed that page). "evidence.quote" is their words, when they said it. Never add a step the person didn't do or ask for, and never take one from a frame alone. Outcomes that weren't demonstrated are the only exception.
 - Reports: when the person wants to be told something (an update, a summary, an alert), the outcome ends with a "report" step. Its "message" is short and readable, with {{variables}}, e.g. "Views {{views}} ({{views_change}} since last time), CTR {{ctr}}%". Reports are not irreversible. Read every number they mentioned with extract steps.
 - Changes since last time: {{prev_<name>}} holds a variable's value from the previous run of this task (null on the first run). For "how much did X change", add a computed variable like ctr_change from ctr and prev_ctr: a string with a sign, e.g. "+0.6" or "-1.2", and null when prev_ctr is null. In the report message put changes in parentheses, e.g. "CTR {{ctr}} ({{ctr_change}} since last time)"; that part is left out automatically when there is no previous value.
 - Uploading: an "upload" line means the person chose a file to upload. Keep the click that opened the file picker if there was one, then add {"do": "upload", "target": <the file input from the upload line>, "file": {...}}. "folder" is the allowed folder (listed below) whose files look like the one chosen; null if none fits (the person will pick one). "pick": "next" = the oldest file not uploaded yet, for a posting queue (the default); "newest" = whatever arrived most recently ("the latest file"); "dated" = the file whose name carries today's date and a time not later than now ("the one labelled for today"). After an upload step, {{file_name}} is the file's name and {{file_caption}} the text of a .txt file with the same name (null if none): use it for a caption or description box. Posting, sharing or publishing is irreversible.
 - Downloads: if the person downloaded something they want kept, set "saveDownloads" to the allowed folder they meant; otherwise null.
 - Schedule: if the person said how often ("every hour", "every morning at 9"), fill "schedule". Don't invent one.
-- Tabs: event lines carry tab=T1, T2... when the person worked in more than one browser tab. Then give EVERY step (main and outcome steps) a "tab": a short name for what that tab is for ("inbox", "sheet", "store", "x", "tiktok"), the same name each time the person returned to that tab. The robot keeps every tab open and switches between them, so a tab is found as it was left: don't repeat a "goto" when the person just switched back. The first step in a new tab is normally a "goto" to the page it showed first. If a click made the site open a new tab, give the following steps a new tab name and no "goto"; the robot follows the tab the site opened. Values read in any tab can be used in any other tab with {{variables}}, e.g. read an order number in "inbox" and type it in "store". If the person did the same thing on several sites (posting to several networks, checking several stores), keep one tab per site and keep the irreversible steps (post, pay, send) last, after everything is prepared in every tab.
-- Spreadsheets (Google Sheets): the grid is drawn, not made of fields, so clicks on it say little; input and key lines carry cell=B2 (the cell typed into) and the voice and frames say what goes where. To write a cell: a "fill" step with target {"role":"textbox","name":"Name Box"} and the cell address as value, then "press" Enter with the same target, then a "fill" step with NO target and the value (it types into the selected cell), then "press" Enter or Tab with no target. When the person adds a new row each time (a log, a tracker), don't use a fixed row: fill the Name Box with "A1", press Enter on it, then "press" Control+End, Home and ArrowDown (each a step with no target) to land on the first empty row, then type each value with "press" Tab between them.
-- Pointing: "point" lines are where the person rested the mouse while talking, at=(x,y) on the 0-1000 grid of the frame. Words like "this", "here", "that number" in the voice around that time mean the thing pointed at. Use it like a click for knowing WHAT to read (an "extract" variable) or what a rule is about, but don't turn a point into a click step.
+- Tabs: event lines carry tab=T1, T2... when the person worked in more than one browser tab. A "tab" line is the person switching to another open tab; its frame shows that tab. Steps after it happen in that tab, and a tab they only read from or talked about still gets its steps (a goto, an extract). Then give EVERY step (main and outcome steps) a "tab": a short name for what that tab is for ("inbox", "sheet", "store", "x", "tiktok"), the same name each time the person returned to that tab. The robot keeps every tab open and switches between them, so a tab is found as it was left: don't repeat a "goto" when the person just switched back. The first step in a new tab is normally a "goto" to the page it showed first. If a click made the site open a new tab, give the following steps a new tab name and no "goto"; the robot follows the tab the site opened. Values read in any tab can be used in any other tab with {{variables}}, e.g. read an order number in "inbox" and type it in "store". If the person did the same thing on several sites (posting to several networks, checking several stores), keep one tab per site and keep the irreversible steps (post, pay, send) last, after everything is prepared in every tab.
+- Spreadsheets (Google Sheets): the grid is drawn, not made of fields, so clicks on it say little; input and key lines carry cell=B2 (the cell typed into) and the voice and frames say what goes where. To write a cell: a "fill" step with target {"role":"textbox","name":"Name Box","selector":"#t-name-box"} and the cell address as value, then "press" Enter with the same target, then a "fill" step with NO target and the value (it types into the selected cell), then "press" Enter or Tab with no target. When the person adds a new row each time (a log, a tracker), don't use a fixed row: fill the Name Box with "A1", press Enter on it, then "press" Control+End, Home and ArrowDown (each a step with no target) to land on the first empty row, then type each value with "press" Tab between them.
+- Marks: a mark is the person circling or underlining something on purpose, drawn on the page ("on" is what's inside the circle or above the line; its frame shows the ink). Treat it like a click for knowing what to read or what a rule is about; don't turn a mark into a click step. Words like "this", "here", "that number" said around a mark mean the thing marked.
 - WebMCP: "tools" lines list actions a page offers to agents directly. When a step does what one of those tools does (e.g. the Refund button and a refund_order tool), keep the step as recorded and add "tool" with the tool name and its args, using {{variables}}. The robot calls the tool when the page offers it and clicks otherwise.
 
 Reply with ONLY the JSON object, in this shape:
 ${SCHEMA}`;
 
-type Session = { id: string; title?: string; events: any[]; turns: { startMs: number; endMs: number; text: string }[] };
+type Session = { id: string; title?: string; events: any[]; turns: { startMs: number; endMs: number; text: string }[]; cards?: Card[] };
 
-function eventLine(e: any, i: number, tabs: Map<unknown, string>) {
+export function eventLine(e: any, i: number, tabs: Map<unknown, string>) {
   const tab = tabs.size > 1 && tabs.has(e.tab) ? ` tab=${tabs.get(e.tab)}` : "";
   const t = e.target ? ` target={role:${JSON.stringify(e.target.role)}, name:${JSON.stringify(e.target.label)}, selector:${JSON.stringify(e.target.selector)}}` : "";
   const v = e.value !== undefined ? ` value=${JSON.stringify(e.value)}` : "";
   const k = (e.key ? ` key=${e.key}` : "") + (e.cell ? ` cell=${e.cell}` : "");
-  if (e.kind === "point") return `#${i} t=${(e.t / 1000).toFixed(1)}s point${tab} url=${e.url} at=(${e.spot?.x},${e.spot?.y}) on={role:${JSON.stringify(e.target?.role)}, name:${JSON.stringify(e.target?.label)}, text:${JSON.stringify(e.target?.text)}}`;
   if (e.kind === "upload") return `#${i} t=${(e.t / 1000).toFixed(1)}s upload${tab} url=${e.url}${t} files=${JSON.stringify((e.files ?? []).map((x: any) => x.name))}`;
+  if (e.kind === "mark") return `#${i} t=${(e.t / 1000).toFixed(1)}s mark shape=${e.shape}${tab} url=${e.url} on=[${(e.targets ?? []).map((x: any) => `{role:${JSON.stringify(x.role)}, name:${JSON.stringify(x.label)}, text:${JSON.stringify(x.text)}}`).join(", ")}]${e.samPhrase ? ` sam=${JSON.stringify(e.samPhrase)} box=(${e.samBox?.x_min},${e.samBox?.y_min},${e.samBox?.x_max},${e.samBox?.y_max})` : ""}`;
   if (e.kind === "tools") return `#${i} tools${tab} url=${e.url} offered: ${(e.tools ?? []).map((x: any) => `${x.name}(${Object.keys(x.inputSchema?.properties ?? {}).join(", ")}): ${x.description ?? ""}`).join("; ")}`;
   return `#${i} t=${(e.t / 1000).toFixed(1)}s ${e.kind}${tab} url=${e.url}${t}${v}${k}`;
 }
 
 export type FolderHint = { name: string; files: string[] };
 export function buildPrompt(s: Session, dir: string, folders: FolderHint[] = []): Part[] {
-  const parts: Part[] = [text(INSTRUCTIONS), text(`Allowed folders (name: newest files): ${folders.length ? folders.map((f) => `\n- ${f.name}: ${f.files.join(", ") || "(empty)"}`).join("") : "none yet"}`), text(`Task name given by the person: ${s.title ?? "(none)"}\n\nRecording, in time order. Voice lines are what the person said; frames are screenshots.`)];
-  // Pointing counts only while the person was talking (within 2 s of a voice line); the rest is the mouse passing by.
-  const talking = (t: number) => s.turns.some((v) => t >= v.startMs - 2000 && t <= v.endMs + 2000);
-  // Tabs the person never clicked, typed or pointed in are other open tabs refreshing by themselves: leave them out.
-  const used = new Set(s.events.filter((e) => e.kind !== "page" && e.kind !== "tools").map((e) => e.tab));
-  const items = [
-    ...s.events.map((e, i) => ({ t: e.t, i, e })).filter(({ e }) => (e.kind !== "point" || talking(e.t)) && (e.tab == null || used.has(e.tab))),
-    ...s.turns.map((v) => ({ t: v.startMs, v })),
-  ].sort((a, b) => a.t - b.t);
-  // Browser tabs as T1, T2... in the order the person first used them.
+  const parts: Part[] = [text(INSTRUCTIONS), text(`Allowed folders (name: newest files): ${folders.length ? folders.map((f) => `\n- ${f.name}: ${f.files.join(", ") || "(empty)"}`).join("") : "none yet"}`), text(`Task name given by the person: ${s.title ?? "(none)"}\n\nThe recording, moment by moment, in time order. A moment is one thing the person said ("said") with what they did around it; a "silent" moment is what they did without talking. Event lines start with their event #; frames are screenshots.`)];
+  // The notes taken live while they taught: what they said they want, in their words.
+  if (s.cards?.length) {
+    const at = new Map(s.events.map((e, i) => [e.id, i]));
+    parts.push(text(`What the person said they want while teaching (notes taken live, each from their words or actions; follow these):\n${s.cards.map((c) => `- [${c.kind}] ${c.text}${c.quote ? ` (said "${c.quote}")` : ""}${c.events?.some((e) => at.has(e)) ? ` (events ${c.events.filter((e) => at.has(e)).map((e) => `#${at.get(e)}`).join(" ")})` : ""}`).join("\n")}`));
+  }
+  // Browser tabs as T1, T2... in the order the person first used them (clicked, typed or drew in).
   const tabs = new Map<unknown, string>();
-  for (const e of s.events) if (e.tab != null && used.has(e.tab) && !tabs.has(e.tab)) tabs.set(e.tab, `T${tabs.size + 1}`);
+  for (const e of s.events) if (e.tab != null && e.kind !== "page" && !IGNORED.has(e.kind) && !tabs.has(e.tab)) tabs.set(e.tab, `T${tabs.size + 1}`);
+  // What pages offered to agents (WebMCP) isn't something the person did: listed once, before the moments.
+  const offered = s.events.map((e, i) => ({ e, i })).filter(({ e }) => e.kind === "tools" && (e.tab == null || tabs.has(e.tab)));
+  if (offered.length) parts.push(text(offered.map(({ e, i }) => eventLine(e, i, tabs)).join("\n")));
   let images = 0;
   let lastAction = -Infinity;
-  for (const it of items) {
-    if ("v" in it && it.v) { parts.push(text(`[voice ${(it.v.startMs / 1000).toFixed(1)}-${(it.v.endMs / 1000).toFixed(1)}s] "${it.v.text}"`)); continue; }
-    const { e, i } = it as { e: any; i: number };
-    parts.push(text(eventLine(e, i, tabs)));
-    const isAction = e.kind === "click" || e.kind === "key";
-    // Frames: before+after each action, and pages reached without one (typed URLs). Max 50 images per request.
-    const frames: [string, string][] = [];
-    if ((isAction || e.kind === "point") && e.before) frames.push(["before", e.before]);
-    if ((isAction || e.kind === "start" || (e.kind === "page" && e.t - lastAction > 1500)) && e.after) frames.push(["after", e.after]);
-    if (isAction) lastAction = e.t;
-    for (const [when, f] of frames) {
-      if (images >= 48) break;
-      parts.push(text(`frame: event #${i}, ${when}`), png(readFileSync(join(dir, f))));
-      images++;
+  moments(s).forEach((m, n) => {
+    parts.push(text(`Moment ${n + 1} (${(m.from / 1000).toFixed(1)}-${(m.to / 1000).toFixed(1)}s) ${m.said != null ? `said: "${m.said}"` : "silent"}`));
+    for (const i of m.events) {
+      const e = s.events[i];
+      parts.push(text(eventLine(e, i, tabs)));
+      const isAction = e.kind === "click" || e.kind === "key";
+      // Frames: before+after each action, and pages reached without one (typed URLs). Max 50 images per request.
+      const frames: [string, string][] = [];
+      if (isAction && e.before) frames.push(["before", e.before]);
+      if (e.kind === "mark" && e.before) frames.push(["with the ink", e.before]);
+      if ((isAction || e.kind === "start" || e.kind === "tab" || (e.kind === "page" && e.t - lastAction > 1500)) && e.after) frames.push(["after", e.after]);
+      if (isAction) lastAction = e.t;
+      for (const [when, f] of frames) {
+        if (images >= 48) break;
+        parts.push(text(`frame: event #${i}, ${when}`), png(readFileSync(join(dir, f))));
+        images++;
+      }
     }
-  }
+  });
   return parts;
 }
 
 export async function understand(s: Session, dir: string, folders: FolderHint[] = []): Promise<Spec> {
   const spec = await askJson<Spec>(buildPrompt(s, dir, folders), "understand");
+  // Before normalize, which reads each step's event (fromEvent) for the account it was done as.
+  checkEvidence(spec, s.events);
   return normalize(spec, s);
 }
 
-/** What Remuse has understood so far, shown live in the sidebar while the person is still recording. */
-export type Draft = { goal: string; steps: string[]; rules: { said: string; then: string }[]; question: string | null };
-
-/** A quick read of the recording so far (actions and voice, no screenshots, so it's fast). Muse Spark
- *  says what it thinks the task is, and asks one question if something important is unclear; the person
- *  answers out loud and the next draft takes it in. */
-export async function draft(s: Session, asked: string | null): Promise<Draft> {
-  const tabs = new Map<unknown, string>();
-  for (const e of s.events) if (e.tab != null && e.kind !== "page" && !tabs.has(e.tab)) tabs.set(e.tab, `T${tabs.size + 1}`);
-  const lines = [
-    ...s.events.filter((e) => e.kind !== "tools" && (e.kind !== "page" || tabs.has(e.tab))).map((e, i) => ({ t: e.t, line: eventLine({ ...e, target: e.target && { ...e.target, selector: undefined } }, i, tabs) })),
-    ...s.turns.map((v) => ({ t: v.startMs, line: `[voice ${(v.startMs / 1000).toFixed(1)}s] "${v.text}"` })),
-  ].sort((a, b) => a.t - b.t).map((x) => x.line).slice(-120);
-  const r = await askJson<Draft>([text(`You are Remuse. A person is recording a browser task right now, explaining it out loud as they go, so you can repeat it later on new items. Below is what they've done and said so far. Tell them, briefly and in plain words, what you understand so far, so they can correct you while they're still recording.
-
-Reply with ONLY JSON: {"goal": "<one sentence>", "steps": ["<short plain step, e.g. 'Open each post in team-search'>", ...at most 8], "rules": [{"said": "<their words>", "then": "<what you'll do>"}], "question": "<one short question if something important is unclear (which items, how often, what to do when...), or null>"}
-Don't ask what they already said. ${asked ? `You last asked: "${asked}". If the voice after that answers it, use the answer and don't ask again.` : ""}`), text(lines.join("\n") || "(nothing yet)")], "draft");
-  return { goal: String(r?.goal ?? ""), steps: (r?.steps ?? []).map(String).slice(0, 8), rules: (r?.rules ?? []).slice(0, 5), question: r?.question ? String(r.question) : null };
-}
-
 /** Something the person said out loud while looking at a learned task, sorted by what they meant. */
-export async function sortSaid(spec: Spec, said: string): Promise<{ intent: "change" | "approve" | "schedule" | "run" | "teach" | "none"; schedule?: { everyMinutes?: number; time?: string; days?: string } }> {
+/** `question`: what Remuse just asked out loud, when it's waiting for the answer. */
+export async function sortSaid(spec: Spec, said: string, question?: string): Promise<{ intent: "change" | "approve" | "schedule" | "run" | "teach" | "answer" | "discard" | "stop" | "none"; schedule?: { everyMinutes?: number; time?: string; days?: string } }> {
   const r = await askJson<any>([text(`You are Remuse. You just learned a browser task from a person's demo and they're looking at your summary of it in a sidebar. The microphone is open, so what they say may be meant for you or for someone else in the room. They said: "${said}"
 
-What do they mean? Pick one:
+What do they mean? Pick one:${question ? `\n- "answer": you just asked them "${question}", and this answers it (yes, no, a choice, a value, a short reply). Prefer this over "change" and "approve" for anything that answers your question; "approve" is only for the whole task being right ("looks good", "that's it").` : ""}
 - "change": they want something about the task different, added, removed or fixed ("no, take the views from the Reach tab", "also send me the subscribers", "skip the ones that are already done").
 - "approve": it's right ("looks good", "yes that's it", "perfect", "okay").
 - "schedule": they want it to repeat ("do this every hour", "every weekday at 9"). Give everyMinutes (15 to 1440) or time "HH:MM" (24h) and days ("1234567" = every day, "12345" = weekdays).
 - "run": do it now ("try it", "go ahead and run it").
 - "teach": they'll show it again or show something new ("let me show you again", "watch this").
+- "discard": they want this task thrown away, not kept at all ("remove the task", "delete it", "cancel this", "never mind, forget it", "revert and go back to the dashboard", "huwag na").
+- "stop": they're done talking to you for now, without approving or removing it ("stop listening", "that's all for now", "thanks", "okay bye").
 - "none": not meant for you (talking to someone, thinking out loud, unrelated).
 
 The task: ${spec.goal}. Steps: ${[...spec.steps, ...Object.values(spec.outcomes).flatMap((o) => o.steps)].map((s) => s.describe).join("; ")}.
 Reply with ONLY JSON: {"intent": "...", "schedule": {"everyMinutes": n} or {"time": "HH:MM", "days": "..."} or null}`)], "sort-said");
-  const intent = ["change", "approve", "schedule", "run", "teach", "none"].includes(r?.intent) ? r.intent : "none";
+  const intent = ["change", "approve", "schedule", "run", "teach", "discard", "stop", ...(question ? ["answer"] : []), "none"].includes(r?.intent) ? r.intent : "none";
   return { intent, schedule: intent === "schedule" && r?.schedule ? r.schedule : undefined };
 }
 
@@ -270,6 +266,8 @@ export function normalize(spec: Spec, s: Session): Spec {
     }
   });
   spec.scopeTypes ??= [];
+  // Google Sheets' Name Box has no label a browser robot can find it by, but always the same id.
+  for (const st of all) if (st.target && /^name box$/i.test(st.target.name ?? "") && !st.target.selector) st.target.selector = "#t-name-box";
   // Which account each site was used as in the demo, from what the recorder saw (emails are case-insensitive; YouTube
   // IDs are not). One account on a site: kept for the site. Several: kept as a set, and each step gets its own.
   const ident = (a: unknown) => { const x = String(a); return x.includes("@") ? x.toLowerCase() : x; };
