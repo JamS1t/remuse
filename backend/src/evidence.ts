@@ -12,6 +12,8 @@ export type Question = { id: string; text: string; quote?: string; step?: Step; 
 export const ACTING = new Set(["click", "fill", "press", "goto", "upload", "open_item", "compare"]);
 
 const same = (a?: string, b?: string) => !!a && !!b && a.trim().toLowerCase() === b.trim().toLowerCase();
+// Roles match when both have the same one, or neither has one (a label, a div with onclick).
+const sameRole = (a?: string, b?: string) => (!a && !b) || same(a, b);
 const page = (u?: string) => { try { const x = new URL(u!); return x.origin + x.pathname.replace(/\/+$/, ""); } catch { return null; } };
 
 // The event a step repeats, when Muse Spark didn't say: same target, same page, same key, same text.
@@ -24,7 +26,10 @@ function find(st: Step, spec: Spec, events: any[]): number | null {
     const want = st.url?.includes("{{") ? fixed : page(st.url);
     return want ? at((e) => (e.kind === "start" || e.kind === "page") && (st.url?.includes("{{") ? String(e.url).startsWith(want) : page(e.url) === want)) : null;
   }
-  const byTarget = st.target?.name ? at((e) => ["click", "input", "key", "upload"].includes(e.kind) && same(e.target?.role, st.target!.role) && same(e.target?.label, st.target!.name)) : null;
+  const acted = (e: any) => ["click", "input", "key", "upload"].includes(e.kind);
+  const bySelector = st.target?.selector ? at((e) => acted(e) && e.target?.selector === st.target!.selector) : null; // copied exactly from the event
+  if (bySelector != null) return bySelector;
+  const byTarget = st.target?.name ? at((e) => acted(e) && sameRole(e.target?.role, st.target!.role) && same(e.target?.label, st.target!.name)) : null;
   if (byTarget != null) return byTarget;
   if (st.do === "press") return at((e) => e.kind === "key" && same(e.key, st.key));
   if (st.do === "fill") return at((e) => e.kind === "input" && (st.value?.includes("{{") || same(String(e.value ?? ""), st.value)));
@@ -36,19 +41,25 @@ function find(st: Step, spec: Spec, events: any[]): number | null {
 export function checkEvidence(spec: Spec, events: any[]): void {
   const real = (i: unknown) => Number.isInteger(i) && (i as number) >= 0 && (i as number) < events.length && !IGNORED.has(events[i as number]?.kind);
   // An outcome that was never demonstrated is Remuse's own guess, said as such: nothing to point at.
+  // Every step gets an id now (normalize would give the same ones later), so each question is about one step.
+  const taken = new Set([...spec.steps, ...Object.values(spec.outcomes ?? {}).flatMap((o) => o.steps)].map((s) => s.id).filter(Boolean));
+  [...spec.steps, ...Object.values(spec.outcomes ?? {}).flatMap((o) => o.steps)].forEach((s, i) => { if (!s.id) { let id = `s${i + 1}`; while (taken.has(id)) id += "b"; taken.add((s.id = id)); } });
   const lists = [spec.steps, ...Object.values(spec.outcomes ?? {}).filter((o) => o.demonstrated !== false).map((o) => o.steps)];
   const unbacked = new Set<Step>();
+  const cited = new Set<Step>(); // what Muse Spark itself pointed at, before any looking up
   for (const list of lists) for (const st of list) {
     const ev = (st.evidence?.events ?? []).filter(real).map(Number);
+    if (ev.length) cited.add(st);
     if (!ev.length && ACTING.has(st.do)) { const i = find(st, spec, events); if (i != null) ev.push(i); }
     if (ev.length) { st.evidence = { ...st.evidence, events: ev }; if (!real(st.fromEvent)) st.fromEvent = ev[0]; }
     else if (ACTING.has(st.do)) unbacked.add(st);
   }
   if (!unbacked.size) return;
   spec.questions ??= [];
-  // If nothing at all could be tied to the recording, the citations failed, not the steps: keep them and say so.
-  const main = spec.steps.filter((s) => ACTING.has(s.do));
-  if (main.length && main.every((s) => unbacked.has(s))) {
+  // If Muse Spark cited none of the actions (the opening page doesn't count: it's found by its address), its
+  // citations failed, not the steps: keep them all and ask once. Only steps it left out among cited ones are taken out.
+  const main = spec.steps.filter((s) => ACTING.has(s.do) && s.do !== "goto");
+  if (main.length && !main.some((s) => cited.has(s))) {
     spec.questions.push({ id: "q-evidence", text: "I couldn't match my steps to what you did. Please check them." });
     return;
   }

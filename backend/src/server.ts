@@ -245,7 +245,7 @@ async function applyFeedback(row: ReturnType<typeof specRow>, said: string, opts
 // the person says is heard, sorted (a change, "looks right", a schedule, "do it now", "let me show you
 // again", or not meant for Remuse) and acted on; the sidebar shows the latest and does the rest.
 // In the review, the first open question is the one Remuse is waiting on; "speak" is what it says back.
-type Heard = { n: number; at: number; text: string; intent: string; changes?: string[]; schedule?: { everyMinutes?: number; time?: string; days?: string }; error?: string; speak?: string[]; answered?: string };
+type Heard = { n: number; at: number; text: string; intent: string; specId?: number; changes?: string[]; schedule?: { everyMinutes?: number; time?: string; days?: string }; error?: string; speak?: string[]; answered?: string };
 const heard = new Map<string, Heard>();
 // An answer goes to Muse Spark as the question and the answer, with the step it took out when that's what it asked.
 const asAnswer = (q: { text: string; step?: unknown }, said: string) => `Q: ${q.text}${q.step ? ` (the step I took out: ${JSON.stringify(q.step)})` : ""}\nA: ${said}`;
@@ -262,11 +262,11 @@ async function hearSaid(sessionId: string, wav: Uint8Array) {
     const open = row.spec.questions?.[0];
     const r = await sortSaid(row.spec, text, open?.text);
     if (r.intent === "answer" && open) {
-      const { changes } = await applyFeedback(row, asAnswer(open, text), { practice: false, answered: open.id });
-      set({ intent: "answer", changes, answered: open.id, speak: changes.length ? changes : ["Got it."] });
+      const { changes, specId } = await applyFeedback(row, asAnswer(open, text), { practice: false, answered: open.id });
+      set({ intent: "answer", changes, specId, answered: open.id, speak: changes.length ? changes : ["Got it."] });
     } else if (r.intent === "change" || r.intent === "answer") {
-      const { changes } = await applyFeedback(row, text, { practice: false });
-      set({ intent: "change", changes, speak: changes.length ? changes : ["I changed it."] });
+      const { changes, specId } = await applyFeedback(row, text, { practice: false });
+      set({ intent: "change", changes, specId, speak: changes.length ? changes : ["I changed it."] });
     } else if (r.intent === "approve" || r.intent === "run") set({ intent: r.intent, speak: ["Okay, I'll try it once on your example."] });
     else if (r.intent === "discard") set({ intent: r.intent, speak: ["Okay, I've thrown that task away."] });
     else if (r.intent === "stop") set({ intent: r.intent, speak: ["Okay, I'll stop listening."] });
@@ -836,7 +836,7 @@ async function route(req: IncomingMessage, res: ServerResponse) {
       return send(res, 201, await applyFeedback(row, q ? asAnswer(q, said) : said, { practice: b.practice !== false, answered: q?.id }));
     }
     // What Remuse says when it reads this task back: the plan, then its questions (asked one at a time).
-    if (m === "GET" && p[3] === "readback") return send(res, 200, readback(row.spec));
+    if (m === "GET" && p[3] === "readback") return send(res, 200, { specId: row.id, ...readback(row.spec) }); // which version: the review asks the next question from the new one
     // The task's file settings (which folder and rule each upload uses; where downloads go). Saved as a new
     // version that keeps the built code, since the rules didn't change.
     if (m === "POST" && p[3] === "files") {

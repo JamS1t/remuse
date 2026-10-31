@@ -29,9 +29,9 @@ check("an uncited click step is re-cited by its target", two.steps.find((s) => s
 check("an uncited goto is re-cited by its URL", two.steps[0].evidence?.events[0] === 0, two.steps[0]);
 check("a read step is kept without events", two.steps.some((s) => s.id === "s3"));
 
-const three = spec([{ id: "s1", do: "goto", url: A, evidence: { events: [0] } }, click("s9", "Delete")]);
+const three = spec([{ id: "s1", do: "goto", url: A, evidence: { events: [0] } }, click("s2", "Analytics", [1]), click("s9", "Delete")]);
 checkEvidence(three, events);
-check("an unbacked click is removed and asked about, with the step kept on the question", !three.steps.some((s) => s.id === "s9") && three.questions?.[0]?.id === "q-s9" && three.questions[0].step?.id === "s9" && three.questions[0].after === "s1", three);
+check("an unbacked click is removed and asked about, with the step kept on the question", !three.steps.some((s) => s.id === "s9") && three.questions?.[0]?.id === "q-s9" && three.questions[0].step?.id === "s9" && three.questions[0].after === "s2", three);
 check("the question says which step", /I wasn't sure about "s9"\. Did you do that\?/.test(three.questions?.[0]?.text ?? ""), three.questions);
 
 const four = spec([click("s1", "Analytics", [1]), click("s3", "Ghost", [3])]);
@@ -49,6 +49,22 @@ check("undemonstrated outcome steps are left alone", six.outcomes.refund.steps.l
 const seven = spec([click("s1", "Analytics", [99])]);
 checkEvidence(seven, events);
 check("an out-of-range event is not evidence, but the target still matches", seven.steps[0].evidence?.events[0] === 1, seven.steps[0]);
+
+// The planner cited nothing (a goto re-cited by its URL doesn't count): its citations failed, not the steps. All kept, one question.
+const eight = spec([{ id: "s1", do: "goto", url: A }, click("s2", "Analytics"), { id: "s3", do: "click", target: { role: "link", name: "Reach" } }, { id: "s4", do: "extract", vars: ["views"] }]);
+checkEvidence(eight, events);
+check("no click cited by the planner: nothing removed, one question", eight.steps.length === 4 && eight.questions?.length === 1 && eight.questions[0].id === "q-evidence", eight);
+check("but what can be found is still cited", eight.steps[0].evidence?.events[0] === 0 && eight.steps[1].evidence?.events[0] === 1, eight.steps.map((s) => s.evidence));
+// Re-citing by the exact selector, and by name when neither side has a role.
+const ev2 = [{ t: 0, kind: "start", url: A }, { t: 1000, kind: "click", url: A, target: { label: "Save", selector: "div > span.save" } }, { t: 2000, kind: "click", url: A, target: { role: "tab", label: "Overview", selector: "#tab-overview" } }];
+const nine = spec([{ id: "s1", do: "goto", url: A, evidence: { events: [0] } }, { id: "s2", do: "click", target: { name: "Save" } }, { id: "s3", do: "click", target: { role: "tab", name: "Overview tab", selector: "#tab-overview" } }, { id: "s4", do: "click", target: { role: "tab", name: "Overview" }, evidence: { events: [2] } }]);
+checkEvidence(nine, ev2);
+check("a click with no role on either side is re-cited by its name", nine.steps.find((s) => s.id === "s2")?.evidence?.events[0] === 1, nine.steps);
+check("a click is re-cited by its exact selector", nine.steps.find((s) => s.id === "s3")?.evidence?.events[0] === 2, nine.steps);
+// Steps the model left without ids still get their own question.
+const ten = spec([{ id: "s1", do: "goto", url: A, evidence: { events: [0] } }, click("s2", "Analytics", [1]), { do: "click", target: { role: "button", name: "Ghost" }, describe: "Click Ghost" } as any, { do: "click", target: { role: "button", name: "Phantom" }, describe: "Click Phantom" } as any]);
+checkEvidence(ten, events);
+check("steps without ids get their own questions", ten.questions?.length === 2 && new Set(ten.questions.map((q) => q.id)).size === 2 && !ten.questions.some((q) => /undefined/.test(q.id)), ten.questions?.map((q) => q.id));
 
 console.log(fails ? `\n${fails} failed` : "\nall passed");
 process.exit(fails ? 1 : 0);

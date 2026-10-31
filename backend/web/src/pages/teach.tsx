@@ -12,12 +12,12 @@ import { cn } from "@/lib/utils";
 
 type Status = {
   recording: boolean; rec?: { id?: string; t0?: number; audioError?: string | null }; hearing?: boolean;
-  speaking?: { line: number; total: number } | null; last?: { id: string; byVoice?: boolean; discarded?: boolean; cancelled?: boolean; at?: number } | null;
+  speaking?: { line: number; total: number } | null; last?: { id: string; byVoice?: boolean; discarded?: boolean; cancelled?: boolean; learning?: boolean; error?: string | null; at?: number } | null;
 };
 export type TeachTask = { sessionId: string; specId?: number; title?: string; learnStage?: string | null; learnError?: string | null; practice?: PracticeState | null };
 type Ev = SessionFull["events"][number] & { targets?: { label?: string; text?: string }[] };
 type Line = { text: string; step?: string; question?: string };
-type Heard = { n: number; at: number; text: string; intent: string; changes?: string[]; schedule?: object; speak?: string[]; answered?: string };
+type Heard = { n: number; at: number; text: string; intent: string; specId?: number; changes?: string[]; schedule?: object; speak?: string[]; answered?: string };
 
 const LEARNING = ["listening", "understanding", "building"];
 const STAGE: Record<string, string> = {
@@ -124,6 +124,7 @@ export function TeachMode({ sessionId, task, onExit }: { sessionId: string; task
   const view: { orb: OrbState; word: string; sub?: string } =
     recording ? (st?.hearing ? { orb: "watching", word: "Hearing you" } : { orb: "watching", word: "Listening", sub: "Do the task once. Say why as you go." })
     : justDone ? { orb: "thinking", word: last?.byVoice ? "Got it, you're done" : "Got it" }
+    : last?.error && !last.learning && !stage ? { orb: "idle", word: "That didn't save", sub: last.error }
     : stage === "failed" ? { orb: "idle", word: "I couldn't learn that one", sub: task?.learnError ?? undefined }
     : stage === "unsure" ? { orb: "idle", word: "Was that a task?", sub: task?.learnError ?? undefined }
     : { orb: "thinking", word: "Thinking", sub: (stage && STAGE[stage]) || "Getting ready" };
@@ -134,7 +135,7 @@ export function TeachMode({ sessionId, task, onExit }: { sessionId: string; task
         <span className="ml-auto inline-flex items-center gap-2 font-mono text-[13px] tabular-nums text-muted-foreground">
           <span className="size-2 rounded-full bg-tally" aria-hidden />{clock(secs)}<span className="sr-only">recording</span>
         </span>
-      ) : null}
+      ) : <Button variant="ghost" size="sm" className="ml-auto rounded-full text-muted-foreground" onClick={onExit}>Close</Button>}
       footer={recording ? (
         <>
           <Button size="lg" variant="outline" onClick={() => run("stop", () => ext("stop"))} disabled={busy === "stop"} className="h-11 w-full rounded-full border-tally/40 bg-tally/10 text-[15px] hover:bg-tally/20">
@@ -200,7 +201,7 @@ function Notes({ cards, events, recording }: { cards: Card[]; events: Ev[]; reco
             return (
               <li key={c.id} className="grid grid-cols-[1.5rem_1fr] gap-x-2 animate-in fade-in slide-in-from-bottom-1 duration-500">
                 <span className="flex justify-end pt-[3px] text-muted-foreground" aria-label={c.kind}>
-                  {Icon ? <Icon className="size-4" strokeWidth={2} /> : <span className="font-mono text-[12px] leading-[1.6] tabular-nums">{++n}</span>}
+                  {Icon ? <Icon className="size-4" strokeWidth={2} /> : <span className="font-mono text-[13px] leading-[1.6] tabular-nums">{++n}</span>}
                 </span>
                 <div className="min-w-0">
                   <p className={cn("text-[15px] leading-snug", c.kind === "question" && "text-warn")}>{c.text}</p>
@@ -225,7 +226,9 @@ type Phase = "reading" | "asking" | "listening" | "practicing" | "paused";
 function Review({ sessionId, task, st, events, onExit }: { sessionId: string; task: TeachTask; st: Status | null; events: Ev[]; onExit: () => void }) {
   const specId = task.specId!;
   const spec = useApi<SpecRow>(`/specs/${specId}`).data;
-  const rb = useApi<{ plan: Line[]; questions: Line[] }>(`/specs/${specId}/readback`).data;
+  const rb = useApi<{ specId: number; plan: Line[]; questions: Line[] }>(`/specs/${specId}/readback`).data;
+  const rbRef = useRef(rb);
+  rbRef.current = rb;
   const [phase, setPhase] = useState<Phase>("reading");
   const [lines, setLines] = useState<Line[]>([]); // what Remuse is saying now, to light up the step it's on
   const [listening, setListening] = useState(false);
@@ -240,7 +243,7 @@ function Review({ sessionId, task, st, events, onExit }: { sessionId: string; ta
   const [confirmRemove, setConfirmRemove] = useState(false);
   const { busy, run } = useAction();
   const since = useRef(Date.now());
-  const askWhenUpdated = useRef(false);
+  const wantSpec = useRef<number | null>(null); // after a change: ask the next question from this version on
   const practiceWhenReady = useRef(false);
   const before = useRef<Map<string, string> | null>(null);
 
@@ -273,11 +276,20 @@ function Review({ sessionId, task, st, events, onExit }: { sessionId: string; ta
     if (before.current) setChanged(new Set([...now].filter(([id, d]) => before.current!.get(id) !== d).map(([id]) => id)));
     before.current = now;
   }, [spec?.id]);
-  useEffect(() => { if (rb && askWhenUpdated.current && started.current) { askWhenUpdated.current = false; ask(rb); } }, [rb]);
+  const maybeAsk = () => {
+    const r = rbRef.current;
+    if (wantSpec.current != null && r && r.specId >= wantSpec.current) { wantSpec.current = null; ask(r); }
+  };
+  useEffect(() => { if (started.current) maybeAsk(); }, [rb]);
   // The practice waits for the rebuilt rules after a change.
-  useEffect(() => { if (practiceWhenReady.current && task.learnStage === "ready") { practiceWhenReady.current = false; startPractice(); } }, [task.learnStage]);
+  useEffect(() => {
+    if (!practiceWhenReady.current || (task.learnStage !== "ready" && task.learnStage !== "failed")) return;
+    practiceWhenReady.current = false;
+    startPractice();
+  }, [task.learnStage]);
 
   const startPractice = () => run("practice", async () => {
+    if (task.learnStage === "failed") throw new Error(`I couldn't update the task, so I can't try it: ${task.learnError ?? "it didn't build"}. Say what to change, or remove it.`);
     if (task.learnStage !== "ready") { practiceWhenReady.current = true; return; }
     const r = await api<{ id: string }>(`/specs/${specId}/practice`, "POST");
     setPracticeRun(r.id); setPhase("practicing"); ext("mode", { mode: "practice" }).catch(() => {});
@@ -305,7 +317,7 @@ function Review({ sessionId, task, st, events, onExit }: { sessionId: string; ta
     handled.current = said.n; setQuietSince(Date.now());
     const back = (said.speak ?? []).map((t) => ({ text: t }));
     (async () => {
-      if (said.intent === "change" || said.intent === "answer") { askWhenUpdated.current = true; await say(back); }
+      if (said.intent === "change" || said.intent === "answer") { wantSpec.current = said.specId ?? (rbRef.current?.specId ?? specId) + 1; await say(back); maybeAsk(); }
       else if (said.intent === "approve" || said.intent === "run") { if (practiced && said.intent === "approve") return finish(); await say(back); startPractice(); }
       else if (said.intent === "schedule" && said.schedule) { await api("/schedules", "POST", { specId, ...said.schedule }).catch((e) => toast.error(e.message)); await say(back); }
       else if (said.intent === "teach") showAgain();
@@ -319,7 +331,7 @@ function Review({ sessionId, task, st, events, onExit }: { sessionId: string; ta
   useEffect(() => {
     if (!listening) return;
     const t = setInterval(() => {
-      if (phase !== "practicing" && !st?.speaking && Date.now() - quietSince > QUIET_MS) { ext("unlisten").catch(() => {}); setListening(false); setPhase("paused"); setNote("I stopped listening after 2 quiet minutes."); }
+      if (phase !== "practicing" && !st?.speaking && Date.now() - quietSince > QUIET_MS) { toast("I stopped listening after 2 quiet minutes. The task is saved."); finish(); }
     }, 5000);
     return () => clearInterval(t);
   }, [listening, quietSince, phase, st?.speaking]);
@@ -328,16 +340,18 @@ function Review({ sessionId, task, st, events, onExit }: { sessionId: string; ta
 
   const send = () => run("send", async () => {
     const q = phase === "asking" ? rb?.questions[0]?.question : undefined;
-    const r = await api<{ changes: string[] }>(`/specs/${specId}/feedback`, "POST", { text, practice: false, answered: q });
-    setText(""); setTyping(false); askWhenUpdated.current = true;
+    const r = await api<{ specId: number; changes: string[] }>(`/specs/${specId}/feedback`, "POST", { text, practice: false, answered: q });
+    setText(""); setTyping(false); wantSpec.current = r.specId;
     await say((r.changes.length ? r.changes : ["I changed it."]).map((t) => ({ text: t })));
+    maybeAsk();
   });
 
   const speakingNow = st?.speaking ? lines[st.speaking.line] : undefined;
   const building = task.learnStage === "building" || thinking;
   const question = phase === "asking" ? rb?.questions[0] : undefined;
   const view: { orb: OrbState; word: string; sub?: ReactNode; shimmer?: boolean } =
-    building ? { orb: "thinking", word: "Changing it", shimmer: true, sub: said?.text ? <q className="font-script [quotes:'“''”']">{said.text}</q> : undefined }
+    task.learnStage === "failed" ? { orb: "idle", word: "I couldn't change it", sub: task.learnError ?? "Say what to change, or remove it." }
+    : building ? { orb: "thinking", word: "Changing it", shimmer: true, sub: said?.text ? <q className="font-script [quotes:'“''”']">{said.text}</q> : undefined }
     : phase === "practicing" ? { orb: "working", word: "Practicing", sub: "Once, on your example. Nothing I'd send or pay goes out." }
     : st?.speaking && phase === "reading" ? { orb: "working", word: "Here's my plan" }
     : question ? { orb: st?.speaking ? "working" : "watching", word: "One question", sub: <span className="text-[16px] leading-snug text-foreground">{question.text.replace(/^One thing: you said "[^"]*"\. /, "")}</span> }
@@ -356,6 +370,7 @@ function Review({ sessionId, task, st, events, onExit }: { sessionId: string; ta
 
   return (
     <Frame orb={view.orb} word={view.word} sub={view.sub} shimmer={view.shimmer}
+      right={<Button variant="ghost" size="sm" className="ml-auto rounded-full text-muted-foreground" onClick={finish}>Close</Button>}
       footer={
         <>
           <Button className="h-11 w-full rounded-full text-[15px]" onClick={approve} disabled={phase === "practicing" || building || busy === "practice"}>
@@ -395,8 +410,8 @@ function Review({ sessionId, task, st, events, onExit }: { sessionId: string; ta
               <li key={s.id ?? i}>
                 <button type="button" onClick={() => setOpenStep(openStep === s.id ? null : s.id)} aria-expanded={openStep === s.id}
                   className={cn("grid w-full grid-cols-[1.5rem_1fr] gap-x-2 rounded-xl px-1 py-1.5 text-left text-[15px] leading-snug transition-colors hover:bg-muted", on && "bg-muted")}>
-                  <span className={cn("pt-px text-right font-mono text-[12px] leading-[1.6] tabular-nums text-muted-foreground", on && "text-foreground")}>{i + 1}</span>
-                  <span>{s.describe}{changed.has(s.id) ? <span className="ml-1.5 text-[12px] text-ok">changed</span> : null}</span>
+                  <span className={cn("pt-px text-right font-mono text-[13px] leading-[1.6] tabular-nums text-muted-foreground", on && "text-foreground")}>{i + 1}</span>
+                  <span>{s.describe}{changed.has(s.id) ? <span className="ml-1.5 text-[13px] text-ok">changed</span> : null}</span>
                 </button>
                 {ev ? (
                   <p className="mt-0.5 mb-1.5 ml-[2.1rem] text-[13px] leading-snug text-muted-foreground">

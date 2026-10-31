@@ -100,6 +100,17 @@ try {
   await call("command", "teach"); await sleep(500);
   const after = await call("status");
   check("the teach shortcut while speaking only silences it", !after.recording && after.speaking === null, JSON.stringify({ recording: after.recording, speaking: after.speaking }));
+  // Closing the sidebar ends the review's talking (and listening).
+  const extra = await ctx.newPage();
+  await extra.goto(`chrome-extension://${extId}/sidepanel.html`); await sleep(500);
+  call("speak", ["A long line, still going when the sidebar closes."]);
+  await sleep(300);
+  await extra.close(); await sleep(800);
+  check("closing the sidebar stops Remuse talking", (await call("status")).speaking === null, JSON.stringify((await call("status")).speaking));
+  // What the sidebar shows survives the worker being stopped by Chrome.
+  await call("setMode", "review");
+  check("the review state is kept where a sleeping worker finds it", (await sw.evaluate(() => chrome.storage.session.get("mode")) as any).mode === "review");
+  await call("setMode", "idle");
 
   const panel = await ctx.newPage();
   await panel.goto(`chrome-extension://${extId}/sidepanel.html`);

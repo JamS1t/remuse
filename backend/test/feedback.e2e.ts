@@ -67,7 +67,7 @@ try {
   const v1 = Number(db2.prepare("INSERT INTO specs (session_id, version, note, json, code, tests, created_at) VALUES (?, 1, 'test', ?, '', '[]', ?)").run(s2.id, JSON.stringify(asked), Date.now()).lastInsertRowid);
   db2.close();
   const rb = await get(`/specs/${v1}/readback`);
-  check("the readback is the plan, then the questions", rb.plan?.[0]?.text === "Here's my plan." && rb.questions?.length === 2 && rb.questions[0].question === "q-cover-1", JSON.stringify(rb).slice(0, 200));
+  check("the readback is the plan, then the questions", rb.specId === v1 && rb.plan?.[0]?.text === "Here's my plan." && rb.questions?.length === 2 && rb.questions[0].question === "q-cover-1", JSON.stringify(rb).slice(0, 200));
   const ans = await post(`/specs/${v1}/feedback`, { text: "Only the newest video.", practice: false, answered: "q-cover-1" });
   if (!ans.specId) console.log("   feedback answer:", JSON.stringify(ans));
   const after = (await get(`/specs/${ans.specId}`)).spec ?? {};

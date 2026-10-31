@@ -15,12 +15,14 @@ export function readback(spec: Spec): { plan: Line[]; questions: Line[] } {
   steps.slice(0, MAX).forEach((s, i) => plan.push({ text: `Step ${i + 1}: ${sentence(s.describe)}.`, step: s.id }));
   if (steps.length > MAX) plan.push({ text: `And ${steps.length - MAX} more steps, all on the screen.` });
   for (const r of spec.rules ?? []) {
-    const then = lower(sentence(spec.outcomes?.[r.then]?.describe ?? r.then.replaceAll("_", " ")));
-    const always = /^\s*(otherwise|else|default|always|in all cases|every)\b/i.test(r.if); // "do it": no condition to read
+    const then = lower(sentence(spec.outcomes?.[r.then]?.describe ?? String(r.then ?? "").replaceAll("_", " ")));
+    const cond = String(r.if ?? "");
+    if (!then || (!cond && !r.said)) continue; // half a rule from the model: nothing sensible to say
+    const always = /^\s*(otherwise|else|default|always|in all cases|every)\b/i.test(cond); // "do it": no condition to read
     if (r.said && /^(if|when|otherwise)\b/i.test(r.said.trim())) plan.push({ text: `${upper(sentence(r.said))}.` }); // their whole rule, as they said it
     else if (always) continue;
     else if (r.said) plan.push({ text: `If ${sentence(r.said)}, I'll ${then}.` });
-    else plan.push({ text: `If ${sentence(r.if.replaceAll("_", " "))}, I'll ${then}.` });
+    else plan.push({ text: `If ${sentence(cond.replaceAll("_", " "))}, I'll ${then}.` });
   }
   const questions = (spec.questions ?? []).map((q) => ({ text: q.quote ? `One thing: you said "${sentence(q.quote)}". ${q.text}` : q.text, question: q.id }));
   return { plan, questions };

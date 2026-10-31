@@ -20,6 +20,8 @@ check("a mark around a chart (canvas) needs SAM", needsSam({ kind: "mark", befor
 check("a mark with nothing under it needs SAM", needsSam({ kind: "mark", before: "1.png", targets: [] }));
 check("a mark around text doesn't", !needsSam({ kind: "mark", before: "1.png", targets: [{ tag: "span", text: "Views 2,607" }] }));
 check("one already placed doesn't", !needsSam({ kind: "mark", before: "1.png", targets: [], samBox: b }));
+check("a mark on an SVG chart's bars and lines (no words) needs SAM", needsSam({ kind: "mark", before: "1.png", targets: [{ tag: "rect" }, { tag: "path" }] }));
+check("but not when one of them is labelled", !needsSam({ kind: "mark", before: "1.png", targets: [{ tag: "rect", label: "Views 2,607" }, { tag: "path" }] }));
 
 console.log(fails ? `\n${fails} failed` : "\nall passed");
 process.exit(fails ? 1 : 0);

@@ -22,7 +22,8 @@ export function bestBox(boxes: Box[], ink: Box): Box | null {
 }
 
 /** A mark on a canvas or a chart, or on nothing the page can name, that SAM hasn't placed yet. */
-export const needsSam = (e: any) => e.kind === "mark" && !!e.before && !e.samBox && (!(e.targets ?? []).length || (e.targets as any[]).every((t) => t.tag === "canvas" || t.tag === "svg"));
+// Nothing inside the ink has words: a canvas, or an SVG chart's bars and lines (rect, path, g).
+export const needsSam = (e: any) => e.kind === "mark" && !!e.before && !e.samBox && !((e.targets ?? []) as any[]).some((t) => String(t.label ?? "").trim() || String(t.text ?? "").trim());
 
 export async function resolveMarks(events: any[], dir: string, save: (eventId: number, data: object) => void): Promise<void> {
   for (const e of events.filter(needsSam)) {

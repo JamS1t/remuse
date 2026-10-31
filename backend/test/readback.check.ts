@@ -27,6 +27,9 @@ check("over 8 steps: 8, then how many more", long.plan.filter((l) => l.step).len
 check("no questions: none", readback(spec(2)).questions.length === 0);
 const doIt = readback(spec(2, { rules: [{ if: "otherwise", then: "skip", said: "Open the report page and read the total." }] } as any));
 check("a do-it-every-time rule isn't read as an 'If'", !doIt.plan.some((l) => /^If /.test(l.text)), doIt.plan.map((l) => l.text));
+let odd: ReturnType<typeof readback> | null = null;
+try { odd = readback(spec(2, { rules: [{ then: "skip" }, { if: "late", then: undefined }] } as any)); } catch { /* the review would never start */ }
+check("a rule with no condition or outcome doesn't stop the readback", !!odd && odd.plan[0].text === "Here's my plan.", odd?.plan.map((l) => l.text));
 
 console.log(fails ? `\n${fails} failed` : "\nall passed");
 process.exit(fails ? 1 : 0);

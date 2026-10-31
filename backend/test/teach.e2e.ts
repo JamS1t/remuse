@@ -105,7 +105,7 @@ try {
   check("learning doesn't start a practice by itself", !task?.practice, JSON.stringify(task?.practice));
   // Then the review: the plan on screen (read aloud in a real Chrome), and Remuse waiting for "looks good" or a change.
   await ui.getByRole("button", { name: /Looks right, try it once/ }).waitFor({ timeout: 20000 }).catch(() => {});
-  check("after learning, the review shows the plan and waits for you", await ui.getByRole("button", { name: /Looks right, try it once/ }).isVisible().catch(() => false) && await ui.getByText(/what I'll do/i).isVisible().catch(() => false) && await ui.getByRole("button", { name: /Type instead/ }).isVisible().catch(() => false) && await ui.getByRole("button", { name: /Remove task/ }).isVisible().catch(() => false));
+  check("after learning, the review shows the plan and waits for you", await ui.getByRole("button", { name: /Looks right, try it once/ }).isVisible().catch(() => false) && await ui.getByText(/what I'll do/i).isVisible().catch(() => false) && await ui.getByRole("button", { name: /Type instead/ }).isVisible().catch(() => false) && await ui.getByRole("button", { name: /Remove task/ }).isVisible().catch(() => false) && await ui.getByRole("button", { name: "Close" }).isVisible().catch(() => false));
   const shot2 = join(process.env.SHOTS ?? data, "teach-review.png");
   await side.screenshot({ path: shot2 }); console.log("   screenshot:", shot2);
 

@@ -143,6 +143,7 @@ async function finish({ byVoice = false, discard = false } = {}) {
   const done = await api(`/sessions/${r.id}/finish`, "POST", { endedAt: Date.now(), audioOffsetMs: r.audioOffsetMs }).catch((e) => { finishError = e.message; return null; });
   // Nothing was done in the recording: the Agent dropped it rather than keep an empty task.
   const result = { id: r.id, learning: !finishError && !done?.discarded, discarded: !!done?.discarded, error: finishError ?? r.audioError ?? null, byVoice, at: Date.now() };
+  if (result.learning) setMode("learning"); // a second press right away mustn't start another recording
   await chrome.storage.local.set({ last: result });
   return result;
 }
@@ -196,8 +197,14 @@ function hush() {
 }
 
 // What the sidebar is showing, which it says itself: "idle", "learning", "review" or "practice".
+// Kept in session storage too: Chrome stops this worker after a while, and a review mustn't be lost to a key press then.
 let mode = "idle";
-function setMode(m) { mode = ["idle", "learning", "review", "practice"].includes(m) ? m : "idle"; return { mode }; }
+function setMode(m) {
+  mode = ["idle", "learning", "review", "practice"].includes(m) ? m : "idle";
+  chrome.storage.session.set({ mode }).catch(() => {});
+  return { mode };
+}
+const currentMode = async () => (await chrome.storage.session.get("mode").catch(() => ({}))).mode ?? mode;
 
 // Shortcuts. Teach (Alt+Shift+R) does the obvious thing: start teaching, or stop. While Remuse is learning, reviewing
 // or practicing it only opens the sidebar: a new recording would throw away the review. Pen (Alt+Shift+D): draw.
@@ -211,7 +218,7 @@ async function command(name) {
   if (name !== "teach") return { did: "nothing" };
   if (talk) { hush(); return { did: "hush" }; } // Remuse is talking: the key cuts it off, and you talk
   if (await current()) { await stop(); return { did: "stop" }; }
-  if (mode === "idle") { await start(""); return { did: "start" }; }
+  if ((await currentMode()) === "idle") { await start(""); return { did: "start" }; }
   return { did: "nothing" };
 }
 chrome.commands.onCommand.addListener((name, tab) => {
@@ -277,6 +284,13 @@ async function currentTab() {
   return { url: tab?.url ?? null, title: tab?.title ?? null, site: tab?.url ? siteOf(tab.url) : null };
 }
 
+// The sidebar holds a port open while it's showing. Closing it ends the review's listening and talking, so nothing
+// said in the room afterwards changes a task.
+chrome.runtime.onConnect.addListener((port) => {
+  if (port.name !== "panel") return;
+  port.onDisconnect.addListener(() => { hush(); chrome.runtime.sendMessage({ target: "offscreen", type: "unlisten" }).catch(() => {}); });
+});
+
 // The toolbar icon opens the sidebar.
 chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {});
 
@@ -328,6 +342,7 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
       if (!(await micAllowed())) throw new Error("Allow the microphone first: press Watch me do a task once.");
       const a = await chrome.runtime.sendMessage({ target: "offscreen", type: "converse", sessionId: msg.sessionId });
       if (a?.error) throw new Error(a.error);
+      if (talk) hold(true); // opened while Remuse is still talking: it waits until it's done
       return { ok: true };
     },
     unlisten: async () => {
