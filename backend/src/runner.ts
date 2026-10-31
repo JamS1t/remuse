@@ -10,6 +10,7 @@ import { load, same, type Rules } from "./build.ts";
 import type { Spec, Step, Target } from "./understand.ts";
 import { applyLogins } from "./logins.ts";
 import { combine, newlyAppeared, writes, type Verdict } from "./proof.ts";
+import { handleFor, pluginFor } from "./plugins.ts";
 import { notify } from "./notify.ts";
 import { chromeReady, relayUrl } from "./chrome.ts";
 import { captionFor, chooseFile, findFolder, freeName, markUsed, pathIn, usedFor } from "./folders.ts";
@@ -665,9 +666,10 @@ export class Runner {
     const path = pathIn(folder, name);
     it.vars.file_name = name;
     it.vars.file_caption = captionFor(folder, name);
-    // Most sites keep a hidden file input; set it directly. Otherwise click their button and answer the file picker.
-    const input = this.page.locator('input[type="file"]');
-    if (await input.count()) await input.first().setInputFiles(path);
+    // Most sites keep a hidden file input; set it directly (a plug-in knows where a site hides it, e.g. in Google's
+    // file picker frame). Otherwise click their button and answer the file picker.
+    const input = (await pluginFor(this.page.url())?.fileInput?.(this.page)) ?? this.page.locator('input[type="file"]').first();
+    if (await input.count()) await input.setInputFiles(path);
     else {
       const found = raw.target ? await this.locate(raw, step) : null;
       const [chooser] = await Promise.all([
@@ -890,7 +892,10 @@ export class Runner {
       if (this.phase === "plan") return; // planning only looks; the upload happens when it acts
       if (this.unsure(raw)) await this.approve(step);
       await this.rightAccount("act", raw);
-      return this.upload(raw, step);
+      before = await this.page.innerText("body").catch(() => "");
+      await this.upload(raw, step);
+      await this.check(step, undefined, before); // an upload counts once the page shows it has the file
+      return;
     }
     else if (step.do === "report" && this.phase === "plan") return;
     else if (step.do === "report") {
@@ -978,8 +983,9 @@ export class Runner {
 
   // DOM first (role + name, then the recorded selector if it still points at the same thing), then vision.
   private async locate(raw: Step, step: Step): Promise<{ loc?: Locator; point?: { x: number; y: number }; healedName?: string; shot?: string; proposed?: Target }> {
-    // Google Sheets' Name Box: no label to find it by, but always this id (tasks learned before it was added included).
-    const t = !step.target!.selector && /^name box$/i.test(step.target!.name ?? "") ? { ...step.target!, selector: "#t-name-box" } : step.target!;
+    // A handle a plug-in knows for this name (Sheets' unlabelled Name Box), used only if it's really on the page.
+    const handle = step.target!.selector ? null : handleFor(this.page.url(), step.target!.name ?? "");
+    const t = handle ? { ...step.target!, selector: handle } : step.target!;
     if (t.role && t.name) {
       const l = this.page.getByRole(t.role as any, { name: t.name, exact: !t.fuzzy });
       if ((await l.count()) === 1 && (await l.isVisible())) return { loc: l };
@@ -1217,8 +1223,18 @@ export class Runner {
   private async check(step: Step, aim?: string, before?: string, opts: { look?: boolean } = {}): Promise<Verdict> {
     if (step.do === "extract") return { result: "verified", proof: "page", why: "read from the page" };
     const e = step.expect ?? {};
-    let page: Verdict | null = null;
-    if (step.do === "fill" && step.value != null) {
+    // A plug-in's own read-back first (Classroom: the file shows as attached); else the engine's checks below.
+    let page: Verdict | null = (await pluginFor(this.page.url())?.readBack?.(this.page, step, this.item.vars, before)) ?? null;
+    if (page) { /* settled by the plug-in */ }
+    else if (step.do === "upload") {
+      // The page's own upload field holds the file (any frame): the site has it.
+      const name = String(this.item.vars.file_name ?? "");
+      for (const fr of name ? this.page.frames() : []) {
+        const held = await fr.$$eval('input[type="file"]', (els, n) => els.some((el) => [...((el as HTMLInputElement).files ?? [])].some((x) => x.name === n)), name).catch(() => false);
+        if (held) { page = { result: "verified", proof: "page", why: `the page's upload field holds ${name}` }; break; }
+      }
+    }
+    else if (step.do === "fill" && step.value != null) {
       // Typed values don't show up in page text; read the field back instead (an editor in a frame can't be read).
       const val = await this.page.evaluate(() => {
         const a = document.activeElement as HTMLInputElement | null;
