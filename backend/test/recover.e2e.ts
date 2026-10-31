@@ -40,9 +40,11 @@ const site = createServer((req, res) => {
       i.onchange = () => setTimeout(() => { att.textContent = i.files[0].name; fetch("/did?what=attach"); }, 300); document.body.appendChild(i); }</script>`));
   // A form whose Save is gone (only Send is left): what's typed into each field is recorded, in order.
   if (u.pathname === "/form2") return res.end(page(`<h1>Request</h1>
-    <input aria-label="Name" oninput="fetch('/did?what=name:' + encodeURIComponent(this.value))">
+    <input aria-label="Full name" oninput="fetch('/did?what=name:' + encodeURIComponent(this.value))">
     <input aria-label="Note" oninput="fetch('/did?what=note:' + encodeURIComponent(this.value))">
     <button onclick="fetch('/did?what=send')">Send</button>`));
+  // An outcome button that moved: "Mark as read" is now "Read it".
+  if (u.pathname === "/inbox") return res.end(page(`<h1>Inbox</h1><p>Order 1042 shipped</p><button onclick="fetch('/did?what=mark')">Read it</button>`));
   // No way to save a draft any more; the only button left sends.
   return res.end(page(`<h1>Reply</h1><textarea>Thanks!</textarea><br><button onclick="fetch('/did?what=send');out.textContent='Sent'">Send</button><p id="out"></p>`));
 }).listen(0);
@@ -95,6 +97,7 @@ try {
   check("the fix's proof picture has what it used outlined by SAM 3.1", !!healed?.shot && /SAM 3\.1 (outlined it|unavailable|found no edges)/.test(healed?.why ?? ""), JSON.stringify(healed));
   const healLines = (r1.items?.[0]?.log ?? []).filter((l: any) => /^(Working it out|Idea \d)/.test(l.msg));
   check("the working-it-out lines are marked for the live view, each proven try with its proof", healLines.length >= 2 && healLines.every((l: any) => l.kind === "heal") && healLines.filter((l: any) => l.level === "ok").every((l: any) => !!l.how), JSON.stringify(healLines.map((l: any) => [l.msg.slice(0, 40), l.kind, l.how])));
+  check("a decision never calls a look at the screen proof from the page", !(r1.decisions ?? []).some((d: string) => /page proved/i.test(d)) || (r1.items?.[0]?.log ?? []).some((l: any) => /^Idea \d+: .*✓/.test(l.msg) && l.how === "page"), JSON.stringify(r1.decisions));
   check("the run lists what it decided and why", (r1.decisions ?? []).some((d: string) => /Add attachment/.test(d) && /Add or create|isn't on the page/.test(d)), JSON.stringify(r1.decisions));
   const ideas = m1.filter((m: string) => /^Idea \d+: /.test(m)).map((m: string) => m.replace(/^Idea \d+: /, "").split(" → ")[0]);
   check("no idea is tried twice", new Set(ideas).size === ideas.length, JSON.stringify(ideas));
@@ -127,6 +130,19 @@ try {
   const again = await fixes();
   if (again[0]) await fetch(`${API}/fixes/${again[0].id}`, { method: "DELETE" });
   check("a learned fix can be undone", again.length === 1 && (await fixes()).length === 0, JSON.stringify(again));
+
+  // A practice only looks: an outcome step whose button moved isn't worked around with real clicks.
+  const idP = await addTask("Mark the order read", [{ id: "s1", do: "goto", url: `${SITE}/inbox`, describe: "Open the inbox" }]);
+  {
+    const db = new DatabaseSync(join(data, "showrun.db"));
+    const row: any = db.prepare("SELECT json FROM specs WHERE id = ?").get(idP);
+    const sp = JSON.parse(row.json);
+    sp.outcomes.done.steps = [{ id: "o1", do: "click", target: { role: "button", name: "Mark as read" }, describe: "Mark it as read" }];
+    db.prepare("UPDATE specs SET json = ? WHERE id = ?").run(JSON.stringify(sp), idP);
+    db.close();
+  }
+  const rp = await finished((await post(`/specs/${idP}/practice`)).id);
+  check("a practice never works around an outcome step with real clicks", !did.has("mark"), msgs(rp).join(" / ").slice(0, 300));
 
   // 2. The only way forward would send: it doesn't, and says what it tried.
   const id2 = await addTask("Save the reply as a draft", [

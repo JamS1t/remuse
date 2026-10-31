@@ -32,6 +32,15 @@ check("other keys, scrolling and waiting are fine", unsafe({ action: "press", ke
 check("leaving the site is refused", unsafe({ action: "click", el: 1, why: "" }, el(1, "link", "Help"), click, [], here, "https://evil.example/x") !== null);
 check("staying on the site is fine", unsafe({ action: "click", el: 1, why: "" }, el(1, "link", "Lab 5"), click, [], here, "https://classroom.google.com/c/1/a/5") === null);
 check("an unknown action is refused", unsafe({ action: "goto", why: "" } as any, undefined, click, [], here) !== null);
+// Keys: only moving around is allowed, plus the step's own keys; keys that act on the page never are.
+check("Delete, Backspace and Space are refused", ["Delete", "Backspace", "Space", " "].every((k) => unsafe({ action: "press", key: k, why: "" }, undefined, click, [], here) !== null));
+check("single-letter site shortcuts are refused (Gmail's e archives, # deletes)", ["e", "#", "Shift+3"].every((k) => unsafe({ action: "press", key: k, why: "" }, undefined, click, [], here) !== null));
+check("moving around is allowed", ["Escape", "Tab", "Shift+Tab", "ArrowDown", "PageDown", "Home", "End"].every((k) => unsafe({ action: "press", key: k, why: "" }, undefined, click, [], here) === null));
+check("the step's own group keys are allowed", unsafe({ action: "press", key: "Control+End", why: "" }, undefined, enter, ["Control+End", "Enter"], here) === null);
+check("typing only on a step that types", unsafe({ action: "fill", el: 5, why: "" }, el(5, "textbox", "Search", true), click, [], here) !== null);
+check("a nameless target is refused (its name can't be checked)", unsafe({ action: "click", el: 6, why: "" }, el(6, "button", ""), click, [], here) !== null);
+check("another site on the same ending is still another site", unsafe({ action: "click", el: 1, why: "" }, el(1, "link", "Shop"), click, [], "https://a.co.uk/x", "https://b.co.uk/y") !== null);
+check("another Google site is another site", unsafe({ action: "click", el: 1, why: "" }, el(1, "link", "Account"), click, [], here, "https://accounts.google.com/x") !== null);
 
 // Reading the model's answer: anything odd is a failed try, never a click.
 check("broken JSON is a failed attempt, not a click", parseMove("not json", 10).action === "none");

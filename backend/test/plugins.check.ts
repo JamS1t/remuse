@@ -28,5 +28,10 @@ check("the Name Box at another cell fails", sheetsVerdict(box, "C13", "")?.resul
 check("with nothing to read, Sheets can't tell (the engine decides)", sheetsVerdict(cell, null, null) === null);
 check("other steps aren't the Sheets read-back's", sheetsVerdict({ do: "click", describe: "Archive" } as any, "C12", "x") === null);
 
+// The Name Box shortcut only for going to a cell, never for typing a cell's value (that would type it into the Name Box).
+const route = pluginFor("https://docs.google.com/spreadsheets/d/x")!.routes![0];
+check("the Name Box route fits going to a cell", route.fits!(box) && route.fits!({ do: "fill", value: "C12", describe: "Go to the cell" } as any));
+check("but never typing a value", !route.fits!(cell) && !route.fits!({ do: "fill", value: "Byte Café", describe: "Type the merchant in the cell" } as any));
+
 console.log(fails ? `\n${fails} failed` : "\nall passed");
 process.exit(fails ? 1 : 0);

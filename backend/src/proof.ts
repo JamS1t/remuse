@@ -31,6 +31,20 @@ export const IRREVERSIBLE = /\b(turn in|turn it in|hand in|mark as done|refund|r
 /** A step that waits for your OK: marked irreversible, or a click or site tool named like one. */
 export const gatedStep = (s: Step) => !!s.irreversible || (s.do === "click" && IRREVERSIBLE.test(s.target?.name ?? "")) || (!!s.tool && IRREVERSIBLE.test(s.tool.name.replace(/_/g, " ")));
 
+/** The values something written uses: typed into a field, sent to a site's own tool, put into an address, or written
+ *  in a reply. Those get a second, independent read before they're used; a value only reported to you doesn't. */
+export function usedInWrites(spec: { steps: Step[]; outcomes?: Record<string, { reply?: string; steps: Step[] }> }): Set<string> {
+  const out = new Set<string>();
+  const scan = (t?: unknown) => { for (const m of String(t ?? "").matchAll(/\{\{\s*(\w+)\s*\}\}/g)) out.add(m[1]); };
+  for (const s of [...spec.steps, ...Object.values(spec.outcomes ?? {}).flatMap((o) => o.steps)]) {
+    if (s.do === "fill") scan(s.value);
+    if (s.do === "goto") scan(s.url);
+    for (const v of Object.values(s.tool?.args ?? {})) scan(v);
+  }
+  for (const o of Object.values(spec.outcomes ?? {})) scan(o.reply);
+  return out;
+}
+
 /** Steps that put something into the site: what they wrote must be read back before the step counts as done. */
 export const writes = (s: Pick<Step, "do">) => s.do === "fill" || s.do === "upload";
 

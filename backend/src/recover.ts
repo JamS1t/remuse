@@ -18,20 +18,24 @@ export const canRecover = (s: Step) => !gatedStep(s);
 
 const ACTIONS = ["click", "fill", "press", "scroll", "wait", "done", "none"];
 const host = (u: string) => { try { return new URL(u).hostname; } catch { return ""; } };
-const site = (h: string) => (/^[\d.]+$/.test(h) ? h : h.split(".").slice(-2).join(".")); // classroom.google.com → google.com
+// Keys that only move around a page. Anything else (Enter, Space, Delete, a letter a site uses as a shortcut) can act.
+const MOVE_KEYS = /^(shift\+)?(escape|tab|arrow(up|down|left|right)|page(up|down)|home|end)$/i;
 
 /** Why a try isn't allowed, or null. `groupKeys`: the keys the step's own group presses; `to`: where a link goes. */
 export function unsafe(m: Move, el: Seen | undefined, s: Step, groupKeys: string[], here: string, to?: string): string | null {
   if (!ACTIONS.includes(m.action)) return `"${m.action}" isn't something I do while working around a problem`;
   if ((m.action === "click" || m.action === "fill") && !el) return "that isn't on the page";
+  if (m.action === "click" && !el!.name.trim()) return "it has no name I can check, so I won't press it";
   if (el && IRREVERSIBLE.test(el.name)) return `“${el.name}” can't be undone, so it waits for you`;
+  if (m.action === "fill" && s.do !== "fill") return "this step doesn't type anything";
   if (m.action === "fill" && !el!.editable) return `“${el!.name || el!.role}” doesn't take typing`;
   if (m.action === "press") {
-    const k = (m.key ?? "").trim().toLowerCase();
+    const k = (m.key ?? "").trim();
     if (!k) return "no key named";
-    if (/enter/.test(k) && !groupKeys.some((g) => g.toLowerCase() === k)) return `${m.key} could send or submit, and this step never pressed it`;
+    if (!groupKeys.some((g) => g.toLowerCase() === k.toLowerCase()) && !MOVE_KEYS.test(k)) return `${m.key} could change something on the page, and this step never pressed it`;
   }
-  if (to && host(to) && host(here) && site(host(to)) !== site(host(here))) return `that leaves ${host(here)} for ${host(to)}`;
+  // The same site exactly: another address on the same ending (a.co.uk, accounts.google.com) is another site.
+  if (to && host(to) && host(here) && host(to) !== host(here)) return `that leaves ${host(here)} for ${host(to)}`;
   return null;
 }
 

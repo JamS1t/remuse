@@ -255,6 +255,9 @@ export function normalize(spec: Spec, s: Session): Spec {
     if (t?.selector) spec.inputs.itemSelector = !t.href && t.role && !["button", "link", "none", "presentation", "generic"].includes(t.role) ? `[role="${t.role}"]` : generic(t.selector);
     if (ev?.url && !spec.inputs.listUrl) spec.inputs.listUrl = ev.url;
   }
+  // A model's answer can leave an outcome without steps, or an empty step: those mean "nothing to do", not a crash.
+  spec.steps = (spec.steps ?? []).filter(Boolean);
+  for (const o of Object.values(spec.outcomes ?? {})) o.steps = (o.steps ?? []).filter(Boolean);
   const all = [...spec.steps, ...Object.values(spec.outcomes ?? {}).flatMap((o) => o.steps)];
   all.forEach((st, i) => {
     st.id ||= `s${i + 1}`;

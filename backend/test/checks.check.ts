@@ -43,5 +43,11 @@ const nb = { ...spec, steps: [{ id: "n1", do: "fill", describe: "Go to A1", valu
 normalize(nb, { id: "t", events: [], turns: [] } as any);
 check("a Name Box step gets Sheets' fixed id", nb.steps[0].target?.selector === "#t-name-box", nb.steps[0].target);
 
+// A model's answer with an outcome that has no steps (or an empty step) must not stop learning or a change.
+const loose = { ...spec, steps: [{ id: "a", do: "click", describe: "Open" }, null], outcomes: { report: { describe: "Report" }, skip: { describe: "Skip", steps: [null] } } } as unknown as Spec;
+let crashed = "";
+try { normalize(loose, { id: "t", events: [], turns: [] } as any); } catch (e) { crashed = (e as Error).message; }
+check("an outcome with no steps, or an empty step, doesn't break it", !crashed && loose.steps.length === 1 && Array.isArray(loose.outcomes.report.steps) && loose.outcomes.skip.steps.length === 0, crashed || loose);
+
 console.log(fails ? `\n${fails} failed` : "\nall passed");
 process.exit(fails ? 1 : 0);

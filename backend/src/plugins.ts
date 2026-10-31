@@ -12,7 +12,7 @@ export type Plugin = {
   /** Elements that never move, by the name a step uses for them. */
   handles?: { name: RegExp; selector: string }[];
   /** Keyboard routes to a step's purpose ("go to a cell" → the Name Box shortcut), tried before asking a model. */
-  routes?: { purpose: RegExp; keys: string[]; why: string }[];
+  routes?: { purpose: RegExp; keys: string[]; why: string; fits?(step: Step): boolean }[];
   /** Proof that a step worked on this site, from the page; null when the plug-in can't tell (the engine decides). */
   readBack?(page: Page, step: Step, vars: Record<string, unknown>, before?: string): Promise<Verdict | null>;
   /** The upload control, wherever the site puts it (Google's file picker is a frame of its own). */
@@ -72,7 +72,10 @@ const sheets: Plugin = {
   matches: (url) => host(url) === "docs.google.com" && /^\/spreadsheets\//.test((() => { try { return new URL(url).pathname; } catch { return ""; } })()),
   // The Name Box has no label in the page, but always this id.
   handles: [{ name: /^name box$/i, selector: "#t-name-box" }],
-  routes: [{ purpose: /name box|go to|cell|next empty row/i, keys: ["Control+J"], why: "Google's documented shortcut to the Name Box" }],
+  // Only for going to a cell (the Name Box itself, or a cell reference typed into it), never for a cell's value:
+  // that would type the value into the Name Box and send the next typing to the wrong row.
+  routes: [{ purpose: /name box|go to|cell|next empty row/i, keys: ["Control+J"], why: "Google's documented shortcut to the Name Box",
+    fits: (s) => (s.do === "fill" || s.do === "press") && (/^name box$/i.test(s.target?.name ?? "") || (s.do === "fill" && /^[A-Z]{1,3}\d{1,7}$/i.test((s.value ?? "").trim()))) }],
   async readBack(page, step) {
     const r = await page.evaluate(() => ({
       nameBox: (document.querySelector("#t-name-box") as HTMLInputElement | null)?.value ?? null,

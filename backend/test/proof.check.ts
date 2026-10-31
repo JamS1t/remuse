@@ -1,6 +1,6 @@
 // How a step's result is judged: proof from the page beats a look at the screen, and a write needs page proof.
 // No model. Run: node test/proof.check.ts
-import { combine, newlyAppeared, sameValue, writes } from "../src/proof.ts";
+import { combine, newlyAppeared, sameValue, usedInWrites, writes } from "../src/proof.ts";
 import type { Step } from "../src/understand.ts";
 
 let fails = 0;
@@ -21,6 +21,15 @@ check("₱451 = 451.00", sameValue("₱451", "451.00") && sameValue("1,799", 179
 check("different numbers differ", !sameValue("349", "394") && !sameValue("Subtotal 349", "Total 394"));
 check("text compares without case", sameValue("Byte Café", "byte café") && !sameValue("Byte Café", "Kape Kalye"));
 check("nothing equals nothing only", !sameValue(null, "0") && !sameValue("", "0"));
+// Which values get a second read: any that something written uses (typed, a site tool, an address, a reply); not a
+// report to you.
+const spec = {
+  steps: [{ id: "a", do: "fill", value: "{{total}}" }, { id: "b", do: "goto", url: "https://x/orders/{{order}}" }, { id: "c", do: "click", tool: { name: "refund", args: { amount: "{{amount}}" } } }, { id: "d", do: "report", message: "Views {{views}}" }],
+  outcomes: { reply: { reply: "Hi, your refund of {{refund}} is on its way", steps: [] } },
+} as any;
+const used = usedInWrites(spec);
+check("values typed, sent to a site tool, put in an address or a reply get a second read", ["total", "order", "amount", "refund"].every((n) => used.has(n)), [...used]);
+check("a value only reported to you doesn't", !used.has("views"), [...used]);
 check("fill and upload write; click doesn't", writes({ do: "fill" } as Step) && writes({ do: "upload" } as Step) && !writes({ do: "click" } as Step));
 
 console.log(fails ? `\n${fails} failed` : "\nall passed");

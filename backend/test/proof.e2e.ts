@@ -4,7 +4,7 @@
 // Run: node test/proof.e2e.ts
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
-import { mkdtempSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -31,6 +31,14 @@ const site = createServer((req, res) => {
   if (u.pathname === "/form") return res.end(page(`<h1>Request</h1><iframe id="ed" srcdoc="<body contenteditable=true style='font:16px sans-serif'></body>" style="border:1px solid #999;height:60px;width:400px"></iframe>
     <button onclick="fetch('/did?what=submit');out.textContent='Submitted'">Submit</button><p id="out"></p>
     <script>ed.onload = () => { ed.contentWindow.focus(); ed.contentDocument.body.focus(); };</script>`));
+  // An upload whose attachment shows only after 7 s (past the 5 s check): it must still be sent once.
+  if (u.pathname === "/attach") return res.end(page(`<h1>Lab Report 5</h1><h2>Your work</h2><div id="att">${u.searchParams.get("has") ?? ""}</div>
+    <input type="file" id="up" onchange="fetch('/did?what=upload'); const n = this.files[0].name; setTimeout(() => att.textContent = n, 7000)">`));
+  // The same button found two ways (its label says "(beta)", its words don't): pressing it twice would export twice.
+  if (u.pathname === "/export2") return res.end(page(`<h1>Reports</h1><button aria-label="Export report (beta)" onclick="fetch('/did?what=export2');out.textContent='Export started'">Export report</button><p id="out"></p>`));
+  // The only link that looks right goes to another site.
+  if (u.pathname === "/docs") return res.end(page(`<h1>Help</h1><a href="http://localhost:${(site.address() as any).port}/elsewhere">Docs (external)</a>`));
+  if (u.pathname === "/elsewhere") { did.add("elsewhere"); return res.end(page("<h1>Somewhere else</h1>")); }
   // An order: the subtotal comes first on the page, the total last. Typing into Amount is recorded.
   if (u.pathname === "/order") return res.end(page(`<h1>Order 1042</h1><p>Subtotal ₱349.00</p><p>Shipping ₱45.00</p><p>Total ₱394.00</p>
     <input aria-label="Amount" oninput="fetch('/did?what=typed:' + encodeURIComponent(this.value))">`));
@@ -38,6 +46,10 @@ const site = createServer((req, res) => {
 }).listen(0);
 const SITE = `http://127.0.0.1:${(site.address() as any).port}`;
 const data = mkdtempSync(join(tmpdir(), "remuse-proof-"));
+const work = join(data, "Work");
+mkdirSync(work);
+writeFileSync(join(work, "Lab5.pdf"), "%PDF-1.4\n");
+writeFileSync(join(work, "Lab6.pdf"), "%PDF-1.4\n");
 const agent = spawn(process.execPath, ["--env-file-if-exists=../.env", "src/server.ts"], {
   cwd: resolve(import.meta.dirname, ".."), env: { ...process.env, PORT, DATA_DIR: data, BROWSER_PROFILE: join(data, "browser"), HEADLESS: "1", SHOWRUN_NO_NOTIFY: "1", OPEN_MODEL_KEY: "", BASETEN_API_KEY: "" }, stdio: process.env.SHOW_AGENT ? "inherit" : "ignore",
 });
@@ -109,6 +121,36 @@ try {
   const r6 = await run(await order(`{ total: (t) => (t.match(/₱([\\d,.]+)/) || [])[1] ?? null }`));
   await sleep(800);
   check("when the two readings disagree, nothing is typed and both are shown", r6.items?.[0]?.status !== "done" && !did.has("typed:349.00") && lines(r6).some((l) => /349/.test(l.msg) && /394/.test(l.msg)), lines(r6).map((l) => l.msg).join(" / ").slice(0, 400));
+
+  // 7. The attachment shows only after 7 s: the step's check fails first, and working it out must not send it again.
+  await post("/folders", { path: work });
+  const r7 = await run(await addTask("Attach my lab", [
+    { id: "s1", do: "goto", url: `${SITE}/attach`, describe: "Open the assignment" },
+    { id: "s2", do: "upload", file: { folder: "Work", pick: "next" }, describe: "Attach your work", expect: { textIncludes: "Lab5.pdf" } },
+  ]));
+  check("a slow attachment is sent once, never again while working it out", count.upload === 1 && r7.items?.[0]?.status === "done", `${count.upload} uploads; ${lines(r7).map((l) => l.msg).join(" / ").slice(0, 300)}`);
+
+  // 8. Already attached (left from an earlier try): it isn't sent again.
+  const before8 = count.upload;
+  const r8 = await run(await addTask("Attach my lab again", [
+    { id: "s1", do: "goto", url: `${SITE}/attach?has=Lab5.pdf`, describe: "Open the assignment" },
+    { id: "s2", do: "upload", file: { folder: "Work", pick: "next" }, describe: "Attach your work", expect: { textIncludes: "Lab5.pdf" } },
+  ]));
+  check("a file already attached isn't sent again", count.upload === before8 && lines(r8).some((l) => /already attached/i.test(`${l.msg} ${l.why ?? ""}`)), `${count.upload - before8} uploads; ${lines(r8).map((l) => l.msg).join(" / ").slice(0, 300)}`);
+
+  // 9. One button found two ways while working it out: pressed once.
+  const r9 = await run(await addTask("Export the report", [
+    { id: "s1", do: "goto", url: `${SITE}/export2`, describe: "Open the reports" },
+    { id: "s2", do: "click", target: { role: "button", name: "Export report" }, describe: "Export the report", expect: { textIncludes: "Exported OK" } },
+  ]));
+  check("a control is never pressed twice while working it out", count.export2 === 1, `${count.export2} presses: ${lines(r9).map((l) => l.msg).filter((m) => /^Idea/.test(m)).join(" / ").slice(0, 300)}`);
+
+  // 10. The only link that looks right leaves the site: never followed.
+  const r10 = await run(await addTask("Open the docs", [
+    { id: "s1", do: "goto", url: `${SITE}/docs`, describe: "Open help" },
+    { id: "s2", do: "click", target: { role: "link", name: "Docs" }, describe: "Open the docs", expect: { textIncludes: "Docs home" } },
+  ]));
+  check("working it out never follows a link to another site", !did.has("elsewhere") && r10.items?.[0]?.status !== "done", lines(r10).map((l) => l.msg).filter((m) => /^Idea|Out of/.test(m)).join(" / ").slice(0, 300));
 } catch (e) {
   check("the test ran to the end", false, (e as Error).stack ?? String(e));
 } finally {
