@@ -119,9 +119,12 @@ fine. **Remuse exists for runs #2 to #500, and for when Chrome is closed.**
 - **SAM 3.1:** outlines the proof.
 
 **Features:**
-- [works] folder trigger, approval gate, Approve all, notifications, independent checker.
-- [build] "turn in" on the never-press-alone list; proof lines with labels; the attachment read back from the page.
-- [verify] the Muse Spark Open key is set. Without it, drop the Open labels and the bonus claim.
+- [works] folder trigger, one run per drop, matching each file by the spoken rule (no fit or two fits asks), "turn in"
+  never pressed alone, "N ready for your OK" + Approve all, proof lines with labels, attachments read back
+  (batch.e2e, gate.check).
+- [verify] Classroom's real attachment read-back and file picker (probe + rehearsal).
+- [verify] the Muse Spark Open key. NOT set as of Nov 1, so checks run on Muse Spark. Until it works, drop every Open
+  label and the bonus claim.
 
 ## Scene 4: The site changes, and it fixes itself (1:55–2:35)
 
@@ -146,10 +149,12 @@ fine. **Remuse exists for runs #2 to #500, and for when Chrome is closed.**
 - **SAM 3.1:** outlines the proof.
 
 **Features:**
-- [build] the self-healing loop, proof labels, learned fixes, the live panel.
+- [works] the self-healing ladder, proof labels with the SAM 3.1 outline, learned fixes with Undo, the Working it out
+  panel, the decisions list (recover.e2e: a control folded into a "+" menu heals, is proven, and is remembered).
 - [works] changing a task in your own words.
 - [verify] which real change heals reliably in rehearsal (narrow window, popup, another class's layout). Keep whichever
-  does.
+  does. Remuse's own browser always draws pages 1440 px wide, so the half-width heal has to run in James's Chrome
+  (through the extension), not with Chrome closed.
 
 ## Scene 5: Not just school, and the Meta stack (2:35–3:00)
 
@@ -194,19 +199,19 @@ Then **Remuse: show it once.**
 | 8 | Readback + question + voice answer + rule updates | 12 s | [works] |
 | 9 | Practice "That worked", folder trigger on | 5 s | [works] |
 | 10 | Close Chrome, drop Lab5/Lab6/Essay2 | 5 s | [works] |
-| 11 | Run page: steps ticking, proof lines, outlined proof | 12 s | [build] labels |
+| 11 | Run page: steps ticking, proof lines, outlined proof | 12 s | [works] |
 | 12 | Essay2: "Which one?" | 4 s | [works]/[verify] |
-| 13 | "2 ready for your OK" → Approve all → turned in | 8 s | [build] turn-in gate |
-| 14 | Half-screen run, Working it out panel | 22 s | [build] |
-| 15 | "Learned: next time…" | 3 s | [build] |
+| 13 | "2 ready for your OK" → Approve all → turned in | 8 s | [works] |
+| 14 | Half-screen run, Working it out panel | 22 s | [works]; trigger [verify] |
+| 15 | "Learned: next time…" | 3 s | [works] |
 | 16 | Voice change "also check the rubric" → step updates | 10 s | [works]/[verify] |
 | 17 | 3-way split: Classroom / two stores → Checkout / YouTube notification | 12 s | [works]/[verify] stores |
 | 18 | Meta end card + title | 10 s | edit; Open key [verify] |
 
 ## Before recording (Nov 4)
 
-1. The self-healing build is done and tested (Nov 1–3).
-2. "turn in" is added to the never-press-alone list, with a test ("checkout" and "place order" are already on it).
+1. ~~The self-healing build is done and tested (Nov 1–3).~~ Done Nov 1 (PR feat/self-healing).
+2. ~~"turn in" is added to the never-press-alone list, with a test.~~ Done (gate.check).
 3. Classroom upload through Google's file picker is rehearsed on the real page.
 4. James's school Google account is signed in to Remuse's browser through the normal sign-in (never by copying cookies).
 5. The Muse Spark Open key works. Otherwise, drop every Open label and the bonus claim.
