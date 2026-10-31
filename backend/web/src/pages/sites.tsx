@@ -5,7 +5,7 @@ import { ago, useApi } from "@/lib/api";
 /** Sites whose login Remuse may use. Connecting and disconnecting happens in Chrome, where the login lives. */
 export function SitesPage() {
   const { data } = useApi<{ site: string; cookies: number; updatedAt: number }[]>("/logins", 5000, () => true);
-  const { data: g } = useApi<{ signedIn: boolean | null; at: number }>("/logins/google");
+  const { data: g } = useApi<{ signedIn: boolean | null; accounts?: string[]; at: number }>("/logins/google");
   return (
     <Content>
       <PageHead title="Connected sites" sub="Remuse works on these with the login you already have in Chrome, even when Chrome is closed. Your login stays on this computer." />
@@ -15,7 +15,7 @@ export function SitesPage() {
             <li className="flex items-center gap-3 px-5 py-3.5">
               <Globe className="size-4 text-muted-foreground" />
               <span className="font-medium">Google</span>
-              <span className="ml-auto text-[13px] text-muted-foreground">YouTube, Gmail, Sheets: signed in in Remuse's own browser (never copied)</span>
+              <span className="ml-auto text-[13px] text-muted-foreground">{g.accounts?.length ? `${g.accounts.join(", ")}: signed in in Remuse's own browser` : "YouTube, Gmail, Sheets: signed in in Remuse's own browser"} (never copied)</span>
             </li>
           ) : null}
           {data.map((s) => (

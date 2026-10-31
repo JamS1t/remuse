@@ -180,6 +180,13 @@ export function TaskPage({ id, tab = "overview" }: { id: string; tab?: string })
                 <p className="mt-1 text-muted-foreground">An estimate: {t.doneCount} {t.itemName ?? "item"}{t.doneCount === 1 ? "" : "s"} done for you (each counted once a day), times how long your demo took ({saved(t.demoMs!).replace(/^about /, "about ")}, talking included).</p>
               </section>
             ) : null}
+            {t.accounts && Object.keys(t.accounts).length ? (
+              <section className="glass rounded-2xl px-5 py-4 text-[13px]">
+                <p className="font-medium">Google accounts</p>
+                <p className="mt-1 text-muted-foreground">It acts as the same account you used in your demo, and stops rather than use another.</p>
+                <ul className="mt-2 space-y-1">{Object.entries(t.accounts).map(([site, who]) => <li key={site}><span className="text-muted-foreground">{site}</span> as <span className="font-medium">{who}</span></li>)}</ul>
+              </section>
+            ) : null}
             <Safety spec={spec} />
             {t.specId ? <FilesCard t={t} onChange={reload} /> : null}
             <section className="glass rounded-2xl px-5 py-4 text-[13px]">

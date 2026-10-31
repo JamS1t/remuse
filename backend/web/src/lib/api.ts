@@ -109,6 +109,7 @@ export type Task = {
   handled: number; // list items earlier runs already handled (left alone next time)
   // Time saved: items done in real runs × how long the demo took.
   doneCount: number; demoMs: number | null; savedMs: number | null;
+  accounts: Record<string, string> | null; // site -> the Google account it was used as in the demo
 };
 export type FolderRow = { id: string; name: string; path: string; count: number; latest: { name: string; modified: number } | null; ok: boolean };
 export type ScheduleRow = { id: number; specId: number; sessionId: string; time: string; days: string; everyMinutes: number | null; watchFolder?: string | null };

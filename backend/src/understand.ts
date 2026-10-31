@@ -14,6 +14,7 @@ export type Step = {
   tab?: string;
   describe: string; expect?: { urlIncludes?: string; textIncludes?: string; looks?: string };
   irreversible?: boolean; fromEvent?: number | null; healed?: string;
+  account?: string; // the Google/YouTube account this step was done as in the demo (from its event)
   // The page's own WebMCP tool for this action: used when the page offers it, else the robot clicks.
   tool?: { name: string; args: Record<string, string> };
   // compare only: open the top `max` results on this page, read `vars` on each, keep the best by the person's rule.
@@ -39,6 +40,9 @@ export type Spec = {
   schedule?: { everyMinutes?: number; time?: string; days?: string; said?: string };
   // An allowed folder (by name) where every file the task downloads is saved, or null.
   saveDownloads?: string | null;
+  // Google apps can be signed in as several accounts at once: the one each site (host) was used as in the demo, or,
+  // for a site used as several, all of them (each step then carries its own account when known).
+  accounts?: Record<string, string>; accountSets?: Record<string, string[]>;
   scopeTypes: string[]; variables: Variable[]; steps: Step[]; rules: Rule[];
   outcomes: Record<string, { describe: string; steps: Step[]; reply?: string; demonstrated: boolean }>;
 };
@@ -266,5 +270,15 @@ export function normalize(spec: Spec, s: Session): Spec {
     }
   });
   spec.scopeTypes ??= [];
+  // Which account each site was used as in the demo, from what the recorder saw (emails are case-insensitive; YouTube
+  // IDs are not). One account on a site: kept for the site. Several: kept as a set, and each step gets its own.
+  const ident = (a: unknown) => { const x = String(a); return x.includes("@") ? x.toLowerCase() : x; };
+  const seen: Record<string, Set<string>> = {};
+  for (const e of s.events) if (e?.account && e?.url) { try { (seen[new URL(e.url).host] ??= new Set()).add(ident(e.account)); } catch { /* not a web page */ } }
+  const one = Object.entries(seen).filter(([, v]) => v.size === 1).map(([h, v]) => [h, [...v][0]]);
+  const many = Object.entries(seen).filter(([, v]) => v.size > 1).map(([h, v]) => [h, [...v]]);
+  if (one.length) spec.accounts = Object.fromEntries(one);
+  if (many.length) spec.accountSets = Object.fromEntries(many);
+  all.forEach((st) => { const e = st.fromEvent != null ? s.events[st.fromEvent] : null; if (e?.account) st.account = ident(e.account); });
   return spec;
 }

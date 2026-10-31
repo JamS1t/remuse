@@ -1,7 +1,7 @@
 // End-to-end: in what order Remuse decides. Your own rules come first: one that clearly applies decides, whatever
 // kind of request it is. Only an item that would fall through to "otherwise" looks at its kind: a kind your rules
 // weren't about is asked, and your answer is reused for that kind, but never over your other rules (an old order
-// is still declined). Uses its own Agent, data folder, a stand-in inbox and a stand-in model. Needs port 3200 free.
+// is still declined). Uses its own Agent, data folder, a stand-in inbox and a stand-in model. Uses its own port (3299).
 // Run: node test/decide.e2e.ts
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
@@ -10,13 +10,15 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
-const API = "http://127.0.0.1:3200/api";
+// Its own port and browser profile, so a running Remuse Agent (and its sign-ins) is never touched.
+const PORT = process.env.TEST_PORT ?? "3299";
+const API = `http://127.0.0.1:${PORT}/api`;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const results: [string, boolean, string][] = [];
 const check = (n: string, ok: boolean, d = "") => { results.push([n, ok, d]); console.log(`${ok ? "PASS" : "FAIL"}  ${n}${d ? `  (${d})` : ""}`); };
 const get = async (p: string) => (await fetch(API + p)).json();
 const post = async (p: string, b: unknown = {}) => (await fetch(API + p, { method: "POST", body: JSON.stringify(b) })).json();
-if (await fetch(`${API}/sessions`).then(() => true, () => false)) { console.error("Port 3200 is busy: stop the Remuse Agent first."); process.exit(1); }
+if (await fetch(`${API}/sessions`).then(() => true, () => false)) { console.error(`Port ${PORT} is busy: another test is running.`); process.exit(1); }
 
 // Emails: what kind of request each is, and how old the order is.
 const mails = [
@@ -61,7 +63,7 @@ const code = `({ extract: { days_since_order: (t) => /Order age: (\\d+)/.exec(t)
 const data = mkdtempSync(join(tmpdir(), "remuse-decide-"));
 const agent = spawn(process.execPath, ["--env-file-if-exists=../.env", "src/server.ts"], {
   cwd: resolve(import.meta.dirname, ".."), stdio: process.env.SHOW_AGENT ? "inherit" : "ignore",
-  env: { ...process.env, DATA_DIR: data, HEADLESS: "1", SHOWRUN_NO_NOTIFY: "1", OPEN_MODEL_KEY: "", BASETEN_API_KEY: "", MODEL_API_KEY: "", SHOWRUN_PROXY: MODEL },
+  env: { ...process.env, DATA_DIR: data, PORT, BROWSER_PROFILE: join(data, "browser"), HEADLESS: "1", SHOWRUN_NO_NOTIFY: "1", OPEN_MODEL_KEY: "", BASETEN_API_KEY: "", MODEL_API_KEY: "", SHOWRUN_PROXY: MODEL },
 });
 try {
   for (let i = 0; i < 40 && !(await fetch(`${API}/sessions`).then((r) => r.ok, () => false)); i++) await sleep(250);

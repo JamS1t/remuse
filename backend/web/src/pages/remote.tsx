@@ -442,7 +442,7 @@ function Sites({ top = false }: { top?: boolean }) {
   // Google is never copied: you sign in once in Remuse's own browser, and the Agent says whether that worked. After
   // pressing the button it keeps asking until the sign-in shows up.
   const [waitGoogle, setWaitGoogle] = useState(false);
-  const { data: g } = useApi<{ signedIn: boolean | null }>(inPanel ? "/logins/google" : null, waitGoogle ? 4000 : 0, (d) => waitGoogle && !d.signedIn);
+  const { data: g } = useApi<{ signedIn: boolean | null; accounts?: string[] }>(inPanel ? "/logins/google" : null, waitGoogle ? 4000 : 0, (d) => waitGoogle && !d.signedIn);
   const [list, setList] = useState<string[] | null>(null);
   const [tab, setTab] = useState<{ site: string | null } | null>(null);
   const [show, setShow] = useState(false);
@@ -478,7 +478,7 @@ function Sites({ top = false }: { top?: boolean }) {
               {g?.signedIn ? (
                 <li className="flex items-center gap-2 px-4 py-2.5">
                   <Globe className="size-3.5 text-muted-foreground" /><span className="font-medium">Google</span>
-                  <span className="ml-auto text-[12px] text-muted-foreground">YouTube, Gmail, Sheets: signed in for Remuse</span>
+                  <span className="ml-auto truncate text-[12px] text-muted-foreground" title={g.accounts?.join(", ")}>{g.accounts?.length ? g.accounts.join(", ") : "YouTube, Gmail, Sheets: signed in for Remuse"}</span>
                 </li>
               ) : null}
               {(list ?? []).map((s) => (

@@ -303,7 +303,8 @@ async function openGoogleSignIn(site: string, email = "") {
 // Is Remuse's own browser signed in to Google? Google logins are never copied, so you sign in there once, and the
 // only place that sign-in shows is the browser profile itself: a hidden Chrome on it, and Google's session cookie.
 // Remembered for 10 minutes, and looked at again after the sign-in window closes. Never while the profile is in use.
-let google: { signedIn: boolean | null; at: number } = { signedIn: null, at: 0 };
+// ids: Google account id -> email, so a recorded YouTube identity can be shown as the account that owns it.
+let google: { signedIn: boolean | null; accounts: string[]; ids: Record<string, string>; at: number } = { signedIn: null, accounts: [], ids: {}, at: 0 };
 let googleOpenedAt = 0;
 let googleLook: Promise<void> | null = null; // a run waits for it (one Chrome per profile)
 async function googleStatus() {
@@ -315,7 +316,25 @@ async function googleStatus() {
       const ctx = await openBrowser(true);
       try {
         const cookies = await ctx.cookies(["https://accounts.google.com", "https://www.youtube.com"]);
-        google = { signedIn: cookies.some((c) => /^(SID|__Secure-1PSID|__Secure-3PSID)$/.test(c.name)), at: Date.now() };
+        const signedIn = cookies.some((c) => /^(SID|__Secure-1PSID|__Secure-3PSID)$/.test(c.name));
+        // Which accounts: Google's own list of the accounts signed in to this browser.
+        let accounts: string[] = [];
+        const ids: Record<string, string> = {};
+        if (signedIn) {
+          const p = await ctx.newPage();
+          const body = await p.goto("https://accounts.google.com/ListAccounts?gpsia=1&source=ChromiumBrowser&json=standard", { timeout: 15_000 }).then((r) => r?.text() ?? "", () => "");
+          accounts = [...new Set([...body.matchAll(/"([^"\s]+@[^"\s]+\.[a-z]{2,})"/gi)].map((m) => m[1].toLowerCase()))];
+          // Each account's entry also carries its numeric Google account id.
+          const walk = (x: unknown): void => {
+            if (!Array.isArray(x)) return;
+            const email = x.find((v) => typeof v === "string" && /^[^\s@]+@[^\s@]+\.[a-z]{2,}$/i.test(v)) as string | undefined;
+            const id = x.find((v) => typeof v === "string" && /^\d{15,25}$/.test(v)) as string | undefined;
+            if (email && id) ids[id] = email.toLowerCase();
+            x.forEach(walk);
+          };
+          try { walk(JSON.parse(body.replace(/^\)\]\}'\s*/, ""))); } catch { /* not the shape we know: emails only */ }
+        }
+        google = { signedIn, accounts, ids, at: Date.now() };
       } finally { await ctx.close().catch(() => {}); }
     } catch (e) { console.warn("couldn't check the Google sign-in:", (e as Error).message); }
   })();
@@ -492,6 +511,15 @@ function timeSaved(sessionId: string, startedAt: number, endedAt: number | null)
   return { doneCount: did.size, demoMs, savedMs: demoMs ? did.size * demoMs : null };
 }
 
+/** An account as a person reads it: an email as is; a YouTube identity as the account that owns it, if known. */
+function accountLabel(who: string) {
+  if (!/^ytc?:/.test(who)) return who;
+  if (who.startsWith("ytc:")) return "the YouTube channel from your demo";
+  const [first, second] = who.slice(3).split("||");
+  const owner = google.ids[second || first];
+  return `${second ? "a brand channel" : "the YouTube channel"} of ${owner ?? "your demo's Google account"}`;
+}
+
 /** The practice of this task's newest version, if there was one: going, or how it went. */
 function latestPractice(sessionId: string, specId: number | null) {
   const run = recentRuns(sessionId).find((r) => r.mode === "practice" && r.specId === specId);
@@ -591,7 +619,7 @@ async function route(req: IncomingMessage, res: ServerResponse) {
           checks: { passed: tests.filter((x) => x.ok).length, total: tests.length },
           askedSchedule: spec?.schedule ?? null, lastReport: lastReport(t.sessionId),
           uploads: spec ? [...spec.steps, ...Object.values(spec.outcomes).flatMap((o) => o.steps)].filter((x) => x.do === "upload").map((x) => ({ folder: x.file?.folder ?? null, pick: x.file?.pick ?? "next" })) : [],
-          saveDownloads: spec?.saveDownloads ?? null, practice: latestPractice(t.sessionId, t.specId), handled: handledCount(t.sessionId), ...timeSaved(t.sessionId, t.startedAt, t.endedAt) };
+          saveDownloads: spec?.saveDownloads ?? null, practice: latestPractice(t.sessionId, t.specId), handled: handledCount(t.sessionId), ...timeSaved(t.sessionId, t.startedAt, t.endedAt), accounts: spec?.accounts ? Object.fromEntries(Object.entries(spec.accounts).map(([site, who]) => [site, accountLabel(who)])) : null };
       }));
   if (url.pathname === "/api/logins" && m === "POST") {
     const b = await json(req);

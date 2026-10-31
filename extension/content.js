@@ -8,7 +8,38 @@
   window.__remuseRecorder = { alive };
   // Inside a frame (Google Sheets types through a hidden one), report the page the person sees.
   const sub = window !== top;
-  const page = () => { try { return sub ? { url: top.location.href, title: top.document.title } : { url: location.href, title: document.title }; } catch { return { url: location.href, title: document.title }; } };
+  // Which Google account the page is using: every Google app names it on its account button ("Google Account: Name
+  // (email)"). A run makes sure it acts as the same account on that site.
+  const account = (d) => {
+    try {
+      const label = [...d.querySelectorAll('[aria-label*="Google"]')].map((e) => e.getAttribute("aria-label") || "").find((a) => /\([^()\s]+@[^()\s]+\)/.test(a));
+      return label ? /\(([^()\s]+@[^()\s]+)\)/.exec(label)[1].toLowerCase() : undefined;
+    } catch { return undefined; }
+  };
+  // YouTube names no account on its pages, but its startup data says who is logged in: DATASYNC_ID is the Google
+  // account, and for a brand channel the channel too ("channel||account"). Studio's address names the channel.
+  // Read once per page load (it doesn't change without one).
+  let yt;
+  const youtube = (d, url) => {
+    if (yt !== undefined) return yt;
+    yt = null;
+    try {
+      const host = new URL(url).host;
+      if (!/(^|\.)youtube\.com$/.test(host)) return yt;
+      const s = [...d.scripts].map((x) => x.textContent || "").find((t) => t.includes('"DATASYNC_ID"'));
+      if (s && /"LOGGED_IN":\s*true/.test(s)) { const id = /"DATASYNC_ID":"([^"]+)"/.exec(s)?.[1]; if (id) yt = `yt:${id}`; }
+      if (!yt && host.startsWith("studio.")) { const c = /\/channel\/(UC[\w-]+)/.exec(new URL(url).pathname)?.[1]; if (c) yt = `ytc:${c}`; }
+    } catch { /* not readable */ }
+    return yt;
+  };
+  const page = () => {
+    try {
+      const d = sub ? top.document : document, url = sub ? top.location.href : location.href;
+      // Only Google and YouTube pages: another site's labels never count as a Google account.
+      const google = /(^|\.)(google|youtube)\.com$/.test(new URL(url).host);
+      return { url, title: d.title, account: google ? youtube(d, url) ?? account(d) : undefined };
+    } catch { return { url: location.href, title: document.title }; }
+  };
   const send = (kind, data = {}) => {
     try {
       chrome.runtime.sendMessage({ type: "event", ev: { at: Date.now(), kind, ...page(), ...data } }).catch(() => {});

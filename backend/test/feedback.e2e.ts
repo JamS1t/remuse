@@ -1,5 +1,5 @@
 // End-to-end, with Muse Spark: feedback in plain words updates a learned task. Only what was asked changes,
-// the person is told what changed in plain sentences, and the rules are rebuilt. Needs port 3200 free.
+// the person is told what changed in plain sentences, and the rules are rebuilt. Uses its own port (3299).
 // Run: node test/feedback.e2e.ts
 import { spawn } from "node:child_process";
 import { mkdtempSync } from "node:fs";
@@ -7,17 +7,19 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
-const API = "http://127.0.0.1:3200/api";
+// Its own port and browser profile, so a running Remuse Agent (and its sign-ins) is never touched.
+const PORT = process.env.TEST_PORT ?? "3299";
+const API = `http://127.0.0.1:${PORT}/api`;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const results: [string, boolean, string][] = [];
 const check = (n: string, ok: boolean, d = "") => { results.push([n, ok, d]); console.log(`${ok ? "PASS" : "FAIL"}  ${n}${d ? `  (${d})` : ""}`); };
 const get = async (p: string) => (await fetch(API + p)).json();
 const post = async (p: string, b: unknown = {}) => (await fetch(API + p, { method: "POST", body: JSON.stringify(b) })).json();
-if (await fetch(`${API}/sessions`).then(() => true, () => false)) { console.error("Port 3200 is busy: stop the Remuse Agent first."); process.exit(1); }
+if (await fetch(`${API}/sessions`).then(() => true, () => false)) { console.error(`Port ${PORT} is busy: another test is running.`); process.exit(1); }
 
 const data = mkdtempSync(join(tmpdir(), "remuse-feedback-"));
 const agent = spawn(process.execPath, ["--env-file-if-exists=../.env", "src/server.ts"], {
-  cwd: resolve(import.meta.dirname, ".."), env: { ...process.env, DATA_DIR: data, HEADLESS: "1", SHOWRUN_NO_NOTIFY: "1", OPEN_MODEL_KEY: "", BASETEN_API_KEY: "" }, stdio: "ignore",
+  cwd: resolve(import.meta.dirname, ".."), env: { ...process.env, DATA_DIR: data, PORT, BROWSER_PROFILE: join(data, "browser"), HEADLESS: "1", SHOWRUN_NO_NOTIFY: "1", OPEN_MODEL_KEY: "", BASETEN_API_KEY: "" }, stdio: "ignore",
 });
 try {
   for (let i = 0; i < 40 && !(await fetch(`${API}/sessions`).then((r) => r.ok, () => false)); i++) await sleep(250);
