@@ -1,204 +1,216 @@
-# Remuse: 3-minute video script and shot list
+# Remuse: 3-minute video script and shot list (v2)
 
-**Positioning:** "Show it once. Remuse learns your way, runs it like code, and fixes itself when the website changes."
+## The idea the video sells
 
-**Three proofs, one per alternative:**
+Remuse doesn't exist for run #1. If you only need a web chore done once while you sit at your desk, a prompt agent is
+fine. **Remuse exists for runs #2 to #500, and for when Chrome is closed.**
 
-1. **vs prompt agents:** fast and the same every run (times measured by us, no competitor products or logos shown).
-2. **vs n8n:** works on any portal you're signed into, where APIs are blocked or don't exist.
-3. **vs scripts and RPA:**
-   - Your spoken "why" becomes rules (Muse Voice Transcribe + Muse Spark).
-   - SAM 3.1 outlines your pen marks and the visual proof.
-   - It heals with proof from the page.
-   - It always stops at the safety gate before anything irreversible.
+**Tagline:** "Show it once. Remuse learns your way, runs it like code, and fixes itself when the website changes."
 
-**Hero:** Google Classroom assignment submission. Schools block the Classroom API for student accounts, so this chore can't be
-done with n8n. It's one example of a locked portal, not the product: scene 6 shows a different chore on a different site.
+**Four truths the video proves:**
 
-**Status key**
+1. **No prompt when you're not there.** A prompt extension needs you in Chrome, typing. Remuse starts by itself: a file
+   lands in a watched folder, or a schedule fires, with Chrome closed.
+2. **Showing beats prompting.** Doing item #1 while talking for 15 seconds, and circling what matters with the pen, is
+   faster and more exact than writing a long prompt full of edge cases.
+3. **Run #50 behaves like run #1.** A prompt agent re-reads the screen and re-thinks every click of every item, so batches
+   are slow and drift. Remuse turns the demo into a fixed procedure plus rules code (written by Muse Spark) and replays it.
+   It only calls a model to read a value, apply your judgment, check a result, or heal.
+4. **Proof and a gate.** Every step is checked against the page. Muse Spark Open checks results independently, and SAM 3.1
+   outlines what you marked and the proof. Remuse stops before Turn in, Checkout, Publish or Send, and you press.
+
+**Rules for the video:**
+- **Every model claim must be true:**
+  - Muse Voice Transcribe hears.
+  - Muse Spark (Meta's API) understands the demo, writes the rules and reasons when a step breaks.
+  - Muse Spark Open (`meta-models/muse-spark-open-1026`, open weights) checks every step's result independently and reads
+    each value a second time.
+  - SAM 3.1 outlines pen marks and proof.
+  - These are four different jobs, never mixed up on screen.
+- **Nothing on screen we didn't build:** no competitor products or logos, no fake competitor UI, no Facebook or
+  Instagram automation.
+- **Only measured numbers:** `[measure]` marks something we time in rehearsal, never a guess.
+- **Real sites with real changes.** No mock sites, no fault switches.
+
+**Status key:**
 - **[works]** works today.
 - **[build]** comes with the self-healing build, Nov 1–3.
 - **[verify]** has to be checked on the real site before recording.
 
 ---
 
-## Scenes
+## Scene 1: Run #1 vs run #50 (0:00–0:25)
 
-### 1. Hook (0:00–0:12)
-
-**Picture:** quick cuts of James's real chores in his own browser: a Classroom assignment page, two store tabs, YouTube
-Studio. No other companies' AI products on screen. Title card: **Remuse: show it once.**
+**Picture:**
+- Kinetic text over James's real desktop.
+- Line one: *"Run #1: a prompt agent is fine."*
+- Line two: *"Run #50, with Chrome closed: ?"*
+- James isn't in Chrome. He drops 3 finished files into his `Ready to submit` folder.
+- A Windows notification: **"Remuse: 3 ready for your OK."**
+- The comparison is honest text, not a fake competitor screen: **"Remuse: [measure] s and [count] model calls per
+  item."** Next to it, *"Prompt agents re-read the screen at every step, every time."*
+- If we time a real prompt agent ourselves, its number can go next to ours, with its branding blurred.
 
 **Voice (James):**
-> "Every week I do the same chores on websites that don't connect to anything. Automation tools need an API. AI browser
-> agents think through every click, every time. Remuse is different. I show it once."
-
-### 2. Teach it once (0:12–0:50)
-
-**Picture:**
-- James presses **Alt+Shift+S**. The sidebar turns into the listening screen (orb, "Listening").
-- He opens Classroom, then the assignment "Lab Report 4".
-- He clicks **Add or create → File** and picks `CS101_Lab4.pdf` from his `Ready to submit` folder.
-- The file shows as attached.
-- He presses **Alt+Shift+D** and circles the attachment chip with the pen.
-- Cards appear in the sidebar as he talks, each quoting his words or the click it came from.
-
-**Voice (James, natural, while doing it):**
-> "When I finish a lab, I put it in my Ready to submit folder. Match it to the assignment by the course code in the file
-> name. If it's already past the due date, don't upload it, just tell me. This, the file showing here, is how I know it's
-> attached. And I always press Turn in myself. Okay, I'm done."
-
-**On-screen labels (small, bottom corner, as each happens):**
-- **Muse Voice Transcribe:** hears each sentence.
-- **SAM 3.1:** outlines what you circled.
-- **Muse Spark:** turns words + clicks into cards.
+> "If you only need a web chore done once, a prompt agent is fine. You type a paragraph and wait while it thinks through
+> every click. But the second time? The fiftieth? With Chrome closed? Prompt agents start from zero every run, and n8n
+> needs APIs most portals don't give you. So we built Remuse. Show it once, and it does it from then on."
 
 **Features:**
-- [works] teach mode, the shortcut, voice end phrase, cards with evidence, pen marks, tab hopping.
-- [verify] the Classroom file picker. Classroom opens Google's file picker in a frame, so the upload step must be
-  rehearsed on the real page.
+- [works] folder trigger, Chrome closed, notifications.
+- [measure] per-item time and model calls.
 
-### 3. It reads back and asks (0:50–1:12)
-
-**Picture:**
-- Remuse speaks its plan as each step lights up in the sidebar.
-- It asks: *"If two assignments have the same course code, which one should I use?"*
-- James answers by voice: *"The one due soonest."* The plan updates.
-- He says *"Looks good."* Remuse practices once on the example, only looking, nothing submitted, and says *"That worked."*
-- In the task card he turns on **Run when a new file lands in "Ready to submit"**.
-
-**Features:**
-- [works] spoken readback, one question at a time, voice answers, practice, folder trigger.
-- **On-screen label:** **Muse Spark**, "understood the demo, wrote the rules".
-
-### 4. Runs like code, stops at the gate (1:12–1:45)
+## Scene 2: Teach it once (0:25–1:10)
 
 **Picture:**
-- James closes his browser.
-- He drops `CS101_Lab5.pdf` into `Ready to submit`.
-- A Windows notification: **"Remuse started: Submit lab report."**
-- The run page shows the steps ticking past, each with its proof line (for example "Lab5.pdf is attached, read back from
-  the page").
-- It finishes at **"Prepared. Waiting for you at Turn in."**
-- A notification: **"Ready for you: Turn in Lab Report 5."** One click from James, and it turns it in.
+- Chrome with the Remuse sidebar. The portal is Google Classroom: schools block its API for student accounts.
+- James presses **Alt+Shift+S**. The sidebar goes to "Listening".
+- He opens the assignment, then **Add or create → File**, and picks `CS101_Lab4.pdf`.
+- He presses **Alt+Shift+D** and circles the attached file and the due date.
+- **Sidebar zoom:** each sentence appears as he says it, then cards quoting his words or the click they came from. The
+  circle is outlined.
 
-**Side-by-side numbers** (our own measurements only):
-- by hand: **[measure] s**
-- Remuse: **[measure] s**
-- AI model calls during the run: **[count]**
+**Voice (James, naturally, while doing it):**
+> "When I finish a lab, it goes in my Ready to submit folder. Match it to the assignment by the course code in the file
+> name. If it's already past the due date, don't upload, just tell me. This is how I know it's attached. And I always
+> press Turn in myself. I'm done."
 
-**Voice:**
-> "It learned the chore once, so it runs it like code: same steps, every time. And it never presses Turn in, send or pay
-> on its own. It gets everything ready, and I press it."
+**Then the readback:**
+- Remuse reads the plan aloud.
+- It asks one question: *"If there's already a file attached, should I replace it?"*
+- James answers by voice: *"Only if mine is newer. Otherwise ask me."* The rule updates on screen.
+- He says *"Looks good."* Remuse practices once, only looking, and says "That worked."
+- He turns on **Run when a new file lands in Ready to submit**.
 
 **On-screen labels:**
-- **Muse Spark Open** (`meta-models/muse-spark-open-1026`, open weights): independently checks each step's result.
+- **Muse Voice Transcribe:** hears each sentence.
+- **SAM 3.1:** outlines what you circled.
+- **Muse Spark:** builds the task and its rules, and asks what it wasn't sure of.
+
+**Voice-over line (optional):**
+> "It's like onboarding a teammate: I do it once and say why."
 
 **Features:**
-- [works] folder trigger, runs with Chrome closed, the approval gate, notifications, checker().
-- [build] "turn in" added to the irreversible list.
-- [verify] the Muse Spark Open key is set (Baseten). Without it the checker falls back to Muse Spark, and this label
-  must not be shown.
+- [works] teach mode, voice, pen marks, cards, the end phrase, readback, questions, voice answers, practice, folder
+  trigger.
+- [verify] the Classroom file picker. It opens in a frame, so the upload must be rehearsed on the real page.
+- The question comes in the readback, right after recording, not in the middle of it. Asking mid-recording isn't built.
 
-### 5. The website changes, and it fixes itself (1:45–2:22)
+## Scene 3: Hands-free, at code speed, stopping at the gate (1:10–1:55)
 
 **Picture:**
-- A real change, not a mock. James runs the next file with the browser window snapped to half the screen, so
-  Classroom's layout collapses (buttons turn into icons and menus).
-- If Classroom shows a new popup or banner on recording day, that's fair to show too.
-- The **Working it out** panel shows one line per attempt, each with a before/after picture and a proof label:
-  - *Goal: attach Lab6.pdf to "Lab Report 6".*
-  - *"Add or create" isn't where it was. The window is narrow.*
-  - *Idea 1: the button by its label. ✗ not on the page.*
-  - *Idea 2: the "+" menu with the same job. ✓*
-  - *Lab6.pdf attached, read back from the page.*
-- Then: *"Learned: next time I go straight there."*
-- A second item with a value it must type gets a second read: *"Two readings agree: ₱451.00."* That shows in scene 6.
+- James closes Chrome and keeps working in another app.
+- He drops `Lab5`, `Lab6` and `Essay2` into the folder.
+- Remuse's run page (or just the notifications) shows:
+  - **Lab5 and Lab6:** steps tick past at code speed, each with a proof line like *"Lab5.pdf attached, read back from
+    the page"*. The proof picture has the file outlined, and the step result is labelled *"checked independently by
+    Muse Spark Open"*.
+  - **Essay2:** its course code matches nothing. Remuse doesn't guess: *"No assignment matches 'Essay2'. Which one?"*
+  - **The gate:** both labs stop at **Turn in**. The notification reads **"2 ready for your OK"**. James clicks **Approve
+    all**, and both are turned in.
 
 **Voice:**
-> "Websites change. A script breaks, and an AI agent guesses. Remuse works it out toward the goal, and only believes it
-> when the page proves it."
+> "I don't sit in Chrome or type prompts anymore. I drop files in a folder. Remuse uses my own logins, matches each file
+> by my rules, proves each attachment is really there, and asks when something doesn't fit. And it never presses Turn
+> in, Send or Pay on its own: I keep the last click."
+
+**On-screen labels:**
+- **Muse Spark Open** (`meta-models/muse-spark-open-1026`, open weights): independent check of every step.
+- **SAM 3.1:** outlines the proof.
+
+**Features:**
+- [works] folder trigger, approval gate, Approve all, notifications, independent checker.
+- [build] "turn in" on the never-press-alone list; proof lines with labels; the attachment read back from the page.
+- [verify] the Muse Spark Open key is set. Without it, drop the Open labels and the bonus claim.
+
+## Scene 4: The site changes, and it fixes itself (1:55–2:35)
+
+**Picture:**
+- A real change, not a mock. The same chore runs with the browser snapped to half the screen, so Classroom's layout
+  collapses: buttons become icons and menus. If Classroom shows a popup or banner on recording day, that's fair too.
+- The **Working it out** panel shows one line per idea, with before/after pictures:
+  - *Goal: attach Lab7.pdf to "Lab Report 7".*
+  - *"Add or create" isn't on the page; the window is narrow.*
+  - *Idea 1: find it by its label. ✗ not there.*
+  - *Idea 2: the "+" menu that does the same job. ✓ Lab7.pdf attached, read back from the page.*
+  - *Learned: next time I go straight there.*
+- Then a change James makes himself, by voice, without re-recording: *"From now on, also check the rubric is there before
+  attaching."* Remuse changes just that step, says what it changed, and the step lights up.
+
+**Voice:**
+> "Websites change. Scripts break, and AI agents guess. Remuse reasons toward the goal, tries another way, and only
+> believes it when the page proves it. And if my chore changes, I just tell it."
 
 **On-screen labels:**
 - **Muse Spark:** reasons through the ideas.
-- **SAM 3.1:** outlines the proof in the picture.
+- **SAM 3.1:** outlines the proof.
 
 **Features:**
-- [build] diagnosis, the strategy ladder, attempt memory, proof labels, learned fixes, the live panel.
-- [verify] which real change heals reliably in rehearsal (narrow window, a popup, a different class's layout). Keep
-  whichever does.
+- [build] the self-healing loop, proof labels, learned fixes, the live panel.
+- [works] changing a task in your own words.
+- [verify] which real change heals reliably in rehearsal (narrow window, popup, another class's layout). Keep whichever
+  does.
 
-### 6. Not just school (2:22–2:45)
+## Scene 5: Not just school, and the Meta stack (2:35–3:00)
 
-**Picture:**
-- A second chore, taught earlier: compare the same item on two stores, counting shipping and seller rating by James's
-  spoken rule (*"cheapest after shipping, but only sellers rated 4.5 and up"*).
-- Remuse opens both tabs, reads the prices, shows its pick and why.
-- It fills the cart and stops at **Checkout: "Ready for you."**
-- Cut to a Windows notification from the **hourly YouTube Studio report**, already running on its schedule: views and
-  click-through rate since last hour.
+**Picture:** a 3-way split, each a real run:
+1. **Classroom:** files staged from the folder.
+2. **Shopping:** the same item on two stores, by James's spoken rule (*"cheapest after shipping, sellers rated 4.5 and
+   up"*). It picks one, says why, and stops at **Checkout**.
+3. **YouTube Studio:** the hourly report arrives as a notification while Chrome is closed.
 
-**Voice:**
-> "Same idea for any site I'm signed into: my classes, my shopping, my channel."
-
-**Features:**
-- [works] the compare step with your rule, the approval gate at checkout, the hourly schedule and its report.
-- [verify] the stores used allow this in their terms. ("checkout" and "place order" are already on the irreversible
-  list.)
-
-### 7. Built on Meta (2:45–3:00)
-
-**Picture:** one clean diagram:
+**End card:**
 
 ```
 Muse Voice Transcribe   hears you
 Muse Spark              understands the demo, writes the rules, reasons when a step breaks
-SAM 3.1                 sees your pen marks, outlines the proof
-Muse Spark Open         (meta-models/muse-spark-open-1026, open weights) checks every result independently,
-                        and reads each value a second time
-        runs on your PC, in your signed-in browser · stops before anything irreversible
+Muse Spark Open         meta-models/muse-spark-open-1026 · open weights · checks every result, reads every value twice
+SAM 3.1                 outlines your pen marks and the proof
 ```
 
-Then the title card: **Remuse: show it once.**
+Then **Remuse: show it once.**
 
 **Voice:**
-> "Four Meta models, one assistant that learns from a single demo. Remuse. Show it once."
+> "Files into locked portals, prices with my own rules, hourly checks with Chrome closed. Show it once, and Remuse runs it
+> your way. Built on Meta's Muse Voice Transcribe, Muse Spark, Muse Spark Open and SAM 3.1."
+
+**Features:**
+- [works] the compare step, the gate at Checkout, the hourly schedule.
+- [verify] the stores' terms allow it.
 
 ---
 
 ## Shot list
 
-| # | Shot | Capture | Length | Needs |
-|---|---|---|---|---|
-| 1 | Montage of real chores | screen, 1080p | 8 s | real pages, no other AI products |
-| 2 | Title card | edit | 3 s | logo |
-| 3 | Shortcut → listening sidebar | screen + sidebar zoom | 4 s | [works] |
-| 4 | Teaching in Classroom, talking | screen + mic | 25 s | [verify] file picker |
-| 5 | Pen circle on the attachment | sidebar + page zoom | 4 s | [works] |
-| 6 | Cards with quotes | sidebar zoom | 5 s | [works] |
-| 7 | Spoken readback + question + voice answer | sidebar + audio | 15 s | [works] |
-| 8 | Practice "That worked" | sidebar | 4 s | [works] |
-| 9 | Folder trigger on | task card | 3 s | [works] |
-| 10 | Close browser, drop file in folder | desktop | 5 s | [works] |
-| 11 | Started notification | desktop | 2 s | [works] |
-| 12 | Run page ticking with proof lines | run page | 10 s | [works]; proof labels [build] |
-| 13 | Measured times + model-call count | edit overlay | 4 s | measure in rehearsal |
-| 14 | "Ready for you: Turn in" → one click | notification + page | 6 s | [build] "turn in" gate |
-| 15 | Narrow window run, Working it out panel | run page + page side by side | 25 s | [build] |
-| 16 | "Learned: next time…" | run page | 3 s | [build] |
-| 17 | Two stores, pick + why, stop at checkout | screen | 15 s | [verify] stores |
-| 18 | YouTube Studio hourly notification | desktop | 4 s | [works], schedule on |
-| 19 | Meta diagram | edit | 10 s | Open key [verify] |
-| 20 | End card | edit | 3 s | |
+| # | Shot | Length | Status |
+|---|---|---|---|
+| 1 | Kinetic text "Run #1 / Run #50" over desktop | 6 s | edit |
+| 2 | Drop 3 files in folder, Chrome closed → "3 ready for your OK" | 8 s | [works] |
+| 3 | Honest numbers card (Remuse per-item time + model calls) | 5 s | [measure] |
+| 4 | Alt+Shift+S → Listening | 3 s | [works] |
+| 5 | Teaching in Classroom while talking | 22 s | [verify] picker |
+| 6 | Pen circle on the attachment and due date + outline | 4 s | [works] |
+| 7 | Sidebar: words → cards with quotes | 5 s | [works] |
+| 8 | Readback + question + voice answer + rule updates | 12 s | [works] |
+| 9 | Practice "That worked", folder trigger on | 5 s | [works] |
+| 10 | Close Chrome, drop Lab5/Lab6/Essay2 | 5 s | [works] |
+| 11 | Run page: steps ticking, proof lines, outlined proof | 12 s | [build] labels |
+| 12 | Essay2: "Which one?" | 4 s | [works]/[verify] |
+| 13 | "2 ready for your OK" → Approve all → turned in | 8 s | [build] turn-in gate |
+| 14 | Half-screen run, Working it out panel | 22 s | [build] |
+| 15 | "Learned: next time…" | 3 s | [build] |
+| 16 | Voice change "also check the rubric" → step updates | 10 s | [works]/[verify] |
+| 17 | 3-way split: Classroom / two stores → Checkout / YouTube notification | 12 s | [works]/[verify] stores |
+| 18 | Meta end card + title | 10 s | edit; Open key [verify] |
 
 ## Before recording (Nov 4)
 
 1. The self-healing build is done and tested (Nov 1–3).
-2. "turn in" is added to the irreversible list, with a test ("checkout" and "place order" are already on it).
+2. "turn in" is added to the never-press-alone list, with a test ("checkout" and "place order" are already on it).
 3. Classroom upload through Google's file picker is rehearsed on the real page.
 4. James's school Google account is signed in to Remuse's browser through the normal sign-in (never by copying cookies).
-5. The Muse Spark Open key works, so scene 4 and the diagram are true. If it doesn't, drop the Open labels and the bonus
-   claim.
-6. Times and model-call counts are measured in rehearsal, and only those numbers go on screen.
-7. The stores in scene 6 are chosen and their terms checked.
-8. No Facebook or Instagram automation anywhere (Meta's terms), and no other companies' AI products or logos.
+5. The Muse Spark Open key works. Otherwise, drop every Open label and the bonus claim.
+6. Per-item time and model-call counts are measured in rehearsal. Only those go on screen. A prompt-agent number appears
+   only if we really timed one, with its branding blurred.
+7. The stores in scene 5 are chosen and their terms checked.
+8. No Facebook or Instagram automation, no competitor logos, no fake competitor screens.
