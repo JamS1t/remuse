@@ -11,7 +11,7 @@ import { practiceSay } from "@/lib/say";
 import { cn } from "@/lib/utils";
 
 type Status = {
-  recording: boolean; rec?: { id?: string; t0?: number; audioError?: string | null }; hearing?: boolean; level?: number;
+  recording: boolean; rec?: { id?: string; t0?: number; audioError?: string | null }; hearing?: boolean; level?: number; mic?: string | null;
   speaking?: { line: number; total: number } | null; last?: { id: string; byVoice?: boolean; discarded?: boolean; cancelled?: boolean; learning?: boolean; error?: string | null; at?: number } | null;
 };
 export type TeachTask = { sessionId: string; specId?: number; title?: string; learnStage?: string | null; learnError?: string | null; practice?: PracticeState | null };
@@ -130,7 +130,7 @@ export function TeachMode({ sessionId, task, onExit }: { sessionId: string; task
     : { orb: "thinking", word: "Thinking", sub: (stage && STAGE[stage]) || "Getting ready" };
 
   return (
-    <Frame orb={view.orb} word={view.word} sub={<>{view.sub}{recording && st?.rec?.audioError ? <p className="mt-2 text-[13px] text-warn">No voice: {st.rec.audioError}</p> : null}</>} shimmer={view.word === "Thinking"}
+    <Frame orb={view.orb} word={view.word} sub={<>{view.sub}{recording && st?.rec?.audioError ? <p className="mt-2 text-[13px] text-warn">No voice: {st.rec.audioError}</p> : null}{recording && st?.mic ? <p className="mt-2 text-[13px] text-warn">The mic stopped hearing you ({st.mic}). Reconnecting…</p> : null}</>} shimmer={view.word === "Thinking"}
       right={recording ? (
         <span className="ml-auto inline-flex items-center gap-2 font-mono text-[13px] tabular-nums text-muted-foreground">
           <Meter level={st?.level ?? 0} /><span className="size-2 rounded-full bg-tally" aria-hidden />{clock(secs)}<span className="sr-only">recording</span>

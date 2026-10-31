@@ -4,7 +4,8 @@
 // voice stays lined up with the clicks. If the microphone drops out (a headset reconnects, Windows hands
 // the mic to another app), recording picks it up again and the gap stays silent instead of losing the rest.
 const API = "http://127.0.0.1:3200/api";
-let ctx, stream, node, parts, t0, sessionId, drops, converse = false, offsetMs = 0, held = false;
+let ctx, stream, source, node, parts, t0, sessionId, drops, converse = false, offsetMs = 0, held = false;
+let lastBlock = 0, zeros = 0, mendAt = 0;
 
 chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
   if (msg.target !== "offscreen") return;
@@ -31,12 +32,41 @@ async function start(id, talk = false, sessionT0 = Date.now()) {
 
 async function listen() {
   stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-  const src = ctx.createMediaStreamSource(stream);
+  // Kept in a variable that lives as long as the recording: a source nothing points to can be cleaned away by Chrome,
+  // and the mic goes silent mid-demo.
+  source = ctx.createMediaStreamSource(stream);
   node = new AudioWorkletNode(ctx, "remuse-recorder", { numberOfInputs: 1, numberOfOutputs: 0, channelCount: 1, channelCountMode: "explicit" });
-  node.port.onmessage = (e) => { const p = { at: e.data.at - t0, pcm: e.data.pcm }; parts.push(p); hearing(p); };
-  src.connect(node);
-  stream.getAudioTracks()[0].onended = () => { if (!ctx) return; drops++; node.disconnect(); listen().catch(() => {}); };
+  node.port.onmessage = (e) => {
+    lastBlock = Date.now();
+    const p = { at: e.data.at - t0, pcm: e.data.pcm };
+    zeros = p.pcm.every((v) => v === 0) ? zeros + p.pcm.length / ctx.sampleRate : 0;
+    parts.push(p); hearing(p);
+  };
+  source.connect(node);
+  stream.getAudioTracks()[0].onended = () => mend("the microphone stopped");
+  lastBlock = Date.now(); zeros = 0;
 }
+
+// A real mic always picks up something, even in a quiet room. No sound at all for a few seconds (no blocks, or only
+// exact zeros) means the connection broke: reconnect it, and tell the sidebar, so you're never talking to nothing.
+async function mend(why) {
+  if (!ctx || Date.now() - mendAt < 4000) return;
+  mendAt = Date.now(); drops++;
+  chrome.runtime.sendMessage({ type: "mic", ok: false, why }).catch(() => {});
+  try { node?.disconnect(); source?.disconnect(); } catch { /* already gone */ }
+  stream?.getTracks().forEach((t) => t.stop());
+  try {
+    if (ctx.state === "suspended") await ctx.resume();
+    await listen();
+    chrome.runtime.sendMessage({ type: "mic", ok: true }).catch(() => {});
+  } catch (e) { chrome.runtime.sendMessage({ type: "mic", ok: false, why: `${why}, and couldn't reconnect: ${e.message}` }).catch(() => {}); }
+}
+setInterval(() => {
+  if (!ctx) return;
+  if (ctx.state === "suspended") ctx.resume().catch(() => {});
+  if (Date.now() - lastBlock > 2500) mend("no sound came from the microphone");
+  else if (zeros > 3) { zeros = 0; mend("the microphone went silent"); }
+}, 1000);
 
 // While Remuse speaks, what the mic picks up is Remuse itself: not heard until it's done.
 function hold(on) {
@@ -88,7 +118,7 @@ async function stop() {
   if (converse) { converse = false; const c = ctx; ctx = null; node.disconnect(); stream.getTracks().forEach((t) => t.stop()); await c.close(); return { ok: true }; }
   const rate = ctx.sampleRate, total = ctx.currentTime - t0;
   const c = ctx; ctx = null;
-  node.disconnect(); stream.getTracks().forEach((t) => t.stop()); await c.close();
+  node.disconnect(); source?.disconnect(); stream.getTracks().forEach((t) => t.stop()); await c.close();
   // Lay every block at its time on one track; anything the mic missed stays silent.
   const raw = new Float32Array(Math.ceil(total * rate));
   for (const p of parts) { const i = Math.round(p.at * rate); if (i >= 0 && i < raw.length) raw.set(p.pcm.subarray(0, raw.length - i), i); }

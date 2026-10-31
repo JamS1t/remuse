@@ -1,23 +1,27 @@
 // End-to-end teaching: real Chromium with the extension and a test microphone that says "Open the report page
 // and read the total.", then "Okay, that's it." Each sentence is heard whole while recording, cards appear that
-// cite words or clicks, and the end phrase stops the recording by itself. Needs port 3200 free.
+// cite words or clicks, and the end phrase stops the recording by itself. Own Agent on port 3296 and a copy of the
+// extension pointed at it, so the Agent you use keeps running.
 // Run: node test/teach.e2e.ts
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
-import { mkdtempSync } from "node:fs";
+import { cpSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { chromium } from "playwright";
 
-const API = "http://127.0.0.1:3200/api";
+const PORT = "3296";
+const API = `http://127.0.0.1:${PORT}/api`;
 const voice = resolve(import.meta.dirname, "../../scripts/fixtures/teach.wav");
-const ext = resolve(import.meta.dirname, "../../extension");
+const ext = join(mkdtempSync(join(tmpdir(), "remuse-teach-ext-")), "extension");
+cpSync(resolve(import.meta.dirname, "../../extension"), ext, { recursive: true });
+for (const f of readdirSync(ext).filter((x) => x.endsWith(".js"))) writeFileSync(join(ext, f), readFileSync(join(ext, f), "utf8").replaceAll("127.0.0.1:3200", `127.0.0.1:${PORT}`));
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const results: [string, boolean, string][] = [];
 const check = (n: string, ok: boolean, d = "") => { results.push([n, ok, d]); console.log(`${ok ? "PASS" : "FAIL"}  ${n}${d ? `  (${d})` : ""}`); };
 const get = async (p: string) => (await fetch(API + p)).json();
 const post = async (p: string, b: unknown = {}) => (await fetch(API + p, { method: "POST", body: JSON.stringify(b) })).json();
-if (await fetch(`${API}/sessions`).then(() => true, () => false)) { console.error("Port 3200 is busy: stop the Remuse Agent first."); process.exit(1); }
+if (await fetch(`${API}/sessions`).then(() => true, () => false)) { console.error(`Port ${PORT} is busy: another test is running.`); process.exit(1); }
 
 const site = createServer((req, res) => {
   res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
@@ -35,7 +39,7 @@ const silence = (secs: number) => {
 
 const data = mkdtempSync(join(tmpdir(), "remuse-teach-"));
 const agent = spawn(process.execPath, ["--env-file-if-exists=../.env", "src/server.ts"], {
-  cwd: resolve(import.meta.dirname, ".."), env: { ...process.env, DATA_DIR: data, HEADLESS: "1", SHOWRUN_NO_NOTIFY: "1", OPEN_MODEL_KEY: "", BASETEN_API_KEY: "" }, stdio: process.env.SHOW_AGENT ? "inherit" : "ignore",
+  cwd: resolve(import.meta.dirname, ".."), env: { ...process.env, PORT, DATA_DIR: data, BROWSER_PROFILE: join(data, "browser"), HEADLESS: "1", SHOWRUN_NO_NOTIFY: "1", OPEN_MODEL_KEY: "", BASETEN_API_KEY: "" }, stdio: process.env.SHOW_AGENT ? "inherit" : "ignore",
 });
 const ctx = await chromium.launchPersistentContext(mkdtempSync(join(tmpdir(), "remuse-profile-")), {
   channel: "chromium", headless: true, viewport: { width: 1280, height: 800 },

@@ -150,7 +150,7 @@ async function finish({ byVoice = false, discard = false } = {}) {
 
 async function status() {
   const r = await current();
-  return { recording: !!r, rec: r, hearing, level: micLevel, speaking: talk ? { line: talk.line, total: talk.total } : null, mode, last: (await chrome.storage.local.get("last")).last ?? null };
+  return { recording: !!r, rec: r, hearing, level: micLevel, mic, speaking: talk ? { line: talk.line, total: talk.total } : null, mode, last: (await chrome.storage.local.get("last")).last ?? null };
 }
 
 // Every page knows whether you're teaching (drawing on the page only works then).
@@ -298,12 +298,13 @@ chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => 
 globalThis.showrun = { start, stop, cancel, status, connect, disconnect, command, setMode, speak, hush };
 
 // Whether you are talking right now (the offscreen recorder hears it first), for the sidebar to show.
-let hearing = false, micLevel = 0;
+let hearing = false, micLevel = 0, mic = null; // mic: why it isn't working right now, or null
 
 chrome.runtime.onMessage.addListener((msg, sender, reply) => {
   if (msg.type === "event") { onEvent(msg.ev, sender).catch((e) => console.warn("event dropped:", e.message)); return; }
   if (msg.type === "hearing") { hearing = !!msg.on; return; }
   if (msg.type === "level") { micLevel = msg.level; return; }
+  if (msg.type === "mic") { mic = msg.ok ? null : msg.why ?? "the microphone stopped"; return; } // null: working
   // You said you're done. Only for the recording that is still running: a late one (Stop was pressed) is ignored.
   if (msg.type === "saidDone") {
     current().then((r) => { if (r?.id === msg.sessionId) return stop({ byVoice: true }); }).catch((e) => console.warn("couldn't stop:", e.message));
