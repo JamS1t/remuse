@@ -2,6 +2,7 @@
 // No model calls. Run: node test/moments.check.ts
 import { moments } from "../src/moments.ts";
 import { buildPrompt } from "../src/understand.ts";
+import { fileURLToPath } from "node:url";
 
 let fails = 0;
 const check = (name: string, ok: boolean, detail?: unknown) => { console.log(`${ok ? "PASS" : "FAIL"}  ${name}${ok ? "" : `  (${JSON.stringify(detail)})`}`); if (!ok) fails++; };
@@ -29,6 +30,15 @@ check("and never shows where the mouse rested", !/ point /.test(prompt));
 const marked = buildPrompt({ id: "x", events: [ev(0, "start"), { ...ev(2500, "mark"), shape: "circle", targets: [{ role: undefined, label: undefined, text: "Views 2,607" }] }], turns } as any, ".").filter((p: any) => p.type === "input_text").map((p: any) => p.text).join("\n");
 check("a mark shows its shape and what it circled", /#1 t=2\.5s mark shape=circle .*"Views 2,607"/.test(marked), marked.split("\n").filter((l) => l.includes("mark")).join(" | ").slice(0, 300));
 check("Muse Spark is told what a mark means", /a mark is the person circling or underlining something on purpose/i.test(marked));
+// Hopping to a tab only to read it (nothing clicked there): the switch keeps that tab in the recording, with its picture.
+const hop = [ev(0, "start", 1), ev(2000, "click", 1), { ...ev(4000, "tab", 2), url: "https://docs.google.com/spreadsheets/d/x", after: "courier.png" }]; // any real picture
+const hm = moments({ events: hop, turns: [{ startMs: 3800, endMs: 6000, text: "and this is where the views go" }] });
+check("a switch to another tab is part of the moment", hm.some((x) => x.said === "and this is where the views go" && x.events.includes(2)), hm);
+const hopParts = buildPrompt({ id: "x", events: hop, turns: [] } as any, fileURLToPath(new URL("../../scripts/fixtures", import.meta.url)));
+const hopPrompt = hopParts.filter((p: any) => p.type === "input_text").map((p: any) => p.text).join("\n");
+check("with a picture of the tab it switched to", /frame: event #2, after/.test(hopPrompt) && hopParts.some((p: any) => p.type === "input_image"));
+check("Muse Spark sees the switch, in its own tab", /#2 t=4\.0s tab tab=T2 url=https:\/\/docs\.google\.com/.test(hopPrompt), hopPrompt.split("\n").filter((l) => l.includes(" tab")).join(" | "));
+check("and is told what a switch means", /a "tab" line is the person switching to another open tab/i.test(hopPrompt));
 
 console.log(fails ? `\n${fails} failed` : "\nall passed");
 process.exit(fails ? 1 : 0);

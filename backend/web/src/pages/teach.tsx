@@ -37,6 +37,7 @@ function did(e?: Ev): string | null {
   if (e.kind === "key") return `you pressed ${e.key ?? "a key"}`;
   if (e.kind === "mark") return name ? `you marked “${name}”` : "you marked this";
   if (e.kind === "upload") return "you chose a file";
+  if (e.kind === "tab") { try { const u = new URL(e.url!); return `you switched to ${u.host}`; } catch { return "you switched tabs"; } }
   if (e.kind === "page" || e.kind === "start") { try { const u = new URL(e.url!); return `you opened ${u.host}${u.pathname === "/" ? "" : u.pathname}`; } catch { return "you opened a page"; } }
   return null;
 }

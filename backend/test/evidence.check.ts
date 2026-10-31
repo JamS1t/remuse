@@ -66,5 +66,12 @@ const ten = spec([{ id: "s1", do: "goto", url: A, evidence: { events: [0] } }, c
 checkEvidence(ten, events);
 check("steps without ids get their own questions", ten.questions?.length === 2 && new Set(ten.questions.map((q) => q.id)).size === 2 && !ten.questions.some((q) => /undefined/.test(q.id)), ten.questions?.map((q) => q.id));
 
+// A step that goes to a page the person reached by switching tabs is backed by that switch.
+const S = "https://docs.google.com/spreadsheets/d/abc/edit";
+const hopEvents = [{ t: 0, kind: "start", url: A }, { t: 1000, kind: "click", url: A, target: { role: "tab", label: "Analytics" } }, { t: 3000, kind: "tab", url: S, tab: 2 }];
+const eleven = spec([{ id: "s1", do: "goto", url: A, evidence: { events: [0] } }, click("s2", "Analytics", [1]), { id: "s3", do: "goto", url: S, tab: "sheet" } as any]);
+checkEvidence(eleven, hopEvents);
+check("a goto to a tab the person switched to is backed by the switch", eleven.steps.find((s) => s.id === "s3")?.evidence?.events[0] === 2, eleven.steps.map((s) => s.evidence));
+
 console.log(fails ? `\n${fails} failed` : "\nall passed");
 process.exit(fails ? 1 : 0);

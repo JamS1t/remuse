@@ -49,6 +49,23 @@ async function onEvent(ev, sender) {
   if (after) await api(`/sessions/${r.id}/events/${id}/after`, "PUT", { after });
 }
 
+// Hopping between tabs while teaching: each switch is recorded with a picture of the tab you landed on, so a tab you
+// only read from or talked about (nothing clicked there) is still part of the task.
+async function onSwitch(tabId) {
+  const r = await current();
+  if (!r || tabId == null) return;
+  const tab = await chrome.tabs.get(tabId).catch(() => null);
+  if (!tab?.active || !tab.url?.startsWith("http")) return;
+  await sleep(400); // let the tab paint
+  const after = await screenshot(tab.windowId);
+  await api(`/sessions/${r.id}/events`, "POST", { t: Date.now() - r.t0, kind: "tab", url: tab.url, title: tab.title, tab: tab.id, after }).catch(() => {});
+}
+chrome.tabs.onActivated.addListener(({ tabId }) => { onSwitch(tabId).catch(() => {}); });
+chrome.windows.onFocusChanged.addListener((windowId) => {
+  if (windowId === chrome.windows.WINDOW_ID_NONE) return;
+  chrome.tabs.query({ active: true, windowId }).then(([t]) => onSwitch(t?.id)).catch(() => {});
+});
+
 async function ensureOffscreen() {
   if (await chrome.offscreen.hasDocument()) return;
   await chrome.offscreen.createDocument({ url: "offscreen.html", reasons: ["USER_MEDIA"], justification: "Record the user's narration of the task" });

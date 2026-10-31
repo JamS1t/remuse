@@ -61,6 +61,9 @@ try {
   for (let i = 0; i < 40 && !(await fetch(`${API}/sessions`).then((r) => r.ok, () => false)); i++) await sleep(250);
   const sw = ctx.serviceWorkers()[0] ?? (await ctx.waitForEvent("serviceworker"));
   const call = (fn: string, ...a: unknown[]) => sw.evaluate(([f, args]) => (globalThis as any).showrun[f as string](...(args as unknown[])), [fn, a] as const) as Promise<any>;
+  // A second tab, open before teaching starts, to hop to and back.
+  const second = await ctx.newPage();
+  await second.goto(`${SITE}/sheet`);
   const page = await ctx.newPage();
   await page.goto(SITE);
   await call("start", "");
@@ -87,6 +90,13 @@ try {
   check("underlining makes an underline mark on what's above it", u?.shape === "underline" && u.targets?.some((t: any) => /CTR 5\.1%/.test(t.text ?? "")), JSON.stringify(u)?.slice(0, 300));
   check("a drag doesn't open the right-click menu; a plain right-click does", menus.length >= 1 && menus.at(-1) === false && !menus.slice(0, -1).some((x: boolean) => x === false), JSON.stringify(menus));
   check("pen mode: a left drag draws and isn't a click", p?.shape === "circle" && p.targets?.some((t: any) => /Go/.test(t.text ?? "")) && clicksDuringPen === 0 && !s.events.some((e: any) => e.kind === "click"), JSON.stringify({ p: p?.shape, clicksDuringPen, clicks: s.events.filter((e: any) => e.kind === "click").length }));
+
+  // Hopping to another tab and back is recorded, with what each tab shows, even with nothing clicked there.
+  await second.bringToFront(); await sleep(2000);
+  await page.bringToFront(); await sleep(2000);
+  const hops = (await get(`/sessions/${id}`)).events.filter((e: any) => e.kind === "tab");
+  check("switching to another tab is recorded, with a picture of it", hops.some((e: any) => e.url.endsWith("/sheet") && e.after), JSON.stringify(hops.map((e: any) => [e.url, !!e.after])));
+  check("and switching back", hops.at(-1)?.url === `${SITE}/` && hops.length >= 2, JSON.stringify(hops.map((e: any) => e.url)));
 
   await call("stop"); await sleep(1500);
   await ring(page, "#views", "right"); await sleep(1500);

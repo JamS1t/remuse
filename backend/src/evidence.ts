@@ -24,7 +24,7 @@ function find(st: Step, spec: Spec, events: any[]): number | null {
   if (st.do === "goto") {
     const fixed = (st.url ?? "").split("{{")[0]; // a page with this item's value in it: the part before it
     const want = st.url?.includes("{{") ? fixed : page(st.url);
-    return want ? at((e) => (e.kind === "start" || e.kind === "page") && (st.url?.includes("{{") ? String(e.url).startsWith(want) : page(e.url) === want)) : null;
+    return want ? at((e) => (e.kind === "start" || e.kind === "page" || e.kind === "tab") && (st.url?.includes("{{") ? String(e.url).startsWith(want) : page(e.url) === want)) : null;
   }
   const acted = (e: any) => ["click", "input", "key", "upload"].includes(e.kind);
   const bySelector = st.target?.selector ? at((e) => acted(e) && e.target?.selector === st.target!.selector) : null; // copied exactly from the event
