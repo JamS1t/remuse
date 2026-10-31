@@ -23,7 +23,7 @@ const data = process.env.DATA_DIR ? join(ROOT, "backend", process.env.DATA_DIR) 
 const narration = join(ROOT, "scripts", "fixtures", process.env.NARRATION ?? "narration.wav");
 const narrationMs = ((readFileSync(narration).length - 44) / 32000) * 1000; // 16 kHz mono 16-bit
 const backend = spawn(process.execPath, ["--env-file-if-exists=../.env", "src/server.ts"], {
-  cwd: join(ROOT, "backend"), env: { ...process.env, DATA_DIR: data }, stdio: "inherit",
+  cwd: join(ROOT, "backend"), env: { ...process.env, DATA_DIR: data, OPEN_MODEL_KEY: "", BASETEN_API_KEY: "" }, stdio: "inherit",
 });
 for (let i = 0; i < 50 && !(await fetch(`${API}/sessions`).then((r) => r.ok, () => false)); i++) await new Promise((r) => setTimeout(r, 100));
 

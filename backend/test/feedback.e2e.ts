@@ -17,7 +17,7 @@ if (await fetch(`${API}/sessions`).then(() => true, () => false)) { console.erro
 
 const data = mkdtempSync(join(tmpdir(), "remuse-feedback-"));
 const agent = spawn(process.execPath, ["--env-file-if-exists=../.env", "src/server.ts"], {
-  cwd: resolve(import.meta.dirname, ".."), env: { ...process.env, DATA_DIR: data, HEADLESS: "1", SHOWRUN_NO_NOTIFY: "1" }, stdio: "ignore",
+  cwd: resolve(import.meta.dirname, ".."), env: { ...process.env, DATA_DIR: data, HEADLESS: "1", SHOWRUN_NO_NOTIFY: "1", OPEN_MODEL_KEY: "", BASETEN_API_KEY: "" }, stdio: "ignore",
 });
 try {
   for (let i = 0; i < 40 && !(await fetch(`${API}/sessions`).then((r) => r.ok, () => false)); i++) await sleep(250);

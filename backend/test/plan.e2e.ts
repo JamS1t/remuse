@@ -74,7 +74,7 @@ const code = `({ extract: { order: (t) => /Order: (\\d+)/.exec(t)?.[1] ?? null, 
 
 const data = mkdtempSync(join(tmpdir(), "remuse-plan-"));
 const agent = spawn(process.execPath, ["--env-file-if-exists=../.env", "src/server.ts"], {
-  cwd: resolve(import.meta.dirname, ".."), env: { ...process.env, DATA_DIR: data, HEADLESS: "1", SHOWRUN_NO_NOTIFY: "1", MODEL_API_KEY: "", SHOWRUN_PROXY: MODEL }, stdio: process.env.SHOW_AGENT ? "inherit" : "ignore",
+  cwd: resolve(import.meta.dirname, ".."), env: { ...process.env, DATA_DIR: data, HEADLESS: "1", SHOWRUN_NO_NOTIFY: "1", OPEN_MODEL_KEY: "", BASETEN_API_KEY: "", MODEL_API_KEY: "", SHOWRUN_PROXY: MODEL }, stdio: process.env.SHOW_AGENT ? "inherit" : "ignore",
 });
 const sent = () => replies.length;
 const until = async (id: string, ok: (r: any) => boolean, secs = 90) => {

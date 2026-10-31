@@ -5,6 +5,15 @@ const DIRECT = !!process.env.MODEL_API_KEY;
 const BASE = DIRECT ? "https://api.meta.ai/v1" : (process.env.SHOWRUN_PROXY ?? "https://showrun.sitsit.dev/v1");
 export const SPARK = process.env.SPARK_MODEL ?? "muse-spark-1.3";
 
+// The checker: a second model that checks the first one's work, independently (it never sees the first answer's
+// reasoning). Muse Spark Open, Meta's open-weight model, when a partner key is set: Baseten by default, or any
+// OpenAI-style provider (Modal, Fireworks) through OPEN_MODEL_URL. Without one, Muse Spark itself, asked fresh.
+const OPEN_URL = () => (process.env.OPEN_MODEL_URL || "https://inference.baseten.co/v1").replace(/\/+$/, "");
+export const OPEN_MODEL = process.env.OPEN_MODEL || "meta-models/muse-spark-open-1026";
+const openKey = () => process.env.OPEN_MODEL_KEY || process.env.BASETEN_API_KEY || "";
+// independent: a different model from the one doing the work. Only then is a second opinion worth asking for.
+export const checker = () => (openKey() ? { name: "Muse Spark Open", model: OPEN_MODEL, independent: true } : { name: "Muse Spark", model: SPARK, independent: false });
+
 const key = (): string => process.env.MODEL_API_KEY || process.env.SHOWRUN_TOKEN || "showrun-demo";
 
 export type Part = { type: "input_text"; text: string } | { type: "input_image"; image_url: string };
@@ -15,6 +24,7 @@ export const png = (buf: Uint8Array): Part => ({ type: "input_image", image_url:
 export const calls: { at: number; model: string; label: string; ms: number; tokens?: number; error?: string }[] = [];
 
 export async function respond(content: Part[], label: string, model = SPARK): Promise<string> {
+  if (model === OPEN_MODEL && openKey()) return chat(content, label, model);
   const t0 = Date.now();
   for (let attempt = 0; ; attempt++) {
     const res = await fetch(`${BASE}/responses`, {
@@ -35,6 +45,40 @@ export async function respond(content: Part[], label: string, model = SPARK): Pr
   }
 }
 
+/** Chat Completions (the format partners serve open-weight models in): same parts, as text and image_url. */
+async function chat(content: Part[], label: string, model: string): Promise<string> {
+  const t0 = Date.now();
+  const messages = [{ role: "user", content: content.map((p) => (p.type === "input_text" ? { type: "text", text: p.text } : { type: "image_url", image_url: { url: p.image_url } })) }];
+  for (let attempt = 0; ; attempt++) {
+    let res: Response, body: string;
+    try {
+      res = await fetch(`${OPEN_URL()}/chat/completions`, {
+        method: "POST", signal: AbortSignal.timeout(30_000),
+        headers: { Authorization: `Bearer ${openKey()}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ model, messages, max_tokens: 4096 }),
+      });
+      body = await res.text();
+    } catch (e) { // network trouble or a hang: try again, then give up clearly
+      if (attempt < 2) { await new Promise((r) => setTimeout(r, 1500 * (attempt + 1))); continue; }
+      calls.push({ at: t0, model, label, ms: Date.now() - t0, error: (e as Error).name });
+      throw new Error(`${label}: ${model} didn't answer (${(e as Error).message})`);
+    }
+    if ((res.status === 429 || res.status >= 500) && attempt < 2) { await new Promise((r) => setTimeout(r, 1500 * (attempt + 1))); continue; }
+    if (!res.ok) {
+      calls.push({ at: t0, model, label, ms: Date.now() - t0, error: `HTTP ${res.status}` });
+      throw new Error(`${label}: HTTP ${res.status} ${body.slice(0, 300)}`);
+    }
+    const d = JSON.parse(body);
+    calls.push({ at: t0, model, label, ms: Date.now() - t0, tokens: d.usage?.total_tokens });
+    const choice = d.choices?.[0];
+    if (choice?.finish_reason === "length") throw new Error(`${label}: ${model} ran out of room before answering`);
+    // The answer is in content; a reasoning model may leave content empty and answer in its reasoning field.
+    const c = choice?.message?.content;
+    const out = typeof c === "string" ? c : Array.isArray(c) ? c.map((x: any) => x.text ?? "").join("") : "";
+    return out.trim() ? out : String(choice?.message?.reasoning_content ?? choice?.message?.reasoning ?? "");
+  }
+}
+
 // Pull the JSON object out of a model reply (it may wrap it in prose or a code fence).
 export function parseJson<T = any>(reply: string): T {
   const start = reply.indexOf("{"), end = reply.lastIndexOf("}");
@@ -42,12 +86,12 @@ export function parseJson<T = any>(reply: string): T {
   return JSON.parse(reply.slice(start, end + 1));
 }
 
-export async function askJson<T = any>(content: Part[], label: string): Promise<T> {
-  const reply = await respond(content, label);
+export async function askJson<T = any>(content: Part[], label: string, model = SPARK): Promise<T> {
+  const reply = await respond(content, label, model);
   try { return parseJson<T>(reply); }
   catch (e) {
     // One repair round: show the model its own broken output.
-    const fixed = await respond([text(`This should be one valid JSON object but failed to parse (${(e as Error).message}). Return only the corrected JSON.\n\n${reply}`)], `${label}:repair`);
+    const fixed = await respond([text(`This should be one valid JSON object but failed to parse (${(e as Error).message}). Return only the corrected JSON.\n\n${reply}`)], `${label}:repair`, model);
     return parseJson<T>(fixed);
   }
 }

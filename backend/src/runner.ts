@@ -5,7 +5,7 @@ import { execFileSync, spawn } from "node:child_process";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { askJson, ground, sam, text, png, type Box } from "./meta.ts";
+import { askJson, checker, ground, sam, text, png, type Box, type Part } from "./meta.ts";
 import { load, same, type Rules } from "./build.ts";
 import type { Spec, Step, Target } from "./understand.ts";
 import { applyLogins } from "./logins.ts";
@@ -20,7 +20,8 @@ class PracticeEnd extends Error {}
 
 // why: the reason in plain words (what it checked and found, or what a decision rested on).
 // how: "page" = checked on the page itself; "screen" = Muse Spark (and SAM 3.1) looked at a screenshot.
-export type LogLine = { at: number; msg: string; level: "info" | "ok" | "warn" | "error"; shot?: string; why?: string; how?: "page" | "screen" };
+// by: which model gave the reason, when it was the checker (the second model).
+export type LogLine = { at: number; msg: string; level: "info" | "ok" | "warn" | "error"; shot?: string; why?: string; how?: "page" | "screen"; by?: string };
 export type Candidate = { url: string; title: string; vars: Record<string, unknown>; score: number | null; shot?: string; best?: boolean };
 export type Item = {
   url: string; label: string; index?: number; // index: position in the list, for items that open by clicking
@@ -58,6 +59,7 @@ export type Run = {
   // Plan first (runs you start on several items): read and decide every item, asking anything up front, show
   // the plan, and act only after your Go. `phase` says which pass it's in.
   plan?: boolean; phase?: "plan" | "act";
+  checker?: string; // the second model that checks this run's work (Muse Spark Open with a partner key)
 };
 export type Practice = {
   sameItem: boolean; // found the very item from the demo (else the first one, so values may differ)
@@ -159,6 +161,9 @@ export function itemKey(i: { url: string; label: string }) {
   return `text:${i.label.replace(/\b(\d+\s*(seconds?|secs?|minutes?|mins?|hours?|hrs?|days?|weeks?|months?|years?|s|m|h|d|w|y)\b(\s+ago)?|just now|today|yesterday|\d{1,2}:\d{2}(\s*[ap]m)?)/gi, "").replace(/\s+/g, " ").trim()}`;
 }
 
+/** A step that waits for the person's OK in a real run: marked irreversible, a word like "refund", or such a site tool. */
+const gatedStep = (s: Step) => !!s.irreversible || (s.do === "click" && IRREVERSIBLE.test(s.target?.name ?? "")) || (!!s.tool && IRREVERSIBLE.test(s.tool.name.replace(/_/g, " ")));
+
 const manila = () => new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Manila" });
 // The reply is kept as a template, so its own {{values}} are filled where it's typed (one level, reply only:
 // text read from a page is never treated as a template).
@@ -194,6 +199,8 @@ export class Runner {
   file?: { folder: string; name: string };
   private get practicing() { return this.run.mode === "practice"; }
   private phase: "all" | "plan" | "act" = "all"; // which pass the current item is in (see runItem)
+  // The judgement questions asked on each item (by index): the checker answers the same ones before an irreversible act.
+  private judged = new Map<number, { parts: Part[]; names: string[] }>();
   /** A practice starts by itself, on live data, so it is stricter than a run: any click, key press or site tool
    *  in an outcome (the part that acts) ends it, unless it only moves between pages (a link or a tab). */
   private unsure(raw: Step) {
@@ -213,7 +220,7 @@ export class Runner {
 
   private changed() { this.onChange(this.run, this.spec); }
   private get item() { return this.run.items[this.run.current]; }
-  private log(msg: string, level: LogLine["level"] = "info", shot?: string, more: Pick<LogLine, "why" | "how"> = {}) {
+  private log(msg: string, level: LogLine["level"] = "info", shot?: string, more: Pick<LogLine, "why" | "how" | "by"> = {}) {
     this.item?.log.push({ at: Date.now(), msg, level, shot, ...more });
     this.changed();
   }
@@ -295,6 +302,7 @@ export class Runner {
 
   async start(limit?: number) {
     this.headless = process.env.HEADLESS === "1" || !this.run.visible;
+    if (checker().independent) this.run.checker = checker().name;
     // Your own Chrome when the extension is linked: your real logins, nothing copied. Remuse's own browser
     // when Chrome is closed, and for tasks that upload or save files (the extension can't hand those over).
     const steps = [...this.spec.steps, ...Object.values(this.spec.outcomes).flatMap((o) => o.steps)];
@@ -386,7 +394,7 @@ export class Runner {
           await settle();
         }
       };
-      const gated = (s: Step) => s.irreversible || (s.do === "click" && IRREVERSIBLE.test(s.target?.name ?? "")) || (!!s.tool && IRREVERSIBLE.test(s.tool.name.replace(/_/g, " ")));
+      const gated = gatedStep;
       // Planning walks the shared steps twice (to look, then to act), so it's only for tasks whose shared part
       // just reads: nothing to approve, upload or download there.
       const canPlan = !this.spec.saveDownloads && !this.spec.steps.some((s) => gated(s) || s.do === "upload");
@@ -527,6 +535,16 @@ export class Runner {
       it.outcome = d.outcome;
       const rule = this.baseRules[d.rule];
       it.decidedBy = "rules"; it.because = rule ? `${rule.if}${rule.said ? ` ("${rule.said}")` : ""}` : "rule " + d.rule;
+      // About to do something that can't be undone because of a judgement call: the checker answers the same
+      // questions on its own first. If they disagree, the person decides.
+      if (checker().independent && (this.spec.outcomes[it.outcome!]?.steps ?? []).some(gatedStep)) {
+        const a = await this.secondLook(it);
+        if (a) {
+          if (!a.outcome || !this.spec.outcomes[a.outcome]) { it.status = "skipped"; it.byYou = !this.stopped; this.log("Skipped, as you asked.", "info"); return; }
+          it.outcome = a.outcome; reply = a.reply || undefined;
+          it.because = `You decided when the two models disagreed${a.note ? `: ${a.note}` : ""}`; it.decidedBy = "you";
+        }
+      }
     }
     // The values it decided on, in plain words, kept with the decision.
     const read = this.spec.variables.filter((x) => !x.candidate && it.vars[x.name] !== null && it.vars[x.name] !== undefined && typeof it.vars[x.name] !== "object")
@@ -540,6 +558,43 @@ export class Runner {
     it.vars.reply = reply ?? out.reply ?? null;
     if (phase === "plan") { it.status = "planned"; this.changed(); return; }
     return this.act();
+  }
+
+  /** The second model's answers to the same judgement questions (same page text and photos, none of the first
+   *  answers). Agreement is noted on the item; a disagreement is put to the person, whose answer is returned. */
+  private async secondLook(it: Item): Promise<Answer | null> {
+    const j = this.judged.get(this.run.current);
+    if (!j) return null;
+    this.judged.delete(this.run.current); // done with its photos, whatever happens next
+    const c = checker();
+    let r: Record<string, unknown>;
+    try { r = await askJson(j.parts, "second opinion", c.model); }
+    catch (e) { this.log(`No second opinion this time (${c.name} didn't answer: ${(e as Error).message.slice(0, 80)}).`, "warn"); return null; }
+    const norm = (a: unknown) => { const s = typeof a === "string" ? a.trim().toLowerCase() : a; return s === "true" ? true : s === "false" ? false : s ?? null; };
+    const nice = (n: string) => n.replaceAll("_", " ");
+    // The checker's answer to a question: {answer} or a bare value. Missing, or not one of the allowed answers: no opinion.
+    const theirs = (n: string) => {
+      const raw = r[n] && typeof r[n] === "object" && "answer" in (r[n] as object) ? (r[n] as any).answer : r[n];
+      const v = this.spec.variables.find((x) => x.name === n);
+      const a = norm(raw);
+      if (a === null || a === undefined) return undefined;
+      if (v?.kind === "vision") return typeof a === "boolean" ? a : undefined;
+      return !v?.options?.length || v.options.some((o) => o.toLowerCase() === a) ? a : undefined;
+    };
+    const differ = j.names.filter((n) => theirs(n) !== undefined && JSON.stringify(theirs(n)) !== JSON.stringify(norm(it.vars[n])));
+    if (j.names.every((n) => theirs(n) === undefined)) { this.log(`No second opinion this time (${c.name}'s answer couldn't be used).`, "warn"); return null; }
+    if (!differ.length) {
+      this.log(`Second opinion: ${c.name} agrees`, "ok", undefined, { why: `Asked the same on its own: ${j.names.map((n) => `${nice(n)} ${theirs(n) === undefined ? "(no answer)" : JSON.stringify(it.vars[n])}`).join(" · ")}`, by: c.name });
+      return null;
+    }
+    const said = differ.map((n) => `${nice(n)}: Muse Spark says ${JSON.stringify(it.vars[n])}, ${c.name} says ${JSON.stringify(theirs(n))}${(r[n] as any)?.why ? ` (${(r[n] as any).why})` : ""}`).join("; ");
+    const { file } = await this.shot();
+    this.log("The two models disagree, so I'm asking you before I act.", "warn", file, { why: said, by: c.name });
+    it.status = "asking";
+    const a = await this.wait({ kind: "ask", item: this.run.current, shot: file, options: Object.keys(this.spec.outcomes),
+      question: `On "${it.label}" the two models disagree (${said}). My rules would ${it.outcome?.replaceAll("_", " ")}. What should I do?` });
+    it.status = "running";
+    return a;
   }
 
   /** Do what was decided for this item: its outcome's steps. */
@@ -992,10 +1047,12 @@ export class Runner {
       ask[v.name] = v.kind === "vision" ? { question: v.question, answer: "true or false" } : { question: v.question, answer: `one of ${JSON.stringify(v.options)}` };
     }
     if (!Object.keys(ask).length) return;
-    const r = await askJson<Record<string, { answer: unknown; why: string }>>([
+    const parts = [
       text(`Answer each question about this page. Reply with only JSON: {"<name>": {"answer": ..., "why": "one short sentence"}}.\n\nQuestions:\n${JSON.stringify(ask, null, 2)}\n\nPage text:\n${pageText.slice(0, 6000)}${photos.length ? "\n\nPhotos on the page follow." : ""}`),
       ...photos.map((p) => png(p)),
-    ], "judge");
+    ];
+    const r = await askJson<Record<string, { answer: unknown; why: string }>>(parts, "judge");
+    if (!into && checker().independent) this.judged.set(this.run.current, { parts, names: Object.keys(ask) });
     for (const name of Object.keys(ask)) {
       const a = r[name]?.answer;
       bag[name] = a === "true" ? true : a === "false" ? false : a ?? null;
@@ -1035,20 +1092,28 @@ export class Runner {
     const gated = step.irreversible || (step.do === "click" && IRREVERSIBLE.test(step.target?.name ?? ""));
     if (domOk && !gated) { this.log(`✓ ${step.describe}`, "ok", aim, { why, how: unchecked ? undefined : "page" }); return; }
 
-    let r: { ok: boolean; why: string } = { ok: false, why: "" }, file = "";
-    for (let look = 0; look < 2 && !r.ok; look++) {
+    let r: { ok: boolean; why: string } = { ok: false, why: "" }, file = "", by: string | undefined, unseen = "", answered = false;
+    for (let look = 0; look < 2 && r.ok !== true; look++) {
       // Server actions re-render after the click returns; give the page a moment before judging it.
       await this.page.waitForLoadState("networkidle").catch(() => {});
       await this.page.waitForTimeout(look ? 1500 : 600);
       const shot = await this.shot();
       file = shot.file;
-      r = await askJson<{ ok: boolean; why: string }>([
+      const ask = [
         text(`A browser robot just did this step: "${step.describe}". It expected: "${e.looks ?? "the step to have worked"}". Look at the screen now. Did the step work? Reply with only JSON: {"ok": true|false, "why": "one short sentence"}`),
         png(shot.buf),
-      ], "check");
+      ];
+      // The checker looks; if it can't be reached, Muse Spark does; if neither can, the page check decides.
+      try { r = await askJson<{ ok: boolean; why: string }>(ask, "check", checker().model); by = checker().independent ? checker().name : undefined; answered = true; }
+      catch (e) {
+        try { r = await askJson<{ ok: boolean; why: string }>(ask, "check"); by = undefined; answered = true; }
+        catch (e2) { unseen = (e2 as Error).message.slice(0, 80); break; }
+      }
     }
-    if (r.ok) { this.log(`✓ ${step.describe}`, "ok", file, { why: r.why || "the screen shows it worked", how: "screen" }); return; }
-    this.log(`✗ ${step.describe}`, "error", file, { why: domOk ? r.why || "the screen doesn't show that it worked" : why, how: domOk ? "screen" : "page" });
+    if (r.ok === true) { this.log(`✓ ${step.describe}`, "ok", file, { why: r.why || "the screen shows it worked", how: "screen", by }); return; }
+    // No model could look: the page check stands, and it says the screen wasn't checked.
+    if (unseen && !answered && domOk) { this.log(`✓ ${step.describe}`, "ok", file, { why: `${why}; the screen couldn't be checked this time (${unseen})`, how: unchecked ? undefined : "page" }); return; }
+    this.log(`✗ ${step.describe}`, "error", file, { why: domOk ? r.why || "the screen doesn't show that it worked" : why, how: domOk ? "screen" : "page", by: domOk ? by : undefined });
     throw new Error(`step didn't work: ${step.describe}`);
   }
 }

@@ -71,7 +71,7 @@ const code = `({ extract: { amount: (t) => /Amount: ₱(\\d+)/.exec(t)?.[1] ?? n
 
 const data = mkdtempSync(join(tmpdir(), "remuse-reasons-"));
 const agent = spawn(process.execPath, ["--env-file-if-exists=../.env", "src/server.ts"], {
-  cwd: resolve(import.meta.dirname, ".."), env: { ...process.env, DATA_DIR: data, HEADLESS: "1", SHOWRUN_NO_NOTIFY: "1", MODEL_API_KEY: "", SHOWRUN_PROXY: MODEL }, stdio: process.env.SHOW_AGENT ? "inherit" : "ignore",
+  cwd: resolve(import.meta.dirname, ".."), env: { ...process.env, DATA_DIR: data, HEADLESS: "1", SHOWRUN_NO_NOTIFY: "1", OPEN_MODEL_KEY: "", BASETEN_API_KEY: "", MODEL_API_KEY: "", SHOWRUN_PROXY: MODEL }, stdio: process.env.SHOW_AGENT ? "inherit" : "ignore",
 });
 try {
   for (let i = 0; i < 40 && !(await fetch(`${API}/sessions`).then((r) => r.ok, () => false)); i++) await sleep(250);
