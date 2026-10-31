@@ -143,7 +143,8 @@ Studio. No other companies' AI products on screen. Title card: **Remuse: show it
 
 **Features:**
 - [works] the compare step with your rule, the approval gate at checkout, the hourly schedule and its report.
-- [verify] the stores used allow this in their terms, and "checkout" / "place order" are on the irreversible list.
+- [verify] the stores used allow this in their terms. ("checkout" and "place order" are already on the irreversible
+  list.)
 
 ### 7. Built on Meta (2:45–3:00)
 
@@ -193,7 +194,7 @@ Then the title card: **Remuse: show it once.**
 ## Before recording (Nov 4)
 
 1. The self-healing build is done and tested (Nov 1–3).
-2. "turn in", "checkout" and "place order" are on the irreversible list, with a test.
+2. "turn in" is added to the irreversible list, with a test ("checkout" and "place order" are already on it).
 3. Classroom upload through Google's file picker is rehearsed on the real page.
 4. James's school Google account is signed in to Remuse's browser through the normal sign-in (never by copying cookies).
 5. The Muse Spark Open key works, so scene 4 and the diagram are true. If it doesn't, drop the Open labels and the bonus
