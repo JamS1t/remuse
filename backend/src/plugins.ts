@@ -48,12 +48,38 @@ const classroom: Plugin = {
   },
 };
 
+/** Google Sheets draws its grid itself, so a cell can't be read from the page like a field. What's typed into a cell
+ *  shows in the formula bar, at the cell the Name Box shows: that's the proof. Going to a cell is proven by the Name
+ *  Box itself. Null when there's nothing to read (the engine then decides). */
+export function sheetsVerdict(step: Pick<Step, "do" | "value" | "target">, nameBox: string | null, formulaBar: string | null): Verdict | null {
+  if (step.do !== "fill" || step.value == null) return null;
+  const want = step.value.trim();
+  if (/^name box$/i.test(step.target?.name ?? "")) {
+    if (nameBox == null) return null;
+    return nameBox.trim().toUpperCase() === want.toUpperCase()
+      ? { result: "verified", proof: "page", why: `the Name Box is at ${want.toUpperCase()}` }
+      : { result: "failed", proof: "page", why: `the Name Box shows ${nameBox.trim()}, not ${want}` };
+  }
+  if (step.target || formulaBar == null) return null; // a cell is typed where the focus is: no target
+  const at = nameBox?.trim().toUpperCase() || "the cell";
+  return formulaBar.trim() === want
+    ? { result: "verified", proof: "page", why: `${at} now holds “${want}”, read back from the formula bar` }
+    : { result: "failed", proof: "page", why: `${at} holds “${formulaBar.trim().slice(0, 40)}”, not what I typed` };
+}
+
 const sheets: Plugin = {
   name: "sheets",
   matches: (url) => host(url) === "docs.google.com" && /^\/spreadsheets\//.test((() => { try { return new URL(url).pathname; } catch { return ""; } })()),
   // The Name Box has no label in the page, but always this id.
   handles: [{ name: /^name box$/i, selector: "#t-name-box" }],
   routes: [{ purpose: /name box|go to|cell|next empty row/i, keys: ["Control+J"], why: "Google's documented shortcut to the Name Box" }],
+  async readBack(page, step) {
+    const r = await page.evaluate(() => ({
+      nameBox: (document.querySelector("#t-name-box") as HTMLInputElement | null)?.value ?? null,
+      formulaBar: (document.querySelector("#t-formula-bar-input .cell-input, #t-formula-bar-input") as HTMLElement | null)?.innerText ?? null,
+    })).catch(() => ({ nameBox: null, formulaBar: null }));
+    return sheetsVerdict(step, r.nameBox, r.formulaBar);
+  },
 };
 
 const plugins: Plugin[] = [classroom, sheets];
