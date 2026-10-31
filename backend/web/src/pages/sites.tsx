@@ -15,6 +15,7 @@ export function SitesPage() {
     await g.add();
     toast("Sign in to Google in the window that opened, then close it. Google sees it as a new device, so nothing else gets signed out.", { duration: 12000 });
   });
+  const signOut = () => run("signout", async () => { if (await g.signOut()) toast.success("Remuse's browser is signed out of Google."); });
   const accounts = g.data?.accounts ?? [];
   return (
     <Content>
@@ -30,10 +31,17 @@ export function SitesPage() {
             {accounts.length ? <ul className="mt-1.5 space-y-0.5 text-[13.5px]">{accounts.map((a) => <li key={a} className="truncate">{a}</li>)}</ul> : null}
             {g.waiting ? <p className="mt-1.5 text-[12.5px] text-muted-foreground">Waiting for you to sign in and close the Google window…</p> : null}
           </div>
-          <Button size="sm" variant="outline" disabled={!!busy || g.waiting} onClick={add}>
-            {busy === "google" || g.waiting ? <LoaderCircle className="size-4 animate-spin" /> : <Plus className="size-4" />}
-            {g.data?.signedIn ? "Add another account" : "Sign in to Google"}
-          </Button>
+          <div className="flex shrink-0 flex-col items-end gap-1.5">
+            <Button size="sm" variant="outline" disabled={!!busy || g.waiting} onClick={add}>
+              {busy === "google" || g.waiting ? <LoaderCircle className="size-4 animate-spin" /> : <Plus className="size-4" />}
+              {g.data?.signedIn ? "Add another account" : "Sign in to Google"}
+            </Button>
+            {g.data?.signedIn ? (
+              <Button size="sm" variant="ghost" className="text-muted-foreground" disabled={!!busy || g.waiting} onClick={signOut}>
+                {busy === "signout" ? <LoaderCircle className="size-4 animate-spin" /> : null}Sign out
+              </Button>
+            ) : null}
+          </div>
         </li>
       </ul>
       {!data ? <div className="h-20 animate-pulse rounded-2xl bg-muted" /> : data.length ? (

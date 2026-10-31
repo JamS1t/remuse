@@ -91,7 +91,15 @@ export function useGoogle(enabled = true) {
   const q = useApi<GoogleStatus>(enabled ? "/logins/google" : null, from !== null ? 4000 : 0, (d) => from !== null && !more(d));
   const watch = () => setFrom(q.data?.signedIn ? q.data.accounts?.length ?? 0 : 0);
   const add = async () => { await api("/browser/google?site=google.com", "POST"); watch(); };
-  return { ...q, add, watch, waiting: from !== null && !(q.data && more(q.data)) };
+  // Google signs a browser out of all its accounts at once, so this is all of them, in Remuse's browser only.
+  const signOut = async () => {
+    const n = q.data?.accounts?.length ?? 0;
+    if (!confirm(`Sign Remuse's browser out of Google?\n\nGoogle signs a browser out of all its accounts at once${n > 1 ? ` (all ${n})` : ""}. Your own Chrome stays signed in. You can add the accounts you want back after.`)) return false;
+    await api("/browser/google/signout", "POST");
+    q.reload();
+    return true;
+  };
+  return { ...q, add, watch, signOut, waiting: from !== null && !(q.data && more(q.data)) };
 }
 
 export function useHash() {

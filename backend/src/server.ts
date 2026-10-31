@@ -321,26 +321,49 @@ async function googleStatus() {
         // Which accounts: Google's own list of the accounts signed in to this browser.
         let accounts: string[] = [];
         const ids: Record<string, string> = {};
+        let known = false; // Google's list was read, so it (not the cookie) says who is signed in
         if (signedIn) {
           // Asked the way Chrome asks (POST); a plain page visit gets "400 Bad Request".
           const body = await ctx.request.post("https://accounts.google.com/ListAccounts?gpsia=1&source=ChromiumBrowser&json=standard", { headers: { "content-type": "application/x-www-form-urlencoded" }, data: "", timeout: 15_000 }).then((r) => (r.ok() ? r.text() : ""), () => "");
-          accounts = [...new Set([...body.matchAll(/"([^"\s]+@[^"\s]+\.[a-z]{2,})"/gi)].map((m) => m[1].toLowerCase()))];
-          // Each account's entry also carries its numeric Google account id.
-          const walk = (x: unknown): void => {
-            if (!Array.isArray(x)) return;
-            const email = x.find((v) => typeof v === "string" && /^[^\s@]+@[^\s@]+\.[a-z]{2,}$/i.test(v)) as string | undefined;
-            const id = x.find((v) => typeof v === "string" && /^\d{15,25}$/.test(v)) as string | undefined;
-            if (email && id) ids[id] = email.toLowerCase();
-            x.forEach(walk);
-          };
-          try { walk(JSON.parse(body.replace(/^\)\]\}'\s*/, ""))); } catch { /* not the shape we know: emails only */ }
+          // Each entry: [.., .., name, email, photo, valid (1), .., .., .., .., account id, .., .., .., signed out (1), ..].
+          // Google also keeps accounts that were signed out of this browser (its account chooser shows them): left out.
+          try {
+            for (const a of JSON.parse(body.replace(/^\)\]\}'\s*/, ""))[1] ?? []) {
+              const email = typeof a?.[3] === "string" ? a[3].toLowerCase() : "";
+              if (!email) continue;
+              known = true;
+              if (typeof a[10] === "string") ids[a[10]] = email; // a recorded YouTube identity names this id
+              if (a[5] === 1 && a[14] !== 1 && !accounts.includes(email)) accounts.push(email);
+            }
+          } catch { /* not the shape we know: no list, the cookie decides */ }
         }
-        google = { signedIn, accounts, ids, at: Date.now() };
+        google = { signedIn: known ? accounts.length > 0 : signedIn, accounts, ids, at: Date.now() };
       } finally { await ctx.close().catch(() => {}); }
     } catch (e) { console.warn("couldn't check the Google sign-in:", (e as Error).message); }
   })();
   try { await googleLook; } finally { googleLook = null; }
   return google;
+}
+
+// Sign Remuse's own browser out of Google. Google signs a browser out of all its accounts at once (there is no
+// signing out of just one); your own Chrome isn't touched, it's another browser to Google.
+async function googleSignOut() {
+  if (busyRun()) throw new HttpError(409, "wait for the run to finish first");
+  if (signIn || plainChromeOpen()) throw new HttpError(409, "close the Google sign-in window first");
+  if (googleLook) await googleLook.catch(() => {});
+  googleLook = (async () => {
+    const ctx = await openBrowser(true);
+    try {
+      const p = await ctx.newPage();
+      await p.goto("https://accounts.google.com/Logout", { timeout: 30_000 });
+      await p.waitForLoadState("networkidle", { timeout: 15_000 }).catch(() => {}); // it signs out YouTube too, on the way
+    } finally { await ctx.close().catch(() => {}); }
+  })();
+  try { await googleLook; } finally { googleLook = null; }
+  google.at = 0; // look again
+  const after = await googleStatus();
+  if (after.signedIn) throw new HttpError(502, "Google didn't sign out. Try again");
+  return after;
 }
 
 // A run that was going when the Agent stopped (shutdown, crash) can't resume: mark it stopped.
@@ -639,6 +662,7 @@ async function route(req: IncomingMessage, res: ServerResponse) {
     await openGoogleSignIn(site, /^[^@\s]+@[^@\s]+$/.test(email) ? email : "");
     return send(res, 200, { open: true });
   }
+  if (m === "POST" && url.pathname === "/api/browser/google/signout") return send(res, 200, await googleSignOut());
   if (m === "POST" && url.pathname === "/api/browser/open") {
     const target = url.searchParams.get("url") || "https://www.google.com";
     if (!/^https?:\/\//.test(target)) throw new HttpError(400, "give a web address starting with http");
