@@ -11,7 +11,7 @@ import { shownSteps } from "./readback.ts";
 import { load, same, type Rules } from "./build.ts";
 import type { Spec, Step, Target } from "./understand.ts";
 import { applyLogins } from "./logins.ts";
-import { combine, gatedStep, IRREVERSIBLE, newlyAppeared, writes, type Verdict } from "./proof.ts";
+import { combine, gatedStep, IRREVERSIBLE, newlyAppeared, sameValue, writes, type Verdict } from "./proof.ts";
 export { gatedStep, IRREVERSIBLE };
 import { handleFor, pluginFor } from "./plugins.ts";
 import { notify } from "./notify.ts";
@@ -1187,7 +1187,11 @@ export class Runner {
     }
     else if (step.do === "goto") { await this.page.goto(step.url!); await this.rightAccount("open", raw); }
     // Acting after a plan: values were read in the planning pass, so they aren't read (or judged) again.
-    else if (step.do === "extract") return this.phase === "act" ? this.stillTheSame(step.vars ?? []) : this.extract(step.vars ?? []);
+    else if (step.do === "extract") {
+      if (this.phase === "act") return this.stillTheSame(step.vars ?? []);
+      await this.extract(step.vars ?? []);
+      return this.secondRead(step.vars ?? []);
+    }
     else if (step.do === "compare") {
       if (this.phase !== "act") return this.compare(step);
       if (it.vars.best_url) await this.page.goto(String(it.vars.best_url)); // back to the result it chose
@@ -1462,6 +1466,45 @@ export class Runner {
     if (again !== it.outcome) throw new Skip(`This changed since the plan (${what}), so the plan for it may not hold. I left it alone.`);
     it.vars = next;
     this.log(`Changed since the plan (${what}), but my decision is the same: ${it.outcome?.replaceAll("_", " ")}.`, "info");
+  }
+
+  /** Every value that will be typed is read a second time, on its own (Muse Spark Open when its key is set; else a
+   *  separate Muse Spark look that never sees the first answer), and the two must agree before it's used. A
+   *  disagreement stops the item and shows both readings: it never types a value it isn't sure of. */
+  private async secondRead(names: string[]) {
+    if (this.practicing) return; // a practice types nothing
+    const it = this.item;
+    const all = [...this.spec.steps, ...Object.values(this.spec.outcomes).flatMap((o) => o.steps)];
+    const typed = (n: string) => all.some((x) => x.do === "fill" && (x.value ?? "").replace(/\s+/g, "").includes(`{{${n}}}`));
+    // Values copied off the page (not judgements or sums), that are typed somewhere later.
+    const vars = this.spec.variables.filter((v) => names.includes(v.name) && v.kind === "text" && it.vars[v.name] != null && typeof it.vars[v.name] !== "object" && typed(v.name));
+    if (!vars.length) return;
+    const show = (n: string) => n.replaceAll("_", " ");
+    const { buf } = await this.shot();
+    const pageText = (await this.page.innerText("body").catch(() => "")).slice(0, 8000);
+    const ask = [text(`Read these values from this page, each exactly as it is shown: ${vars.map((v) => `"${v.name}" (${v.description})`).join("; ")}. Use the page text and the screenshot.
+Page text:
+${pageText}
+
+Reply with only JSON: {${vars.map((v) => `"${v.name}": "<the value, or null if it isn't there>"`).join(", ")}}`), png(buf)];
+    let second: Record<string, unknown> | null = null, by = checker().independent ? checker().name : "a second, separate Muse Spark look", independent = checker().independent;
+    try { second = await askJson<Record<string, unknown>>(ask, "second read", checker().model); }
+    catch { try { second = await askJson<Record<string, unknown>>(ask, "second read"); by = "a second, separate Muse Spark look"; independent = false; } catch { /* no second read */ } }
+    if (!second) { this.log(`Couldn't read ${vars.map((v) => show(v.name)).join(", ")} a second time; going by the first reading.`, "warn"); return; }
+    // The second answer by name, loosely (case, or one level of nesting): a value it couldn't find is unconfirmed, not
+    // a disagreement; only two different readings stop the item.
+    const flat = Object.values(second).length === 1 && typeof Object.values(second)[0] === "object" && Object.values(second)[0] ? Object.values(second)[0] as Record<string, unknown> : second;
+    const again = (n: string) => flat[n] ?? flat[Object.keys(flat).find((k) => k.toLowerCase().replace(/[\s_]+/g, "") === n.toLowerCase().replace(/[\s_]+/g, "")) ?? ""];
+    const missing = vars.filter((v) => again(v.name) == null || String(again(v.name)).trim() === "" || String(again(v.name)) === "null");
+    if (missing.length) this.log(`Couldn't confirm ${missing.map((v) => show(v.name)).join(", ")} with a second read; going by the first reading.`, "warn");
+    second = Object.fromEntries(vars.map((v) => [v.name, again(v.name)]));
+    const differ = vars.filter((v) => !missing.includes(v) && !sameValue(it.vars[v.name], second![v.name]));
+    if (!differ.length && missing.length === vars.length) return;
+    if (!differ.length) {
+      this.log(`Two readings agree: ${vars.filter((v) => !missing.includes(v)).map((v) => `${show(v.name)} ${short(String(it.vars[v.name]))}`).join(", ")}`, "ok", undefined, { why: `read again on its own by ${by}`, how: "screen", by: independent ? checker().name : undefined });
+      return;
+    }
+    throw new Error(`I read ${differ.map((v) => `${show(v.name)} as ${it.vars[v.name]}`).join(", ")}, but a second read by ${by} says ${differ.map((v) => String(second![v.name])).join(", ")}. I won't type a value I'm not sure of`);
   }
 
   private async extract(names: string[], into?: Record<string, unknown>) {

@@ -193,7 +193,7 @@ function ItemDetail({ it, file, choices, live, latest }: { it: Item; file: (f: s
                 ) : (
                   <span className="min-w-0">
                     <span className={cn(l.level === "error" && "text-destructive", l.level === "warn" && "text-warn")}>{label}</span>
-                    {l.why ? <span className="mt-0.5 block text-[12.5px] leading-snug text-muted-foreground">{l.how === "screen" ? `Looked at the screen${l.by ? ` (${l.by})` : ""}: ` : l.how === "page" ? "Checked on the page: " : ""}{l.why}</span> : null}
+                    {l.why ? <span className="mt-0.5 block text-[12.5px] leading-snug text-muted-foreground">{l.how === "screen" ? `Looked at the screen${l.by ? ` (${l.by})` : ""}: ` : l.how === "page" ? `Checked on the page${l.by ? ` (and by ${l.by})` : ""}: ` : ""}{l.why}</span> : null}
                   </span>
                 )}
                 {l.shot ? <Shot src={file(l.shot)} alt={label} className="w-20 sm:w-24" /> : <span />}

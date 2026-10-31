@@ -31,6 +31,9 @@ const site = createServer((req, res) => {
   if (u.pathname === "/form") return res.end(page(`<h1>Request</h1><iframe id="ed" srcdoc="<body contenteditable=true style='font:16px sans-serif'></body>" style="border:1px solid #999;height:60px;width:400px"></iframe>
     <button onclick="fetch('/did?what=submit');out.textContent='Submitted'">Submit</button><p id="out"></p>
     <script>ed.onload = () => { ed.contentWindow.focus(); ed.contentDocument.body.focus(); };</script>`));
+  // An order: the subtotal comes first on the page, the total last. Typing into Amount is recorded.
+  if (u.pathname === "/order") return res.end(page(`<h1>Order 1042</h1><p>Subtotal ₱349.00</p><p>Shipping ₱45.00</p><p>Total ₱394.00</p>
+    <input aria-label="Amount" oninput="fetch('/did?what=typed:' + encodeURIComponent(this.value))">`));
   return res.end(page(`<h1>Monthly report</h1><button onclick="fetch('/did?what=download')">Download</button>`));
 }).listen(0);
 const SITE = `http://127.0.0.1:${(site.address() as any).port}`;
@@ -38,13 +41,13 @@ const data = mkdtempSync(join(tmpdir(), "remuse-proof-"));
 const agent = spawn(process.execPath, ["--env-file-if-exists=../.env", "src/server.ts"], {
   cwd: resolve(import.meta.dirname, ".."), env: { ...process.env, PORT, DATA_DIR: data, BROWSER_PROFILE: join(data, "browser"), HEADLESS: "1", SHOWRUN_NO_NOTIFY: "1", OPEN_MODEL_KEY: "", BASETEN_API_KEY: "" }, stdio: process.env.SHOW_AGENT ? "inherit" : "ignore",
 });
-const addTask = async (title: string, steps: object[]) => {
+const addTask = async (title: string, steps: object[], variables: object[] = [], extract = "{}") => {
   const s = await post("/sessions", { title, startedAt: Date.now() });
-  const spec = { title, goal: title, scope: "", scopeTypes: [], inputs: { source: "once", itemName: "update" }, variables: [], steps,
+  const spec = { title, goal: title, scope: "", scopeTypes: [], inputs: { source: "once", itemName: "update" }, variables, steps,
     rules: [{ if: "otherwise", then: "done" }], outcomes: { done: { describe: "Done", demonstrated: true, steps: [] } } };
   const db = new DatabaseSync(join(data, "showrun.db"));
   const id = Number(db.prepare("INSERT INTO specs (session_id, version, note, json, code, tests, created_at) VALUES (?, 1, 'test', ?, ?, '[]', ?)")
-    .run(s.id, JSON.stringify(spec), `({ extract: {}, compute: {}, decide: () => ({ outcome: "done", rule: 0 }) })`, Date.now()).lastInsertRowid);
+    .run(s.id, JSON.stringify(spec), `({ extract: ${extract}, compute: {}, decide: () => ({ outcome: "done", rule: 0 }) })`, Date.now()).lastInsertRowid);
   db.close();
   return id;
 };
@@ -91,6 +94,21 @@ try {
   const r4 = await run(id4);
   const saved = (await get(`/specs/${r4.newSpecId ?? id4}`)).spec.steps[1].target;
   check("a guessed replacement that didn't work isn't saved", saved.name === "Export now" && !(r4.heals ?? []).length, `${JSON.stringify(saved)} heals=${JSON.stringify(r4.heals)}`);
+
+  // 5. A value read from the page is read a second time, independently, before it's typed.
+  const order = (extract: string) => addTask("Log the order total", [
+    { id: "s1", do: "goto", url: `${SITE}/order`, describe: "Open the order" },
+    { id: "s2", do: "extract", vars: ["total"], describe: "Read the total" },
+    { id: "s3", do: "fill", target: { role: "textbox", name: "Amount" }, value: "{{total}}", describe: "Type the total" },
+  ], [{ name: "total", kind: "text", description: "the order's total amount, after shipping" }], extract);
+  const r5 = await run(await order(`{ total: (t) => (t.match(/Total ₱([\\d,.]+)/) || [])[1] ?? null }`));
+  await sleep(800);
+  check("a value is read twice, independently, before it's typed", lines(r5).some((l) => /^Two readings agree: total 394/.test(l.msg)) && did.has("typed:394.00"), lines(r5).map((l) => l.msg).join(" / ").slice(0, 400));
+
+  // 6. The task's own code reads the subtotal (the first ₱ on the page); the second read says 394. Nothing is typed.
+  const r6 = await run(await order(`{ total: (t) => (t.match(/₱([\\d,.]+)/) || [])[1] ?? null }`));
+  await sleep(800);
+  check("when the two readings disagree, nothing is typed and both are shown", r6.items?.[0]?.status !== "done" && !did.has("typed:349.00") && lines(r6).some((l) => /349/.test(l.msg) && /394/.test(l.msg)), lines(r6).map((l) => l.msg).join(" / ").slice(0, 400));
 } catch (e) {
   check("the test ran to the end", false, (e as Error).stack ?? String(e));
 } finally {
