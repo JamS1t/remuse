@@ -2,6 +2,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { askJson, text, png, type Part } from "./meta.ts";
+import { IGNORED, moments } from "./moments.ts";
 
 export type Target = { role?: string; name?: string; selector?: string; fuzzy?: boolean };
 export type Step = {
@@ -123,7 +124,6 @@ Rules for the spec:
 - Schedule: if the person said how often ("every hour", "every morning at 9"), fill "schedule". Don't invent one.
 - Tabs: event lines carry tab=T1, T2... when the person worked in more than one browser tab. Then give EVERY step (main and outcome steps) a "tab": a short name for what that tab is for ("inbox", "sheet", "store", "x", "tiktok"), the same name each time the person returned to that tab. The robot keeps every tab open and switches between them, so a tab is found as it was left: don't repeat a "goto" when the person just switched back. The first step in a new tab is normally a "goto" to the page it showed first. If a click made the site open a new tab, give the following steps a new tab name and no "goto"; the robot follows the tab the site opened. Values read in any tab can be used in any other tab with {{variables}}, e.g. read an order number in "inbox" and type it in "store". If the person did the same thing on several sites (posting to several networks, checking several stores), keep one tab per site and keep the irreversible steps (post, pay, send) last, after everything is prepared in every tab.
 - Spreadsheets (Google Sheets): the grid is drawn, not made of fields, so clicks on it say little; input and key lines carry cell=B2 (the cell typed into) and the voice and frames say what goes where. To write a cell: a "fill" step with target {"role":"textbox","name":"Name Box"} and the cell address as value, then "press" Enter with the same target, then a "fill" step with NO target and the value (it types into the selected cell), then "press" Enter or Tab with no target. When the person adds a new row each time (a log, a tracker), don't use a fixed row: fill the Name Box with "A1", press Enter on it, then "press" Control+End, Home and ArrowDown (each a step with no target) to land on the first empty row, then type each value with "press" Tab between them.
-- Pointing: "point" lines are where the person rested the mouse while talking, at=(x,y) on the 0-1000 grid of the frame. Words like "this", "here", "that number" in the voice around that time mean the thing pointed at. Use it like a click for knowing WHAT to read (an "extract" variable) or what a rule is about, but don't turn a point into a click step.
 - WebMCP: "tools" lines list actions a page offers to agents directly. When a step does what one of those tools does (e.g. the Refund button and a refund_order tool), keep the step as recorded and add "tool" with the tool name and its args, using {{variables}}. The robot calls the tool when the page offers it and clicks otherwise.
 
 Reply with ONLY the JSON object, in this shape:
@@ -131,12 +131,11 @@ ${SCHEMA}`;
 
 type Session = { id: string; title?: string; events: any[]; turns: { startMs: number; endMs: number; text: string }[] };
 
-function eventLine(e: any, i: number, tabs: Map<unknown, string>) {
+export function eventLine(e: any, i: number, tabs: Map<unknown, string>) {
   const tab = tabs.size > 1 && tabs.has(e.tab) ? ` tab=${tabs.get(e.tab)}` : "";
   const t = e.target ? ` target={role:${JSON.stringify(e.target.role)}, name:${JSON.stringify(e.target.label)}, selector:${JSON.stringify(e.target.selector)}}` : "";
   const v = e.value !== undefined ? ` value=${JSON.stringify(e.value)}` : "";
   const k = (e.key ? ` key=${e.key}` : "") + (e.cell ? ` cell=${e.cell}` : "");
-  if (e.kind === "point") return `#${i} t=${(e.t / 1000).toFixed(1)}s point${tab} url=${e.url} at=(${e.spot?.x},${e.spot?.y}) on={role:${JSON.stringify(e.target?.role)}, name:${JSON.stringify(e.target?.label)}, text:${JSON.stringify(e.target?.text)}}`;
   if (e.kind === "upload") return `#${i} t=${(e.t / 1000).toFixed(1)}s upload${tab} url=${e.url}${t} files=${JSON.stringify((e.files ?? []).map((x: any) => x.name))}`;
   if (e.kind === "tools") return `#${i} tools${tab} url=${e.url} offered: ${(e.tools ?? []).map((x: any) => `${x.name}(${Object.keys(x.inputSchema?.properties ?? {}).join(", ")}): ${x.description ?? ""}`).join("; ")}`;
   return `#${i} t=${(e.t / 1000).toFixed(1)}s ${e.kind}${tab} url=${e.url}${t}${v}${k}`;
@@ -144,36 +143,33 @@ function eventLine(e: any, i: number, tabs: Map<unknown, string>) {
 
 export type FolderHint = { name: string; files: string[] };
 export function buildPrompt(s: Session, dir: string, folders: FolderHint[] = []): Part[] {
-  const parts: Part[] = [text(INSTRUCTIONS), text(`Allowed folders (name: newest files): ${folders.length ? folders.map((f) => `\n- ${f.name}: ${f.files.join(", ") || "(empty)"}`).join("") : "none yet"}`), text(`Task name given by the person: ${s.title ?? "(none)"}\n\nRecording, in time order. Voice lines are what the person said; frames are screenshots.`)];
-  // Pointing counts only while the person was talking (within 2 s of a voice line); the rest is the mouse passing by.
-  const talking = (t: number) => s.turns.some((v) => t >= v.startMs - 2000 && t <= v.endMs + 2000);
-  // Tabs the person never clicked, typed or pointed in are other open tabs refreshing by themselves: leave them out.
-  const used = new Set(s.events.filter((e) => e.kind !== "page" && e.kind !== "tools").map((e) => e.tab));
-  const items = [
-    ...s.events.map((e, i) => ({ t: e.t, i, e })).filter(({ e }) => (e.kind !== "point" || talking(e.t)) && (e.tab == null || used.has(e.tab))),
-    ...s.turns.map((v) => ({ t: v.startMs, v })),
-  ].sort((a, b) => a.t - b.t);
-  // Browser tabs as T1, T2... in the order the person first used them.
+  const parts: Part[] = [text(INSTRUCTIONS), text(`Allowed folders (name: newest files): ${folders.length ? folders.map((f) => `\n- ${f.name}: ${f.files.join(", ") || "(empty)"}`).join("") : "none yet"}`), text(`Task name given by the person: ${s.title ?? "(none)"}\n\nThe recording, moment by moment, in time order. A moment is one thing the person said ("said") with what they did around it; a "silent" moment is what they did without talking. Event lines start with their event #; frames are screenshots.`)];
+  // Browser tabs as T1, T2... in the order the person first used them (clicked, typed or drew in).
   const tabs = new Map<unknown, string>();
-  for (const e of s.events) if (e.tab != null && used.has(e.tab) && !tabs.has(e.tab)) tabs.set(e.tab, `T${tabs.size + 1}`);
+  for (const e of s.events) if (e.tab != null && e.kind !== "page" && !IGNORED.has(e.kind) && !tabs.has(e.tab)) tabs.set(e.tab, `T${tabs.size + 1}`);
+  // What pages offered to agents (WebMCP) isn't something the person did: listed once, before the moments.
+  const offered = s.events.map((e, i) => ({ e, i })).filter(({ e }) => e.kind === "tools" && (e.tab == null || tabs.has(e.tab)));
+  if (offered.length) parts.push(text(offered.map(({ e, i }) => eventLine(e, i, tabs)).join("\n")));
   let images = 0;
   let lastAction = -Infinity;
-  for (const it of items) {
-    if ("v" in it && it.v) { parts.push(text(`[voice ${(it.v.startMs / 1000).toFixed(1)}-${(it.v.endMs / 1000).toFixed(1)}s] "${it.v.text}"`)); continue; }
-    const { e, i } = it as { e: any; i: number };
-    parts.push(text(eventLine(e, i, tabs)));
-    const isAction = e.kind === "click" || e.kind === "key";
-    // Frames: before+after each action, and pages reached without one (typed URLs). Max 50 images per request.
-    const frames: [string, string][] = [];
-    if ((isAction || e.kind === "point") && e.before) frames.push(["before", e.before]);
-    if ((isAction || e.kind === "start" || (e.kind === "page" && e.t - lastAction > 1500)) && e.after) frames.push(["after", e.after]);
-    if (isAction) lastAction = e.t;
-    for (const [when, f] of frames) {
-      if (images >= 48) break;
-      parts.push(text(`frame: event #${i}, ${when}`), png(readFileSync(join(dir, f))));
-      images++;
+  moments(s).forEach((m, n) => {
+    parts.push(text(`Moment ${n + 1} (${(m.from / 1000).toFixed(1)}-${(m.to / 1000).toFixed(1)}s) ${m.said != null ? `said: "${m.said}"` : "silent"}`));
+    for (const i of m.events) {
+      const e = s.events[i];
+      parts.push(text(eventLine(e, i, tabs)));
+      const isAction = e.kind === "click" || e.kind === "key";
+      // Frames: before+after each action, and pages reached without one (typed URLs). Max 50 images per request.
+      const frames: [string, string][] = [];
+      if (isAction && e.before) frames.push(["before", e.before]);
+      if ((isAction || e.kind === "start" || (e.kind === "page" && e.t - lastAction > 1500)) && e.after) frames.push(["after", e.after]);
+      if (isAction) lastAction = e.t;
+      for (const [when, f] of frames) {
+        if (images >= 48) break;
+        parts.push(text(`frame: event #${i}, ${when}`), png(readFileSync(join(dir, f))));
+        images++;
+      }
     }
-  }
+  });
   return parts;
 }
 
