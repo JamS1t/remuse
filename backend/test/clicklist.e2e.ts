@@ -22,9 +22,9 @@ const spec0: any = { inputs: { itemEvent: 0 }, steps: [], outcomes: {} };
 normalize(spec0, { id: "x", events: [{ t: 0, kind: "click", url: "https://forum/x", target: { role: "article", selector: "div > div > div > div > div", label: "Team A" } }], turns: [] });
 check("posts you click (not links) are found by their role", spec0.inputs.itemSelector === '[role="article"]', spec0.inputs.itemSelector);
 
+const posts = [["Team Orbit", "a study planner"], ["Team Kalye", "street food maps"], ["Team Bayan", "a barangay helpdesk"]];
 const site = createServer((_req, res) => {
   res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-  const posts = [["Team Orbit", "a study planner"], ["Team Kalye", "street food maps"], ["Team Bayan", "a barangay helpdesk"]];
   res.end(`<!doctype html><title>team-search</title><h1>team-search</h1>
     <div><div><div>${posts.map(([t, b]) => `<div><div role="article" data-b="${b}" onclick="document.getElementById('open').innerHTML='<h2>'+this.innerText+'</h2><p>Building: '+this.dataset.b+'</p>'">${t}</div></div>`).join("")}</div></div></div>
     <section id="open"></section>`);
@@ -60,6 +60,17 @@ try {
   check("every post in the list becomes an item", run.items.length === 3, `${run.items.length}: ${run.items.map((x: any) => x.label).join(", ")} ${run.error ?? ""}`);
   const reports = run.items.map((x: any) => x.report);
   check("each is opened by clicking it and read", JSON.stringify(reports) === JSON.stringify(["a study planner", "street food maps", "a barangay helpdesk"]), JSON.stringify(reports));
+
+  // Plan first, then the list reorders before Go: posts are opened by position, so moved ones are left alone.
+  const p = await post(`/specs/${specId}/runs`, { plan: true });
+  let pr: any;
+  for (let i = 0; i < 60; i++) { pr = await get(`/runs/${p.id}`); if (pr.pending?.kind === "plan" || ["done", "failed", "stopped"].includes(pr.status)) break; await sleep(1000); }
+  check("posts opened by clicking can be planned too", pr.pending?.kind === "plan" && pr.pending.counts.done === 3, JSON.stringify(pr.pending?.counts));
+  posts.reverse();
+  await post(`/runs/${p.id}/answer`, { decision: "approve" });
+  for (let i = 0; i < 60; i++) { pr = await get(`/runs/${p.id}`); if (["done", "failed", "stopped"].includes(pr.status)) break; await sleep(1000); }
+  const st = pr.items.map((x: any) => `${x.label}: ${x.status}`).join(", ");
+  check("after the list moved, only the post still in its place is done; the others are left alone", pr.items[0].status === "skipped" && pr.items[1].status === "done" && pr.items[2].status === "skipped" && /list moved/.test(pr.items[0].log.at(-1).msg), st);
 } finally {
   agent.kill(); site.close();
   const failed = results.filter(([, ok]) => !ok);

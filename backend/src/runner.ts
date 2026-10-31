@@ -22,7 +22,7 @@ export type LogLine = { at: number; msg: string; level: "info" | "ok" | "warn" |
 export type Candidate = { url: string; title: string; vars: Record<string, unknown>; score: number | null; shot?: string; best?: boolean };
 export type Item = {
   url: string; label: string; index?: number; // index: position in the list, for items that open by clicking
-  status: "waiting" | "running" | "approval" | "asking" | "done" | "skipped" | "failed";
+  status: "waiting" | "running" | "approval" | "asking" | "planned" | "done" | "skipped" | "failed";
   vars: Record<string, unknown>; outcome?: string; because?: string; expected?: string; decidedBy?: "rules" | "you" | "learned"; log: LogLine[];
   candidates?: Candidate[];
   report?: string; // the update a "report" step gave the person
@@ -30,7 +30,9 @@ export type Item = {
 export type Pending =
   | { kind: "approval"; item: number; step: string; target?: string; outcome?: string; because?: string; shot: string; healed?: string }
   | { kind: "ask"; item: number; question: string; options: string[]; shot: string; requestType?: string }
-  | { kind: "handoff"; item: number; step: string; problem: string; shot: string };
+  | { kind: "handoff"; item: number; step: string; problem: string; shot: string }
+  // Every item read and decided, nothing done yet: what it will do, for the person's Go.
+  | { kind: "plan"; item: number; counts: Record<string, number>; needsOk: number; skipped: number; failed: number; shot?: undefined };
 export type Answer = { decision?: "approve" | "reject" | "approve_all" | "retry" | "skip"; outcome?: string; note?: string; reply?: string; learn?: boolean };
 export type Run = {
   id: string; specId: number; status: "starting" | "running" | "done" | "failed" | "stopped";
@@ -47,6 +49,9 @@ export type Run = {
   // before anything irreversible, then compares what it read and chose with what the person did.
   mode?: "practice";
   practice?: Practice;
+  // Plan first (runs you start on several items): read and decide every item, asking anything up front, show
+  // the plan, and act only after your Go. `phase` says which pass it's in.
+  plan?: boolean; phase?: "plan" | "act";
 };
 export type Practice = {
   sameItem: boolean; // found the very item from the demo (else the first one, so values may differ)
@@ -135,8 +140,11 @@ const urlShape = (u: string) => {
 };
 
 const manila = () => new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Manila" });
-const render = (s: string | undefined, v: Record<string, unknown>) =>
-  s?.replace(/\{\{\s*(\w+)\s*\}\}/g, (_, k) => (v[k] === undefined || v[k] === null ? "" : String(v[k])));
+// The reply is kept as a template, so its own {{values}} are filled where it's typed (one level, reply only:
+// text read from a page is never treated as a template).
+const fill = (s: string, v: Record<string, unknown>, deep = true): string =>
+  s.replace(/\{\{\s*(\w+)\s*\}\}/g, (_, k) => (v[k] === undefined || v[k] === null ? "" : k === "reply" && deep ? fill(String(v[k]), v, false) : String(v[k])));
+const render = (s: string | null | undefined, v: Record<string, unknown>) => (s == null ? undefined : fill(s, v));
 
 export class Runner {
   run: Run;
@@ -161,6 +169,7 @@ export class Runner {
   // Practice only: the item the person opened in the demo (its link, or its text for items opened by clicking).
   example?: { url?: string; label?: string };
   private get practicing() { return this.run.mode === "practice"; }
+  private phase: "all" | "plan" | "act" = "all"; // which pass the current item is in (see runItem)
   /** A practice starts by itself, on live data, so it is stricter than a run: any click, key press or site tool
    *  in an outcome (the part that acts) ends it, unless it only moves between pages (a link or a tab). */
   private unsure(raw: Step) {
@@ -291,16 +300,51 @@ export class Runner {
       }
       if (this.practicing && source !== "list") this.run.practice!.sameItem = true;
       this.run.status = "running"; this.changed();
-      for (this.run.current = 0; this.run.current < this.run.items.length && !this.stopped; this.run.current++) {
-        const it = this.item;
-        it.status = "running"; this.changed();
-        try { await this.runItem(); }
-        catch (e) {
-          if (e instanceof PracticeEnd) { it.status = this.run.practice?.asked ? "skipped" : "done"; if (e.message) this.log(e.message, "ok"); }
-          else { it.status = "failed"; this.log(`Stopped this item: ${(e as Error).message}`, "error"); }
+      const pass = async (phase: "all" | "plan" | "act") => {
+        for (this.run.current = 0; this.run.current < this.run.items.length && !this.stopped; this.run.current++) {
+          const it = this.item;
+          if (phase === "act" && it.status !== "planned") continue; // skipped or failed while planning
+          it.status = "running"; this.changed();
+          try { await this.runItem(phase); }
+          catch (e) {
+            if (e instanceof PracticeEnd) { it.status = this.run.practice?.asked ? "skipped" : "done"; if (e.message) this.log(e.message, "ok"); }
+            else { it.status = "failed"; this.log(`Stopped this item: ${(e as Error).message}`, "error"); }
+          }
+          await settle();
         }
-        await settle();
-      }
+      };
+      const gated = (s: Step) => s.irreversible || (s.do === "click" && IRREVERSIBLE.test(s.target?.name ?? "")) || (!!s.tool && IRREVERSIBLE.test(s.tool.name.replace(/_/g, " ")));
+      // Planning walks the shared steps twice (to look, then to act), so it's only for tasks whose shared part
+      // just reads: nothing to approve, upload or download there.
+      const canPlan = !this.spec.saveDownloads && !this.spec.steps.some((s) => gated(s) || s.do === "upload");
+      if (this.run.plan && canPlan && this.run.items.length > 1 && !this.practicing) {
+        // Look at everything first (questions come now, while you're here), then show the plan and wait for Go.
+        let cancelled = false;
+        this.run.phase = "plan";
+        await pass("plan");
+        const planned = this.run.items.filter((i) => i.status === "planned");
+        if (!this.stopped && planned.length) {
+          const counts: Record<string, number> = {};
+          for (const i of planned) counts[i.outcome!] = (counts[i.outcome!] ?? 0) + 1;
+          this.run.current = this.run.items.length; // no item is "live" while the plan waits
+          const plan: Pending = { kind: "plan", item: 0, counts, needsOk: planned.filter((i) => (this.spec.outcomes[i.outcome!]?.steps ?? []).some(gated)).length,
+            skipped: this.run.items.filter((i) => i.status === "skipped").length, failed: this.run.items.filter((i) => i.status === "failed").length };
+          // Only Go starts it: a stray answer meant for something else (a question) waits again.
+          let a = await this.wait(plan);
+          while (!["approve", "approve_all", "reject", "skip"].includes(a.decision ?? "") && !this.stopped) a = await this.wait(plan);
+          if (a.decision === "reject" || a.decision === "skip") { this.stopped = true; cancelled = true; }
+          else if (!this.stopped) {
+            if (a.decision === "approve_all") this.run.autoApprove = true;
+            this.run.phase = "act";
+            await pass("act");
+          }
+        }
+        // Anything planned but not done (cancelled at the plan, or stopped on the way) says so.
+        for (const i of this.run.items.filter((x) => x.status === "planned")) {
+          i.status = "skipped";
+          i.log.push({ at: Date.now(), msg: cancelled ? "Not done: cancelled at the plan." : "Not done: the run was stopped.", level: "info" });
+        }
+      } else await pass("all");
       this.run.status = this.stopped ? "stopped" : "done";
       this.scoreRun();
     } catch (e) {
@@ -347,8 +391,17 @@ export class Runner {
       ok: !problem && !p.asked && it.status === "done" && choseRight && values.every((v) => v.ok) };
   }
 
-  private async runItem() {
+  /** One item. "plan": read and decide only (asking now if it must). "act": go back to the item the same way,
+   *  reusing what was read (nothing is read or judged twice), then do what was decided. "all": both at once. */
+  private async runItem(phase: "all" | "plan" | "act" = "all") {
+    this.phase = phase;
     const it = this.item;
+    if (phase === "act") {
+      if (!this.spec.outcomes[it.outcome!]?.steps.length) { it.status = "done"; this.changed(); return; } // nothing to do
+      this.log(`Doing it now: ${it.outcome?.replaceAll("_", " ")}`, "info");
+      for (const [i, step] of this.spec.steps.entries()) if (!(await this.step(step, this.spec.steps[i + 1]?.tab))) return;
+      return this.act();
+    }
     it.vars = { ...it.vars, item_url: it.url, today: manila() };
     const labels = Object.keys(this.prev);
     // A "once" task is the same single item every time even if its name changed; other items match by label only.
@@ -406,8 +459,18 @@ export class Runner {
 
     const out = this.spec.outcomes[it.outcome!];
     if (!out) throw new Error(`no steps for outcome "${it.outcome}"`);
-    it.vars.reply = render(reply ?? out.reply, it.vars);
-    for (const step of out.steps) {
+    // Kept as written: {{values}} in it are filled where it's typed (render goes one level deep), so values
+    // that only exist later, like an uploaded file's name, still come out right.
+    it.vars.reply = reply ?? out.reply ?? null;
+    if (phase === "plan") { it.status = "planned"; this.changed(); return; }
+    return this.act();
+  }
+
+  /** Do what was decided for this item: its outcome's steps. */
+  private async act() {
+    this.phase = "all"; // the outcome's own steps (a compare, a read) run normally
+    const it = this.item;
+    for (const step of this.spec.outcomes[it.outcome!].steps) {
       if (!(await this.step(step))) return;
       if (it.status === "skipped") return;
     }
@@ -618,23 +681,39 @@ export class Runner {
       else {
         // Opens by clicking: back to the list, click the same position.
         const { listUrl, itemSelector } = this.spec.inputs;
-        if (listUrl && this.page.url() !== listUrl) await this.page.goto(listUrl);
+        // Acting after a plan, the list is loaded fresh: it may have changed while the plan waited for Go.
+        if (listUrl && (this.page.url() !== listUrl || this.phase === "act")) await this.page.goto(listUrl);
         const el = this.page.locator(itemSelector!).nth(it.index ?? 0);
         await el.waitFor({ timeout: 15_000 });
+        // Acting after a plan: the list may have moved, so the item at this position must still be the one planned.
+        if (this.phase === "act") {
+          const label = (await el.innerText()).replace(/\s+/g, " ").trim().slice(0, 90);
+          if (label !== it.label) throw new Skip(`The list moved since the plan (in its place is now “${label.slice(0, 50)}”), so I left this one alone.`);
+        }
         await el.click();
         await this.page.waitForTimeout(1500);
       }
     }
     else if (step.do === "goto") await this.page.goto(step.url!);
-    else if (step.do === "extract") return this.extract(step.vars ?? []);
-    else if (step.do === "compare") return this.compare(step);
-    else if (step.do === "upload") { if (this.unsure(raw)) await this.approve(step); return this.upload(raw, step); }
+    // Acting after a plan: values were read in the planning pass, so they aren't read (or judged) again.
+    else if (step.do === "extract") return this.phase === "act" ? this.stillTheSame(step.vars ?? []) : this.extract(step.vars ?? []);
+    else if (step.do === "compare") {
+      if (this.phase !== "act") return this.compare(step);
+      if (it.vars.best_url) await this.page.goto(String(it.vars.best_url)); // back to the result it chose
+      return;
+    }
+    else if (step.do === "upload") {
+      if (this.phase === "plan") return; // planning only looks; the upload happens when it acts
+      if (this.unsure(raw)) await this.approve(step);
+      return this.upload(raw, step);
+    }
+    else if (step.do === "report" && this.phase === "plan") return;
     else if (step.do === "report") {
       // Tell the person: a Windows notification, and the update is kept on the run.
       // A value that doesn't exist yet (no previous run to compare with) drops its "(… since last time)"
       // part instead of leaving a gap; any other missing value shows as a dash.
       const NONE = "\u0000";
-      const msg = (raw.message ?? step.describe).replace(/\{\{\s*(\w+)\s*\}\}/g, (_, k) => (v[k] === undefined || v[k] === null || v[k] === "" ? NONE : String(v[k])))
+      const msg = (raw.message ?? step.describe).replace(/\{\{\s*(\w+)\s*\}\}/g, (_, k) => (v[k] === undefined || v[k] === null || v[k] === "" ? NONE : k === "reply" ? fill(String(v[k]), v, false) : String(v[k])))
         .replace(/\s*\([^()]*\u0000[^()]*\)/g, "").replaceAll(NONE, "–");
       if (this.practicing) { this.log(`Would tell you: ${msg}`, "ok"); return; }
       it.report = msg;
@@ -752,6 +831,34 @@ export class Runner {
     this.heal({ step: step.describe, from: t.name ?? "", to: healedName });
     this.log(`Found it: the ${found.role} "${healedName}". Updated the spec so the next ${this.spec.inputs.itemName ?? "item"} uses it directly.`, "ok");
     return (await loc.count()) === 1 ? { loc, healedName } : { point, healedName };
+  }
+
+  /** Acting after a plan: before doing anything, make sure this is still the item that was planned (lists move;
+   *  values change). Code reads the same values again, no model call; any that differ end the item untouched. */
+  private async stillTheSame(names: string[]) {
+    const it = this.item;
+    const vars = this.spec.variables.filter((v) => names.includes(v.name) && v.kind === "text" && this.rules.extract[v.name]);
+    if (!vars.length) return;
+    const now: Record<string, unknown> = {};
+    for (const deadline = Date.now() + 3000; ;) {
+      const t = await this.page.innerText("body").catch(() => "");
+      for (const v of vars) { try { now[v.name] = this.rules.extract[v.name](t) ?? null; } catch { now[v.name] = null; } }
+      if (vars.every((v) => now[v.name] !== null) || Date.now() > deadline) break;
+      await this.page.waitForTimeout(300);
+    }
+    // Only values code could read both times are compared (ones Muse Spark read while planning aren't re-read).
+    const moved = vars.filter((v) => now[v.name] !== null && it.vars[v.name] !== null && it.vars[v.name] !== undefined && !same(now[v.name], it.vars[v.name]));
+    if (!moved.length) return;
+    // Something changed since the plan. If your rules decided this item, decide again with the new values: the
+    // same decision carries on (with the new values); a different one means the plan no longer holds.
+    const next: Record<string, unknown> = { ...it.vars, ...Object.fromEntries(moved.map((v) => [v.name, now[v.name]])) };
+    for (const v of this.spec.variables.filter((x) => x.kind === "computed" && !x.candidate)) { try { next[v.name] = this.rules.compute[v.name]?.(next); } catch { next[v.name] = null; } }
+    const what = moved.map((v) => `${v.name.replaceAll("_", " ")} was ${JSON.stringify(it.vars[v.name])}, now ${JSON.stringify(now[v.name])}`).join("; ");
+    let again: string | undefined;
+    try { again = it.decidedBy === "rules" ? this.rules.decide(next).outcome : undefined; } catch { again = undefined; }
+    if (again !== it.outcome) throw new Skip(`This changed since the plan (${what}), so the plan for it may not hold. I left it alone.`);
+    it.vars = next;
+    this.log(`Changed since the plan (${what}), but my decision is the same: ${it.outcome?.replaceAll("_", " ")}.`, "info");
   }
 
   private async extract(names: string[], into?: Record<string, unknown>) {

@@ -334,7 +334,7 @@ setInterval(async () => {
   }
 }, 30_000).unref();
 
-async function startRun(specId: number, opts: { limit?: number; autoApprove?: boolean; rows?: Record<string, string>[]; scheduled?: boolean; watch?: boolean; practice?: boolean; example?: { url?: string; label?: string } }) {
+async function startRun(specId: number, opts: { limit?: number; autoApprove?: boolean; rows?: Record<string, string>[]; scheduled?: boolean; watch?: boolean; practice?: boolean; plan?: boolean; example?: { url?: string; label?: string } }) {
   const row = specRow(specId);
   if (!row.code) throw new HttpError(400, "build the rules first");
   // A practice gives way to real work, and to a newer practice: it stops, and the new run starts once the old
@@ -348,6 +348,9 @@ async function startRun(specId: number, opts: { limit?: number; autoApprove?: bo
   if (busyRun()) throw new HttpError(409, "a run is already going");
   const run: Run = { id: randomUUID(), specId, status: "starting", items: [], current: 0, pending: null, autoApprove: !!opts.autoApprove, startedAt: Date.now(), heals: [], learned: [], rows: opts.rows,
     visible: !!opts.watch && !opts.scheduled && !opts.practice, trigger: opts.scheduled ? "schedule" : "you",
+    // Plan first only when someone is there to see the plan: never on a schedule or a practice.
+    // and not when you chose to run without being asked (that choice was its own confirmation).
+    plan: !!opts.plan && !opts.scheduled && !opts.practice && !opts.autoApprove,
     ...(opts.practice ? { mode: "practice" as const, practice: { sameItem: false, values: [], checked: 0, ok: false } } : {}) };
   let last = 0;
   let asked = "";
@@ -361,6 +364,7 @@ async function startRun(specId: number, opts: { limit?: number; autoApprove?: bo
       const label = r.items[p.item]?.label ?? "";
       if (p.kind === "approval") notify("Remuse needs your OK", `${p.step}: ${label}`, link);
       else if (p.kind === "ask") notify("Remuse has a question", p.question, link);
+      else if (p.kind === "plan") notify("Remuse has a plan", `${Object.entries(p.counts).map(([o, n]) => `${n} ${o.replaceAll("_", " ")}`).join(", ")}. Open Remuse and press Go.`, link);
       else notify("Remuse needs you in the browser", `Stuck on "${p.step}". Sign in or clear the check, then press Try again.`, link);
     }
     asked = key;
@@ -670,7 +674,7 @@ async function route(req: IncomingMessage, res: ServerResponse) {
     if (m === "POST" && p[3] === "runs") {
       const opts = await json(req);
       const rows = Array.isArray(opts.rows) ? opts.rows.filter((r: unknown) => r && typeof r === "object").map((r: Record<string, unknown>) => Object.fromEntries(Object.entries(r).map(([k, v]) => [String(k), String(v ?? "")]))) : undefined;
-      return send(res, 201, await startRun(sid, { limit: opts.limit ? Number(opts.limit) : undefined, autoApprove: !!opts.autoApprove, rows, watch: !!opts.watch }));
+      return send(res, 201, await startRun(sid, { limit: opts.limit ? Number(opts.limit) : undefined, autoApprove: !!opts.autoApprove, rows, watch: !!opts.watch, plan: !!opts.plan }));
     }
   }
 

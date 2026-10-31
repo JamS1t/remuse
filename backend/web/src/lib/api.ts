@@ -20,13 +20,14 @@ export type SessionFull = {
   specs: { id: number; version: number; note?: string }[];
 };
 export type LogLine = { at: number; msg: string; level: "info" | "ok" | "warn" | "error"; shot?: string };
-export type ItemStatus = "waiting" | "running" | "approval" | "asking" | "done" | "skipped" | "failed";
+export type ItemStatus = "waiting" | "running" | "approval" | "asking" | "planned" | "done" | "skipped" | "failed";
 export type Candidate = { url: string; title: string; vars: Record<string, unknown>; score: number | null; shot?: string; best?: boolean };
 export type Item = { url: string; label: string; status: ItemStatus; outcome?: string; because?: string; expected?: string; decidedBy?: "rules" | "you" | "learned"; log: LogLine[]; candidates?: Candidate[]; report?: string };
 export type Pending =
   | { kind: "approval"; item: number; step: string; target?: string; outcome?: string; because?: string; shot: string; healed?: string }
   | { kind: "ask"; item: number; question: string; options: string[]; shot: string }
-  | { kind: "handoff"; item: number; step: string; problem: string; shot: string };
+  | { kind: "handoff"; item: number; step: string; problem: string; shot: string }
+  | { kind: "plan"; item: number; counts: Record<string, number>; needsOk: number; skipped: number; failed: number; shot?: undefined };
 export type Run = {
   id: string; specId: number; status: "starting" | "running" | "done" | "failed" | "stopped"; browser?: "chrome" | "own";
   items: Item[]; current: number; pending: Pending | null; autoApprove: boolean;
@@ -35,6 +36,7 @@ export type Run = {
   learned: { requestType: string; outcome: string; note?: string }[];
   score?: { matched: number; total: number };
   mode?: "practice"; practice?: Practice;
+  plan?: boolean; phase?: "plan" | "act";
 };
 /** A practice: the task tried once on the demo item, stopping before anything irreversible, compared with the demo. */
 export type Practice = {
