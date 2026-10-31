@@ -441,6 +441,32 @@ function lastReport(sessionId: string): { text: string; at: number; runId: strin
   return null;
 }
 
+/** An estimate of the time Remuse has saved on a task: the items it really did something for in real runs (not a
+ *  practice, not one it left for you), each counted once a day (redoing it, or a check that runs every hour, isn't
+ *  more work saved), times how long your demo took (capped at 15 min; it includes your talking it through). */
+const outcomeActs = new Map<number, Record<string, boolean>>(); // per spec version: which outcomes do something
+const runDid = new Map<string, { at: number; did: string[] }>(); // per run: "day|item" it did something for
+function timeSaved(sessionId: string, startedAt: number, endedAt: number | null) {
+  const did = new Set<string>();
+  for (const r of db.prepare("SELECT r.id, r.spec_id, r.updated_at, r.json FROM runs r JOIN specs x ON x.id = r.spec_id WHERE x.session_id = ?").all(sessionId) as any[]) {
+    let hit = runDid.get(r.id);
+    if (!hit || hit.at !== r.updated_at) {
+      const run = JSON.parse(r.json) as Run;
+      let acts = outcomeActs.get(r.spec_id);
+      if (!acts) { acts = Object.fromEntries(Object.entries(specRow(r.spec_id).spec.outcomes).map(([k, o]) => [k, o.steps.length > 0])); outcomeActs.set(r.spec_id, acts); }
+      const day = new Date(run.startedAt).toLocaleDateString("en-CA", { timeZone: "Asia/Manila" });
+      hit = { at: r.updated_at, did: run.mode === "practice" ? [] : run.items.filter((i) => i.status === "done" && i.outcome && acts![i.outcome]).map((i) => `${day}|${i.key ?? i.url ?? i.label}`) };
+      runDid.set(r.id, hit);
+    }
+    for (const k of hit.did) did.add(k);
+  }
+  // The demo's length: up to its last recorded action (a recording left running doesn't count), at most 15 minutes.
+  const lastAction = (db.prepare("SELECT MAX(t) AS t FROM events WHERE session_id = ?").get(sessionId) as any)?.t as number | null;
+  const length = lastAction && lastAction > 0 ? lastAction : endedAt && endedAt > startedAt ? endedAt - startedAt : null;
+  const demoMs = length ? Math.min(length, 15 * 60_000) : null;
+  return { doneCount: did.size, demoMs, savedMs: demoMs ? did.size * demoMs : null };
+}
+
 /** The practice of this task's newest version, if there was one: going, or how it went. */
 function latestPractice(sessionId: string, specId: number | null) {
   const run = recentRuns(sessionId).find((r) => r.mode === "practice" && r.specId === specId);
@@ -539,7 +565,7 @@ async function route(req: IncomingMessage, res: ServerResponse) {
           checks: { passed: tests.filter((x) => x.ok).length, total: tests.length },
           askedSchedule: spec?.schedule ?? null, lastReport: lastReport(t.sessionId),
           uploads: spec ? [...spec.steps, ...Object.values(spec.outcomes).flatMap((o) => o.steps)].filter((x) => x.do === "upload").map((x) => ({ folder: x.file?.folder ?? null, pick: x.file?.pick ?? "next" })) : [],
-          saveDownloads: spec?.saveDownloads ?? null, practice: latestPractice(t.sessionId, t.specId), handled: handledCount(t.sessionId) };
+          saveDownloads: spec?.saveDownloads ?? null, practice: latestPractice(t.sessionId, t.specId), handled: handledCount(t.sessionId), ...timeSaved(t.sessionId, t.startedAt, t.endedAt) };
       }));
   if (url.pathname === "/api/logins" && m === "POST") {
     const b = await json(req);

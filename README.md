@@ -25,6 +25,8 @@ Anything you do in a browser the same way again and again, on real sites:
 
 You teach it by doing the task once and talking through why. There's nothing to code and no workflow builder.
 
+Each task shows an estimate of the time it has saved you: every item Remuse really did something for (each counted once a day), times how long your demo took (talking included, capped at 15 minutes). The task list adds them up ("By an estimate, Remuse has saved you about 3 h so far"). Want to try it on one of your own tasks? [docs/try-it.md](docs/try-it.md) takes about 15 minutes, and there's a short form to tell us how it went.
+
 ## Two parts
 
 - **Remuse Agent** (`backend/`): a small program on your PC that starts with Windows. It keeps your tasks and schedules, runs them in its own browser, and asks you through Windows notifications when it needs an OK. It runs whether Chrome is open or not.

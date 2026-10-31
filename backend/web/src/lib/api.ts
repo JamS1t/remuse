@@ -107,6 +107,8 @@ export type Task = {
   uploads: { folder: string | null; pick: "next" | "newest" | "dated" }[]; saveDownloads: string | null;
   practice: PracticeState | null;
   handled: number; // list items earlier runs already handled (left alone next time)
+  // Time saved: items done in real runs × how long the demo took.
+  doneCount: number; demoMs: number | null; savedMs: number | null;
 };
 export type FolderRow = { id: string; name: string; path: string; count: number; latest: { name: string; modified: number } | null; ok: boolean };
 export type ScheduleRow = { id: number; specId: number; sessionId: string; time: string; days: string; everyMinutes: number | null; watchFolder?: string | null };
@@ -114,6 +116,12 @@ export type ScheduleRow = { id: number; specId: number; sessionId: string; time:
 export type ActivityRun = {
   id: string; specId: number; sessionId: string; task: string | null; status: Run["status"]; startedAt: number; endedAt: number | null;
   items: number; done: number; error: string | null; waiting: boolean; report: string | null; score?: Run["score"]; mode?: "practice" | null; practiceOk?: boolean | null; alreadyDone?: number;
+};
+
+/** A saved amount of time, in plain words: "about 2 h 10 min", "about 25 min", "under a minute". */
+export const saved = (ms: number) => {
+  const m = Math.round(ms / 60_000);
+  return m < 1 ? "under a minute" : m < 60 ? `about ${m} min` : `about ${Math.floor(m / 60)} h${m % 60 ? ` ${m % 60} min` : ""}`;
 };
 
 export const ago = (ms: number) => {

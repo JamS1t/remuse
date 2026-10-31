@@ -7,7 +7,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { ItemLabel, Lockup, Orb, PracticeLines, Said, useAction, type OrbState } from "@/components/bits";
 import { PendingCard } from "@/pages/run";
 import { parseCsv } from "@/pages/spec";
-import { api, isLive, useApi, type PracticeState, type Run, type RunRow, type SpecRow } from "@/lib/api";
+import { api, isLive, saved, useApi, type PracticeState, type Run, type RunRow, type SpecRow } from "@/lib/api";
 import { ext, inPanel, useTabChanges } from "@/lib/bridge";
 import { cn } from "@/lib/utils";
 
@@ -19,6 +19,7 @@ type Task = {
   askedSchedule: { everyMinutes?: number; time?: string; days?: string; said?: string } | null;
   lastReport: { text: string; at: number; runId: string } | null;
   practice: PracticeState | null;
+  savedMs: number | null;
 };
 type Rec = { recording: boolean; rec?: { id?: string; audioError?: string }; waitingForMic?: boolean };
 type Schedule = { id: number; specId: number; sessionId: string; time: string; days: string; everyMinutes: number | null; watchFolder?: string | null };
@@ -368,6 +369,7 @@ function TaskRow({ t, schedule, onSchedule }: { t: Task; schedule: Schedule | nu
           {schedule
             ? <span className="mt-0.5 inline-flex items-center gap-1 text-[12.5px] text-muted-foreground"><CalendarClock className="size-3.5" />{describeSchedule(schedule)}</span>
             : t.goal ? <span className="line-clamp-1 text-[12.5px] text-muted-foreground">{t.goal}</span> : null}
+          {t.savedMs && t.savedMs >= 60_000 ? <span className="block text-[12px] text-muted-foreground">Saved you {saved(t.savedMs)}</span> : null}
         </button>
         {t.built
           ? <Button size="sm" variant={openForm ? "ghost" : "secondary"} className="rounded-full" onClick={() => setOpenForm((o) => !o)} aria-expanded={openForm}>{openForm ? <X /> : <Play className="fill-current" />}Again</Button>

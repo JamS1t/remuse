@@ -126,11 +126,22 @@ try {
   r = await run({ autoApprove: true, limit: 1 });
   check("after starting fresh, the first email is done again", r.items[0]?.label === "Request 1", r.items[0]?.label);
 
+  // Time saved: every email done in a real run, times how long the demo took (2 minutes here).
+  db.prepare("UPDATE sessions SET ended_at = started_at + 120000 WHERE id = ?").run(inbox.sessionId);
+  const real = await Promise.all((await get(`/runs?task=${inbox.sessionId}`)).filter((x: any) => x.mode !== "practice").map((x: any) => get(`/runs/${x.id}`)));
+  // Each email counted once a day, however many times it was done (Do them again, Start fresh).
+  const doneN = new Set(real.flatMap((x: any) => x.items.filter((i: any) => i.status === "done").map((i: any) => i.url))).size;
+  const timesDone = real.reduce((n: number, x: any) => n + x.items.filter((i: any) => i.status === "done").length, 0);
+  const tt = (await get("/tasks")).find((t: any) => t.sessionId === inbox.sessionId);
+  check("the task estimates time saved: each email done counted once a day, × how long the demo took", tt.doneCount === doneN && doneN < timesDone && tt.demoMs === 120000 && tt.savedMs === doneN * 120000, `${tt.doneCount} counted (${doneN} different emails, done ${timesDone} times), ${tt.savedMs} ms`);
+
   // 4. A practice still uses your example, handled or not.
   db.prepare("INSERT INTO events (session_id, t, kind, url, data) VALUES (?, 1, 'click', ?, ?)").run(inbox.sessionId, `${SITE}/inbox`, JSON.stringify({ target: { role: "link", text: "Request 1", href: `${SITE}/mail?id=1` } }));
   db.prepare("UPDATE specs SET json = ? WHERE id = ?").run(JSON.stringify({ ...inboxSpec, inputs: { ...inboxSpec.inputs, itemEvent: 0 } }), inbox.specId);
   const pr = await finished((await post(`/specs/${inbox.specId}/practice`)).id);
   check("a practice uses your example even though it was done", pr.items[0]?.label === "Request 1" && pr.practice?.sameItem, pr.items[0]?.label);
+  const after = (await get("/tasks")).find((t: any) => t.sessionId === inbox.sessionId);
+  check("a practice doesn't count as time saved", after.doneCount === doneN, `${after.doneCount} vs ${doneN}`);
 
   // 5. Whenever a new file lands in the folder, it posts that file (each once).
   await post("/folders", { path: drop });
