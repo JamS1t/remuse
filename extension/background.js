@@ -67,7 +67,9 @@ let pendingStart = null; // { title, tabId } while the mic tab is open
 // the old one off). Attach a fresh one to every open web page.
 async function attachToOpenTabs() {
   const tabs = await chrome.tabs.query({ url: ["http://*/*", "https://*/*"] });
-  await Promise.all(tabs.map((t) => chrome.scripting.executeScript({ target: { tabId: t.id, allFrames: true }, files: ["content.js"] }).catch(() => {})));
+  // A tab still loading, or showing a dialog, takes its recorder only once that's over, which may be never:
+  // don't hold up the recording for it.
+  await Promise.race([Promise.all(tabs.map((t) => chrome.scripting.executeScript({ target: { tabId: t.id, allFrames: true }, files: ["content.js"] }).catch(() => {}))), sleep(1500)]);
 }
 chrome.runtime.onInstalled.addListener(() => { attachToOpenTabs(); });
 
