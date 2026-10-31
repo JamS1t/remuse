@@ -8,7 +8,7 @@ import type { Card } from "./notes.ts";
 
 export type Target = { role?: string; name?: string; selector?: string; fuzzy?: boolean };
 export type Step = {
-  id: string; do: "open_item" | "goto" | "click" | "fill" | "press" | "extract" | "compare" | "report" | "upload";
+  id: string; do: "open_item" | "goto" | "click" | "fill" | "press" | "extract" | "compare" | "report" | "upload" | "match";
   message?: string;
   // upload only: which file to send from one of the person's allowed folders.
   file?: { folder: string | null; pick?: "next" | "newest" | "dated"; ext?: string[] }; // report only: what to tell the person, with {{variables}}
@@ -78,7 +78,7 @@ const SCHEMA = `{
       "candidate": true | false }
   ],
   "steps": [
-    { "id": "s1", "do": "open_item" | "goto" | "click" | "fill" | "press" | "extract" | "compare" | "report" | "upload",
+    { "id": "s1", "do": "open_item" | "goto" | "click" | "fill" | "press" | "extract" | "compare" | "report" | "upload" | "match",
       "file": { "folder": "upload only: the allowed folder's name, or null", "pick": "next" | "newest" | "dated", "ext": ["optional file types, e.g. jpg, mp4"] },
       "message": "report only: the update to give the person, with {{variables}}",
       "url": "goto only, may contain {{var}}",
@@ -88,7 +88,7 @@ const SCHEMA = `{
       "vars": ["extract: variables to read on the current page. compare: the candidate variables read on each result"],
       "resultEvent": <compare only: event # of the click that opened one result in the demo>,
       "max": <compare only: how many results to compare, default 5>,
-      "said": "compare only: the person's own words for what makes one result better",
+      "said": "compare or match only: the person's own words (compare: what makes one result better; match: how an item is matched to its entry, e.g. \"by the course code in the file name\")",
       "tab": "only when the task uses more than one tab: a short name for what this tab is for, e.g. \"inbox\", \"sheet\", \"store\"",
       "describe": "short plain sentence",
       "expect": { "urlIncludes": "optional, may use {{var}}", "textIncludes": "optional: words that are always there after this step (a heading, label or tab name), may use {{var}}; never a number or value that changes between runs (a count, %, duration, date, price, this item's own data)", "looks": "what the screen should show after this step" },
@@ -127,6 +127,7 @@ Rules for the spec:
 - Reports: when the person wants to be told something (an update, a summary, an alert), the outcome ends with a "report" step. Its "message" is short and readable, with {{variables}}, e.g. "Views {{views}} ({{views_change}} since last time), CTR {{ctr}}%". Reports are not irreversible. Read every number they mentioned with extract steps.
 - Changes since last time: {{prev_<name>}} holds a variable's value from the previous run of this task (null on the first run). For "how much did X change", add a computed variable like ctr_change from ctr and prev_ctr: a string with a sign, e.g. "+0.6" or "-1.2", and null when prev_ctr is null. In the report message put changes in parentheses, e.g. "CTR {{ctr}} ({{ctr_change}} since last time)"; that part is left out automatically when there is no previous value.
 - Uploading: an "upload" line means the person chose a file to upload. Keep the click that opened the file picker if there was one, then add {"do": "upload", "target": <the file input from the upload line>, "file": {...}}. "folder" is the allowed folder (listed below) whose files look like the one chosen; null if none fits (the person will pick one). "pick": "next" = the oldest file not uploaded yet, for a posting queue (the default); "newest" = whatever arrived most recently ("the latest file"); "dated" = the file whose name carries today's date and a time not later than now ("the one labelled for today"). After an upload step, {{file_name}} is the file's name and {{file_caption}} the text of a .txt file with the same name (null if none): use it for a caption or description box. Posting, sharing or publishing is irreversible.
+- Matching: when each item (a file from a folder, a row) is opened by finding its own entry in a list (an assignment, an order) by a rule the person said or showed, e.g. the course code in the file name, write {"do": "match", "target": {"role": <the entries' role, usually "link">}, "said": "<their rule, in their words>", "describe": "Open the <entry> for this <item>"} instead of a click on the one entry from the demo.
 - Downloads: if the person downloaded something they want kept, set "saveDownloads" to the allowed folder they meant; otherwise null.
 - Schedule: if the person said how often ("every hour", "every morning at 9"), fill "schedule". Don't invent one.
 - Tabs: event lines carry tab=T1, T2... when the person worked in more than one browser tab. A "tab" line is the person switching to another open tab; its frame shows that tab. Steps after it happen in that tab, and a tab they only read from or talked about still gets its steps (a goto, an extract). Then give EVERY step (main and outcome steps) a "tab": a short name for what that tab is for ("inbox", "sheet", "store", "x", "tiktok"), the same name each time the person returned to that tab. The robot keeps every tab open and switches between them, so a tab is found as it was left: don't repeat a "goto" when the person just switched back. The first step in a new tab is normally a "goto" to the page it showed first. If a click made the site open a new tab, give the following steps a new tab name and no "goto"; the robot follows the tab the site opened. Values read in any tab can be used in any other tab with {{variables}}, e.g. read an order number in "inbox" and type it in "store". If the person did the same thing on several sites (posting to several networks, checking several stores), keep one tab per site and keep the irreversible steps (post, pay, send) last, after everything is prepared in every tab.

@@ -48,6 +48,9 @@ export function diagnose(sig: { signin: boolean; overlay: boolean; loading: bool
   if (sig.targetHidden) return { kind: "hidden", say: "What this step uses is there, but hidden or switched off." };
   return { kind: "missing", say: "What this step used isn't on the page any more." };
 }
+/** Matching an item to its entry by the person's rule: exactly one fit goes ahead; none or several asks, never a guess. */
+export const matchOutcome = (fit: number[]): "open" | "none" | "several" => (fit.length === 1 ? "open" : fit.length ? "several" : "none");
+
 /** Cheapest rung that fits: a still-loading page waits first, something in the way gets closed first. */
 export const firstRung = (d: Diagnosis) => (d.kind === "loading" ? 1 : d.kind === "overlay" ? 2 : 3);
 

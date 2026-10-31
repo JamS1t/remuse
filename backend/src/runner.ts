@@ -6,7 +6,7 @@ import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { askJson, checker, ground, respond, sam, text, png, type Box, type Part } from "./meta.ts";
-import { BUDGET, canRecover, diagnose, firstRung, movePrompt, parseMove, repeated, unsafe, type Attempt, type Move, type Seen } from "./recover.ts";
+import { BUDGET, canRecover, diagnose, firstRung, matchOutcome, movePrompt, parseMove, repeated, unsafe, type Attempt, type Move, type Seen } from "./recover.ts";
 import { shownSteps } from "./readback.ts";
 import { load, same, type Rules } from "./build.ts";
 import type { Spec, Step, Target } from "./understand.ts";
@@ -1186,6 +1186,7 @@ export class Runner {
       }
     }
     else if (step.do === "goto") { await this.page.goto(step.url!); await this.rightAccount("open", raw); }
+    else if (step.do === "match") return this.match(step);
     // Acting after a plan: values were read in the planning pass, so they aren't read (or judged) again.
     else if (step.do === "extract") {
       if (this.phase === "act") return this.stillTheSame(step.vars ?? []);
@@ -1466,6 +1467,37 @@ export class Runner {
     if (again !== it.outcome) throw new Skip(`This changed since the plan (${what}), so the plan for it may not hold. I left it alone.`);
     it.vars = next;
     this.log(`Changed since the plan (${what}), but my decision is the same: ${it.outcome?.replaceAll("_", " ")}.`, "info");
+  }
+
+  /** Open this item's own entry in the list by the person's rule ("by the course code in the file name"). Muse Spark
+   *  lists every entry that fits; exactly one goes ahead, none or several stops the item with the question, so the
+   *  rest of a batch carries on and nothing is guessed. */
+  private async match(step: Step) {
+    const it = this.item;
+    const all = this.page.getByRole((step.target?.role ?? "link") as any);
+    await all.first().waitFor({ timeout: 10_000 }).catch(() => {});
+    const entries: { name: string; loc: Locator }[] = [];
+    for (const l of (await all.all()).slice(0, 80)) {
+      if (!(await l.isVisible().catch(() => false))) continue;
+      const name = ((await l.getAttribute("aria-label").catch(() => null)) || (await l.innerText().catch(() => ""))).replace(/\s+/g, " ").trim().slice(0, 120);
+      if (name && !IRREVERSIBLE.test(name)) entries.push({ name, loc: l });
+    }
+    const noun = /\b(?:the|an?)\s+(\w+)\s+(?:for|that|of|to)\b/i.exec(step.describe)?.[1] ?? "entry";
+    if (!entries.length) throw new Error(`there's no ${noun} on this page to match “${it.label}” to`);
+    const r = await askJson<{ fit: number[]; why: string }>([text(`An item to place: “${it.label}”. The person's rule for which entry it goes with: "${step.said ?? step.describe}".
+The entries on the page:
+${entries.map((e, i) => `[${i + 1}] ${e.name}`).join("\n")}
+Which entries fit this item by that rule? List every one that fits: none, one, or several. Don't choose between entries that fit equally well.
+Reply with only JSON: {"fit": [numbers], "why": "one short sentence"}`)], "match");
+    const fit = [...new Set((r.fit ?? []).map(Number).filter((n) => Number.isInteger(n) && n >= 1 && n <= entries.length))];
+    const what = matchOutcome(fit);
+    if (what === "none") throw new Error(`No ${noun} fits “${it.label}” by your rule ("${step.said ?? step.describe}"). Which one is it?`);
+    if (what === "several") throw new Error(`${fit.length === 2 ? "Two" : fit.length} ${noun}s fit “${it.label}”: ${fit.map((i) => entries[i - 1].name).join(" and ")}. Which one is it?`);
+    const e = entries[fit[0] - 1];
+    await e.loc.click();
+    await this.page.waitForLoadState("load").catch(() => {});
+    it.vars.matched = e.name;
+    this.log(`Matched “${it.label}” to “${e.name}”: ${r.why}`, "ok", (await this.shot()).file, { why: r.why });
   }
 
   /** Every value that will be typed is read a second time, on its own (Muse Spark Open when its key is set; else a
