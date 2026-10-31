@@ -544,7 +544,7 @@ async function startRun(specId: number, opts: { limit?: number; autoApprove?: bo
     const nothingNew = !run.error && ((run.items.length === 0 && (run.alreadyDone ?? 0) > 0) || (run.items.length > 0 && run.items.every((i) => i.status === "skipped" && /^Nothing new to upload/.test(i.log.at(-1)?.msg ?? ""))));
     // A folder run that posted something checks for the next file right away (a batch drops in at once).
     if (opts.fromFolder !== undefined && run.status === "done" && !nothingNew && run.items.every((i) => i.status === "done")) setTimeout(() => folderTick(), 1000);
-    if (opts.scheduled && !nothingNew) notify(`Remuse finished: ${row.spec.goal}`.slice(0, 120), `${run.items.filter((i) => i.status === "done").length} of ${run.items.length} done${run.error ? `. Problem: ${run.error}` : ""}`, link);
+    if (opts.scheduled && !nothingNew) notify(`Remuse finished: ${row.spec.goal}`.slice(0, 120), `${run.decisions?.length ? `${run.decisions.slice(0, 2).join(" ")} ` : ""}${run.items.filter((i) => i.status === "done").length} of ${run.items.length} done${run.error ? `. Problem: ${run.error}` : ""}`, link);
     if (run.mode !== "practice") saveFixes(row.sessionId, run);
     if (run.mode === "practice") {
       // A practice that went wrong is worth a word; one that matched shows in the sidebar.

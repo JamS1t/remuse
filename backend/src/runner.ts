@@ -29,7 +29,7 @@ class Ready extends Error {}
 // why: the reason in plain words (what it checked and found, or what a decision rested on).
 // how: "page" = checked on the page itself; "screen" = Muse Spark (and SAM 3.1) looked at a screenshot.
 // by: which model gave the reason, when it was the checker (the second model).
-export type LogLine = { at: number; msg: string; level: "info" | "ok" | "warn" | "error"; shot?: string; why?: string; how?: "page" | "screen"; by?: string };
+export type LogLine = { at: number; msg: string; level: "info" | "ok" | "warn" | "error"; shot?: string; why?: string; how?: "page" | "screen"; by?: string; kind?: "heal" };
 export type Candidate = { url: string; title: string; vars: Record<string, unknown>; score: number | null; shot?: string; best?: boolean };
 export type Item = {
   url: string; label: string; index?: number; // index: position in the list, for items that open by clicking
@@ -74,6 +74,7 @@ export type Run = {
   checker?: string; // the second model that checks this run's work (Muse Spark Open with a partner key)
   // Fixes this run worked out or used: proposed (proven on a step), or a learned one that worked, missed, or turned unsafe.
   fixes?: { item: number; group: string; move: FixMove; outcome: "proposed" | "worked" | "failed" | "dropped"; id?: number }[];
+  decisions?: string[]; // what Remuse decided on its own during the run, and why, in plain words
 };
 export type Practice = {
   sameItem: boolean; // found the very item from the demo (else the first one, so values may differ)
@@ -263,8 +264,9 @@ export class Runner {
 
   private changed() { this.onChange(this.run, this.spec); }
   private get item() { return this.run.items[this.run.current]; }
+  private healing = false; // lines logged while working a problem out are marked for the live view
   private log(msg: string, level: LogLine["level"] = "info", shot?: string, more: Pick<LogLine, "why" | "how" | "by"> = {}) {
-    this.item?.log.push({ at: Date.now(), msg, level, shot, ...more });
+    this.item?.log.push({ at: Date.now(), msg, level, shot, ...more, ...(this.healing ? { kind: "heal" as const } : {}) });
     this.changed();
   }
 
@@ -814,6 +816,11 @@ export class Runner {
   }
 
   private lastTried = ""; // what the last recovery that ran out of ideas tried, for the report
+  /** Something Remuse decided by itself, and why: listed at the top of the run and first in the notification. */
+  private decide(text: string) {
+    (this.run.decisions ??= []).push(`${(this.run.items.length ?? 0) > 1 && this.item ? `${this.item.label}: ` : ""}${text}`);
+    this.changed();
+  }
 
   /** A fix learned on an earlier run for this step goes first. It passes the same safety rules every time (one that
    *  now points at something irreversible is dropped, never pressed), and counts only when the page proves it. */
@@ -823,6 +830,11 @@ export class Runner {
     const fix = this.fixes.find((f) => f.group === group && f.state === "learned");
     if (!fix) return false;
     if (raw.tab) await this.useTab(raw.tab, true);
+    this.healing = true;
+    try { return await this.tryLearned(raw, fix, group); } finally { this.healing = false; }
+  }
+
+  private async tryLearned(raw: Step, fix: Fix, group: string): Promise<boolean> {
     const step = this.renderStep(raw);
     const m = fix.move;
     const record = (outcome: "worked" | "failed" | "dropped") => (this.run.fixes ??= []).push({ item: this.run.current, group, move: m, outcome, id: fix.id });
@@ -832,6 +844,7 @@ export class Runner {
     if (IRREVERSIBLE.test(name)) {
       record("dropped"); this.fixes = this.fixes.filter((f) => f !== fix);
       this.log(`Dropped what I learned for "${group}": it now points at “${name}”, which can't be undone.`, "warn");
+      this.decide(`Dropped what I had learned for “${group}”: that control now reads “${name}”, which can't be undone.`);
       return false;
     }
     const before = await this.page.innerText("body").catch(() => "");
@@ -876,6 +889,11 @@ export class Runner {
   private async recover(raw: Step, err: Error): Promise<boolean> {
     if (!canRecover(raw) || this.stopped || !["click", "fill", "press", "upload"].includes(raw.do)) return false;
     if (/account|signed in as|isn't signed in|sign-in page|run stopped/i.test(err.message)) return false;
+    this.healing = true;
+    try { return await this.workItOut(raw, err); } finally { this.healing = false; }
+  }
+
+  private async workItOut(raw: Step, err: Error): Promise<boolean> {
     const step = this.renderStep(raw);
     const t = step.target;
     const t0 = Date.now();
@@ -933,7 +951,10 @@ export class Runner {
       const pic = ok ? await this.outlined(used ?? null) : { file: (await this.shot()).file, note: "" };
       const more = v ? { why: v.why, how: v.proof === "none" ? undefined : v.proof, by: v.by } : undefined;
       this.log(`Idea ${tried.length}: ${strategy}${target ? ` “${target}”` : ""} → ${ok ? "✓" : "✗"} ${ok ? "it worked" : why}`, ok ? "ok" : "warn", pic.file, more);
-      if (ok) this.log(`✓ ${step.describe}`, "ok", pic.file, { why: `fixed it myself (${strategy}${target ? ` “${target}”` : ""}): ${v!.why}${pic.note ? `; ${pic.note}` : ""}`, how: more!.how, by: more!.by });
+      if (ok) {
+        this.log(`✓ ${step.describe}`, "ok", pic.file, { why: `fixed it myself (${strategy}${target ? ` “${target}”` : ""}): ${v!.why.replace(/[.\s]+$/, "")}${pic.note ? `; ${pic.note}` : ""}`, how: more!.how, by: more!.by });
+        this.decide(`“${step.describe.replace(/[.\s]+$/, "")}”: ${d.say.replace(/[.\s]+$/, "").toLowerCase()}${t?.name ? ` (“${t.name}”)` : ""}, so I ${strategy}${target ? ` “${target}”` : ""}. The page proved it: ${v!.why.replace(/[.\s]+$/, "")}.`);
+      }
       return ok;
     };
     const dom = async () => (await this.locate(raw, step).catch(() => null))?.loc ?? null;
@@ -1044,6 +1065,7 @@ export class Runner {
     }
     this.lastTried = tried.map((a) => `${a.strategy}${a.target ? ` “${a.target}”` : ""}`).join("; ");
     this.log(`Out of ideas for "${step.describe}" after ${tried.length} ${tried.length === 1 ? "try" : "tries"}.`, "warn");
+    this.decide(`Stopped at “${step.describe.replace(/[.\s]+$/, "")}”: ${d.say.replace(/[.\s]+$/, "").toLowerCase()}, and none of my ${tried.length} ideas worked without doing something I shouldn't.`);
     return false;
   }
 
@@ -1537,6 +1559,7 @@ Reply with only JSON: {"fit": [numbers], "why": "one short sentence"}`)], "match
     await this.page.waitForLoadState("load").catch(() => {});
     it.vars.matched = e.name;
     this.log(`Matched “${it.label}” to “${e.name}”: ${r.why}`, "ok", (await this.shot()).file, { why: r.why });
+    this.decide(`Matched “${it.label}” to “${e.name}”: ${r.why.replace(/[.\s]+$/, "")}.`);
   }
 
   /** Every value that will be typed is read a second time, on its own (Muse Spark Open when its key is set; else a

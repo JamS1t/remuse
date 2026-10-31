@@ -87,6 +87,9 @@ try {
   check("the task keeps a target that works, never an unproven guess, and says so only when it's saved", ["Add or create", "Add attachment"].includes(s2?.name) && (!said || (newer && said.includes(`“${s2.name}”`))), `${JSON.stringify(s2)} newSpecId=${newer} said=${said}`);
   const healed = (r1.items?.[0]?.log ?? []).find((l: any) => /^✓ Open the attach menu/.test(l.msg));
   check("the fix's proof picture has what it used outlined by SAM 3.1", !!healed?.shot && /SAM 3\.1 (outlined it|unavailable|found no edges)/.test(healed?.why ?? ""), JSON.stringify(healed));
+  const healLines = (r1.items?.[0]?.log ?? []).filter((l: any) => /^(Working it out|Idea \d)/.test(l.msg));
+  check("the working-it-out lines are marked for the live view, each proven try with its proof", healLines.length >= 2 && healLines.every((l: any) => l.kind === "heal") && healLines.filter((l: any) => l.level === "ok").every((l: any) => !!l.how), JSON.stringify(healLines.map((l: any) => [l.msg.slice(0, 40), l.kind, l.how])));
+  check("the run lists what it decided and why", (r1.decisions ?? []).some((d: string) => /Add attachment/.test(d) && /Add or create|isn't on the page/.test(d)), JSON.stringify(r1.decisions));
   const ideas = m1.filter((m: string) => /^Idea \d+: /.test(m)).map((m: string) => m.replace(/^Idea \d+: /, "").split(" → ")[0]);
   check("no idea is tried twice", new Set(ideas).size === ideas.length, JSON.stringify(ideas));
 

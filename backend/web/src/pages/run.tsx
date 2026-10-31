@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import { Check, CircleAlert, LoaderCircle, Square } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -90,6 +90,12 @@ export function RunPage({ id }: { id: string }) {
         </section>
       ) : null}
       {r.pending ? <div className="mb-6"><PendingCard key={`${r.pending.kind}-${r.pending.item}-${r.pending.shot}`} p={r.pending} r={r} file={file} busy={!!busy} answer={answer} /></div> : null}
+      {r.decisions?.length ? (
+        <section className="glass mb-6 rounded-2xl px-5 py-4">
+          <h2 className="text-[13px] font-medium">What I decided on my own, and why</h2>
+          <ul className="mt-2 space-y-1.5 text-[13.5px] leading-snug">{r.decisions.map((d, k) => <li key={k}>{d}</li>)}</ul>
+        </section>
+      ) : null}
       {r.heals.length || r.learned.length ? (
         <section className="glass mb-6 rounded-2xl px-5 py-4">
           <h2 className="text-[13px] font-medium">Learned during this run</h2>
@@ -182,8 +188,14 @@ function ItemDetail({ it, file, choices, live, latest }: { it: Item; file: (f: s
             if (msg.startsWith("Update: ") || (!showDecision && msg.startsWith("Decision: "))) return null;
             const read = /^(\w+) = (.+?)( \(computed\))?(: .*)?$/.exec(msg);
             const label = msg.replace(/ \(checked on screen: .*\)$/, "");
+            // Working a problem out: those lines sit together, set in, under their own heading.
+            const heal = l.kind === "heal";
+            const said = heal ? label.replace(/^Working it out: /, "") : label;
+            const opens = heal && it.log[k - 1]?.kind !== "heal";
             return (
-              <li key={k} className="grid grid-cols-[20px_minmax(0,1fr)_auto_48px] items-start gap-3 px-5 py-2.5 text-[13.5px]">
+              <Fragment key={k}>
+              {opens ? <li className="bg-white/[0.03] px-5 pt-2.5 pb-0.5 text-[12px] font-medium text-muted-foreground">Working it out</li> : null}
+              <li className={cn("grid grid-cols-[20px_minmax(0,1fr)_auto_48px] items-start gap-3 px-5 py-2.5 text-[13.5px]", heal && "bg-white/[0.03] pl-8")}>
                 <span className="pt-0.5">
                   {l.level === "warn" || l.level === "error" ? <CircleAlert className={cn("size-3.5", l.level === "error" ? "text-destructive" : "text-warn")} />
                     : l.level === "ok" ? <Check className="size-3.5 text-ok" /> : <span className="mt-1.5 ml-1 block size-1 rounded-full bg-muted-foreground/60" />}
@@ -192,13 +204,14 @@ function ItemDetail({ it, file, choices, live, latest }: { it: Item; file: (f: s
                   <span className="min-w-0"><span className="text-muted-foreground">{nice(read[1])}</span> {read[2] === "null" ? <span className="ml-1 text-muted-foreground">{read[4] ? read[4].slice(2) : "none"}</span> : <span className="ml-1 font-mono text-[13px]">{JSON.parse(JSON.stringify(read[2])).replace(/^"|"$/g, "")}</span>}</span>
                 ) : (
                   <span className="min-w-0">
-                    <span className={cn(l.level === "error" && "text-destructive", l.level === "warn" && "text-warn")}>{label}</span>
+                    <span className={cn(l.level === "error" && "text-destructive", l.level === "warn" && "text-warn")}>{said}</span>
                     {l.why ? <span className="mt-0.5 block text-[12.5px] leading-snug text-muted-foreground">{l.how === "screen" ? `Looked at the screen${l.by ? ` (${l.by})` : ""}: ` : l.how === "page" ? `Checked on the page${l.by ? ` (and by ${l.by})` : ""}: ` : ""}{l.why}</span> : null}
                   </span>
                 )}
                 {l.shot ? <Shot src={file(l.shot)} alt={label} className="w-20 sm:w-24" /> : <span />}
                 <span className="pt-0.5 text-right font-mono text-[11.5px] text-muted-foreground">{timecode(l.at - it.log[0].at)}</span>
               </li>
+              </Fragment>
             );
           }) : <li className="px-5 py-4 text-muted-foreground">Not started yet.</li>}
         </ol>

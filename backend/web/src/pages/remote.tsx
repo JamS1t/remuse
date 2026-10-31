@@ -102,12 +102,15 @@ export function Remote() {
 
   const done = live ? live.items.filter((i) => ["done", "skipped", "failed"].includes(i.status)).length : 0;
   const practicing = live?.mode === "practice";
+  const latest = live?.items[live.current]?.log.at(-1);
+  const healing = latest?.kind === "heal" ? latest.msg : null; // working a problem out right now
   const head =
     state === "working" && practicing ? { hi: "Practicing", big: "Trying it once on your example", sub: live!.items[0]?.label ?? "Nothing irreversible: I stop before it." } :
     state === "watching" ? { hi: `Watching · ${String(Math.floor(since / 60)).padStart(2, "0")}:${String(since % 60).padStart(2, "0")}`, big: "Do it once. Tell me why as you go." }
     : state === "waiting" ? { hi: live!.pending!.kind === "plan" ? `Looked at all ${live!.items.length}, did nothing yet` : live!.phase === "plan" ? `Looking first · ${live!.items.filter((i) => i.status === "planned").length} of ${live!.items.length}` : `Working · ${done} of ${live!.items.length}`, big: live!.pending!.kind === "approval" ? "I need your OK" : live!.pending!.kind === "ask" ? "I have a question" : live!.pending!.kind === "plan" ? "Here's my plan" : "Your turn in the browser" }
     : state === "thinking" ? { hi: learning!.title || "New task", big: "Thinking…", sub: STAGE[learning!.learnStage!] }
     : state === "working" && live!.phase === "plan" ? { hi: `Looking first · ${live!.items.filter((i) => i.status === "planned").length} of ${live!.items.length}`, big: "Deciding what to do with each", sub: live!.items[live!.current]?.label }
+    : state === "working" && healing ? { hi: "Working it out", big: healing.replace(/^Working it out: /, ""), sub: live!.items[live!.current]?.label }
     : state === "working" ? { hi: live!.items[live!.current] ? "Working on" : "Starting", big: `${done} of ${live!.items.length} done`, sub: live!.items[live!.current]?.label }
     : state === "done" ? { hi: "Learned", big: fresh!.title || "Your task" }
     : rec?.waitingForMic ? { hi: "One thing first", big: "Allow the microphone", sub: "In the tab that opened. I start recording right after." }
