@@ -436,8 +436,13 @@ function TaskRow({ t, schedule, onSchedule }: { t: Task; schedule: Schedule | nu
 }
 
 /** `top`: just the "Use my login" button, shown first. Otherwise: the connected sites list. */
+const isGoogle = (s?: string | null) => !!s && /^(google[.][a-z.]+|youtube[.]com|gmail[.]com|blogger[.]com)$/.test(s);
 function Sites({ top = false }: { top?: boolean }) {
   const tabTick = useTabChanges();
+  // Google is never copied: you sign in once in Remuse's own browser, and the Agent says whether that worked. After
+  // pressing the button it keeps asking until the sign-in shows up.
+  const [waitGoogle, setWaitGoogle] = useState(false);
+  const { data: g } = useApi<{ signedIn: boolean | null }>(inPanel ? "/logins/google" : null, waitGoogle ? 4000 : 0, (d) => waitGoogle && !d.signedIn);
   const [list, setList] = useState<string[] | null>(null);
   const [tab, setTab] = useState<{ site: string | null } | null>(null);
   const [show, setShow] = useState(false);
@@ -448,29 +453,35 @@ function Sites({ top = false }: { top?: boolean }) {
   const here = tab?.site;
   const connect = () => run("connect", async () => {
     const r = await ext<{ signin?: boolean }>("connect");
-    if (r?.signin) toast("Sign in to Google in the window that opened, then close it. Google sees it as a new device, so nothing else gets signed out.", { duration: 12000 });
+    if (r?.signin) { setWaitGoogle(true); toast("Sign in to Google in the window that opened, then close it. Google sees it as a new device, so nothing else gets signed out.", { duration: 12000 }); }
     else toast.success(`Connected ${here}. I'll use your login there.`);
     await load();
   });
   const drop = (s: string) => run(s, async () => { await ext("disconnect", { site: s }); await load(); });
-  if (top) return here && list && !list.includes(here) ? (
+  if (top) return here && list && (isGoogle(here) ? !!g && g.signedIn !== true : !list.includes(here)) ? (
         <button type="button" onClick={connect} disabled={!!busy} className="glow-edge flex w-full items-center gap-3 rounded-2xl px-4 py-3 text-left disabled:opacity-60">
           <Globe className="size-4 text-live" />
-          <span className="min-w-0 flex-1"><span className="block font-medium">Use my login on {here}</span><span className="block text-[12.5px] text-muted-foreground">So I can work there, even with Chrome closed</span></span>
+          <span className="min-w-0 flex-1"><span className="block font-medium">{isGoogle(here) ? "Sign in to Google for Remuse" : `Use my login on ${here}`}</span><span className="block text-[12.5px] text-muted-foreground">{isGoogle(here) ? "Once, so I can work on Google sites with Chrome closed. In Chrome I already use your login." : "So I can work there, even with Chrome closed"}</span></span>
           {busy === "connect" ? <LoaderCircle className="size-4 animate-spin" /> : null}
         </button>
       ) : null;
   return (
     <section>
       <button type="button" onClick={() => setShow((s) => !s)} className="flex w-full items-center gap-1 px-1 text-[13px] font-medium text-muted-foreground hover:text-foreground" aria-expanded={show}>
-        Connected sites{list?.length ? ` · ${list.length}` : ""}<ChevronDown className={cn("ml-auto size-4 transition-transform", show && "rotate-180")} />
+        Connected sites{list ? ` · ${list.length + (g?.signedIn ? 1 : 0)}` : ""}<ChevronDown className={cn("ml-auto size-4 transition-transform", show && "rotate-180")} />
       </button>
       {show ? (
         <div className="mt-2">
           <p className="mb-2 px-1 text-[12.5px] text-muted-foreground">I use the login you already have on these. It stays on this computer.</p>
-          {list?.length ? (
+          {list?.length || g?.signedIn ? (
             <ul className="glass divide-y divide-rule overflow-hidden rounded-2xl">
-              {list.map((s) => (
+              {g?.signedIn ? (
+                <li className="flex items-center gap-2 px-4 py-2.5">
+                  <Globe className="size-3.5 text-muted-foreground" /><span className="font-medium">Google</span>
+                  <span className="ml-auto text-[12px] text-muted-foreground">YouTube, Gmail, Sheets: signed in for Remuse</span>
+                </li>
+              ) : null}
+              {(list ?? []).map((s) => (
                 <li key={s} className="flex items-center gap-2 px-4 py-2.5">
                   <Globe className="size-3.5 text-muted-foreground" /><span className="font-medium">{s}</span>
                   <Button size="xs" variant="ghost" className="ml-auto text-muted-foreground" disabled={busy === s} onClick={() => drop(s)}>Disconnect</Button>
