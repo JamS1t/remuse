@@ -717,7 +717,9 @@ export class Runner {
         // A practice never waits on the person: whatever is in the way is what it reports.
         if (this.practicing) {
           if (await this.onSignInPage()) throw new Error(`a sign-in page is in the way (${new URL(this.page.url()).hostname}); sign in there once, then practice again`);
-          throw e;
+          // Said out loud in the review: the step, in plain words, not the browser library's error.
+          const m = (e as Error).message.split("\n")[0];
+          throw new Error(`at "${s.describe}", ${/locator\.|page\.|Timeout \d+ms|<\w+>|Error:/.test(m) ? "the page didn't let me do it" : m}`);
         }
         // A sign-in page in the way: hidden or not, pause and let the person sign in once in plain Chrome.
         if (!this.stopped && !this.inChrome && (await this.onSignInPage())) {
@@ -961,13 +963,16 @@ export class Runner {
 
   // DOM first (role + name, then the recorded selector if it still points at the same thing), then vision.
   private async locate(raw: Step, step: Step): Promise<{ loc?: Locator; point?: { x: number; y: number }; healedName?: string; shot?: string }> {
-    const t = step.target!;
+    // Google Sheets' Name Box: no label to find it by, but always this id (tasks learned before it was added included).
+    const t = !step.target!.selector && /^name box$/i.test(step.target!.name ?? "") ? { ...step.target!, selector: "#t-name-box" } : step.target!;
     if (t.role && t.name) {
       const l = this.page.getByRole(t.role as any, { name: t.name, exact: !t.fuzzy });
       if ((await l.count()) === 1 && (await l.isVisible())) return { loc: l };
     }
     if (t.selector) {
       const l = this.page.locator(t.selector);
+      // An element id ("#t-name-box") is the page's own fixed handle: no label check needed.
+      if (/^#[\w-]+$/.test(t.selector) && (await l.count()) === 1 && (await l.isVisible())) return { loc: l };
       if ((await l.count()) === 1 && (await l.isVisible())) {
         const name = await l.evaluate((el: any) => (el.getAttribute("aria-label") || el.getAttribute("placeholder") || el.innerText || el.value || "").trim());
         // A selector that now points at a differently named element is the wrong element (layout changed).
@@ -1020,12 +1025,16 @@ export class Runner {
       if (!el) return null;
       const tag = el.tagName.toLowerCase();
       const role = el.getAttribute("role") || (tag === "a" ? "link" : tag === "button" || (el as HTMLInputElement).type === "submit" ? "button" : "textbox");
-      const name = (el.getAttribute("aria-label") || el.getAttribute("placeholder") || el.innerText || (el as HTMLInputElement).value || "").replace(/\s+/g, " ").trim();
-      return { role, name };
+      // Not its value: what's typed in a box ("A1", a search) changes, so it's no name to find it by next time.
+      const name = (el.getAttribute("aria-label") || el.getAttribute("placeholder") || (tag === "input" || tag === "textarea" ? "" : el.innerText) || "").replace(/\s+/g, " ").trim();
+      const editable = tag === "input" || tag === "textarea" || el.isContentEditable || ["textbox", "searchbox", "combobox"].includes(el.getAttribute("role") ?? "");
+      return { role, name, editable };
     }, point);
     // The evidence: every SAM 3.1 box for this kind of element, Muse Spark's pick, and the one it will use.
     const seen = await this.marked([...segs.slice(0, 40).map((b) => ({ box: b, kind: "sam" as const })), { box, kind: "spark" }, { box: use, kind: "pick", label: snapped ? "Muse Spark + SAM 3.1" : "Muse Spark" }]);
     const how = { how: "screen" as const, why: `Muse Spark pointed at it on a screenshot${segs.length ? `; SAM 3.1 outlined ${segs.length} ${segs.length === 1 ? kind : kind === "text box" ? "text boxes" : `${kind}s`}${snapped ? " and gave its exact edges" : ", none of them under that spot, so I went by Muse Spark's box"}` : ""}` };
+    // Something to type into must take typing: a toolbar or a menu is the wrong thing, whatever its label says.
+    if (step.do === "fill" && found && !found.editable) throw new Error(`can't find "${t.name}" to type into (the closest thing on the screen, the ${found.role} "${found.name}", can't take typing)`);
     if (!found?.name) { this.log(`Found the ${kind} by looking`, "ok", seen.file, how); return { point, shot: seen.file }; }
     const loc = this.page.getByRole(found.role as any, { name: found.name, exact: true });
     const healedName = found.name;

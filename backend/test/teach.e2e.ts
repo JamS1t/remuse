@@ -65,6 +65,8 @@ try {
   await side.setViewportSize({ width: 400, height: 860 });
   await side.goto(`chrome-extension://${extId}/sidepanel.html`);
   const ui = side.frameLocator("#ui");
+  // What the sidebar asks the Agent to do: printed, so a failing review check can be read from the log.
+  side.on("request", (r) => { if (r.method() !== "GET" && /practice|say-text|schedules|feedback/.test(r.url())) console.log("   sidebar", new Date().toISOString().slice(11, 19), r.method(), r.url().replace(/^https?:\/\/[^/]+/, "")); });
   await ui.getByRole("button", { name: /Stop/ }).waitFor({ timeout: 15000 }).catch(() => {});
   check("Stop and the voice hint are on screen", await ui.getByRole("button", { name: /Stop/ }).isVisible().catch(() => false) && await ui.getByText(/say .I.m done./i).isVisible().catch(() => false));
   check("a Cancel is on screen while teaching", await ui.getByRole("button", { name: "Cancel" }).isVisible().catch(() => false));
@@ -119,6 +121,28 @@ try {
   check("after learning, the review shows the plan and waits for you", await ui.getByRole("button", { name: /Looks right, try it once/ }).isVisible().catch(() => false) && await ui.getByText(/what I'll do/i).isVisible().catch(() => false) && await ui.getByRole("button", { name: /Type instead/ }).isVisible().catch(() => false) && await ui.getByRole("button", { name: /Remove task/ }).isVisible().catch(() => false) && await ui.getByRole("button", { name: "Close" }).isVisible().catch(() => false));
   const shot2 = join(process.env.SHOTS ?? data, "teach-review.png");
   await side.screenshot({ path: shot2 }); console.log("   screenshot:", shot2);
+
+  // Stop listening, then type "can you test it again?": the words are understood like speech (it practices, no new
+  // version), and the screen keeps saying the mic is off, even after the practice reports back.
+  // The test Chrome's mic opens slowly and sometimes not at all. Its fake mic loops the demo ("Okay, that's it."),
+  // which the review would hear as "looks good", so the mic must be off before going on.
+  const stopBtn = ui.getByRole("button", { name: "Stop listening" });
+  await Promise.race([stopBtn.waitFor({ timeout: 30000 }), ui.getByRole("button", { name: "Listen again" }).waitFor({ timeout: 30000 })]).catch(() => {});
+  if (await stopBtn.isVisible().catch(() => false)) await stopBtn.click();
+  await ui.getByText("Not listening").waitFor({ timeout: 5000 }).catch(() => {});
+  check("after Stop listening, it says it isn't listening", await ui.getByText("Not listening").isVisible().catch(() => false));
+  const versions = (await get(`/sessions/${recId}`)).specs.length;
+  await ui.getByRole("button", { name: /Type instead/ }).click();
+  await ui.getByRole("textbox").fill("can you test it again?");
+  await ui.getByRole("textbox").press("Enter");
+  let pr: any = null;
+  for (let i = 0; i < 90; i++) { pr = ((await get("/tasks")) as any[]).find((t) => t.sessionId === recId)?.practice; if (pr && pr.status !== "starting" && pr.status !== "running") break; await sleep(2000); }
+  check("a typed \"can you test it again?\" practices and makes no new version", !!pr && (await get(`/sessions/${recId}`)).specs.length === versions, JSON.stringify(pr)?.slice(0, 300));
+  await ui.getByText("Not listening").waitFor({ timeout: 30000 }).catch(() => {});
+  const heading = await ui.locator("h1").first().textContent().catch(() => null);
+  const shot3 = join(process.env.SHOTS ?? data, "teach-after-practice.png");
+  await side.screenshot({ path: shot3 }); console.log("   screenshot:", shot3);
+  check("after the practice reports back, the mic is still off and the screen says so", heading === "Not listening", `heading: ${heading}; mic: ${JSON.stringify((await call("status")).listening ?? null)}`);
 
   // A cough or a click on its own: nothing is heard, nothing changes.
   const s2 = await post("/sessions", { title: "", startedAt: Date.now() });

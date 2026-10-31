@@ -46,6 +46,12 @@ export function readback(spec: Spec): { plan: Line[]; questions: Line[]; steps: 
     else if (r.said) plan.push({ text: `If ${sentence(r.said)}, I'll ${then}.` });
     else plan.push({ text: `If ${sentence(cond.replaceAll("_", " "))}, I'll ${then}.` });
   }
+  // A schedule heard in the demo is only asked for; the review sets it up when you say it looks right.
+  const s = spec.schedule;
+  if (s?.everyMinutes || s?.time) {
+    const when = s.said ?? (s.everyMinutes ? (s.everyMinutes === 60 ? "every hour" : `every ${s.everyMinutes} minutes`) : `at ${s.time}`);
+    plan.push({ text: `You said "${sentence(when)}". Once it looks right, I'll repeat it on that schedule, even with Chrome closed.` });
+  }
   const questions = (spec.questions ?? []).map((q) => ({ text: q.quote ? `One thing: you said "${sentence(q.quote)}". ${q.text}` : q.text, question: q.id }));
   return { plan, questions, steps };
 }

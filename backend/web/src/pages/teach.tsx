@@ -17,7 +17,7 @@ type Status = {
 export type TeachTask = { sessionId: string; specId?: number; title?: string; learnStage?: string | null; learnError?: string | null; practice?: PracticeState | null };
 type Ev = SessionFull["events"][number] & { targets?: { label?: string; text?: string }[] };
 type Line = { text: string; step?: string; question?: string };
-type Heard = { n: number; at: number; text: string; intent: string; specId?: number; changes?: string[]; schedule?: object; speak?: string[]; answered?: string };
+type Heard = { n: number; at: number; text: string; intent: string; specId?: number; changes?: string[]; schedule?: object; speak?: string[]; answered?: string; error?: string };
 
 const LEARNING = ["listening", "understanding", "building"];
 const STAGE: Record<string, string> = {
@@ -224,7 +224,9 @@ function Notes({ cards, events, recording }: { cards: Card[]; events: Ev[]; reco
   );
 }
 
-type Phase = "reading" | "asking" | "listening" | "practicing" | "paused";
+// Where the review is. Whether the mic is on is `listening`, not a phase: a reply that finishes after you tapped
+// Stop listening must not make the screen say "Listening" again.
+type Phase = "reading" | "asking" | "listening" | "practicing";
 
 /** The review: Remuse reads its plan aloud, asks what it wasn't sure of one question at a time, and listens. You
  *  answer or say what to change, and it says what it changed. "Looks good" tries it once on your example, then it
@@ -237,7 +239,7 @@ function Review({ sessionId, task, st, events, onExit }: { sessionId: string; ta
   rbRef.current = rb;
   const [phase, setPhase] = useState<Phase>("reading");
   const [lines, setLines] = useState<Line[]>([]); // what Remuse is saying now, to light up the step it's on
-  const [listening, setListening] = useState(false);
+  const [listening, setListening] = useState<boolean | null>(null); // null until the mic first opens or fails
   const [quietSince, setQuietSince] = useState(Date.now());
   const [practiceRun, setPracticeRun] = useState<string | null>(null);
   const [practiced, setPracticed] = useState(false);
@@ -245,7 +247,6 @@ function Review({ sessionId, task, st, events, onExit }: { sessionId: string; ta
   const [openStep, setOpenStep] = useState<string | null>(null);
   const [typing, setTyping] = useState(false);
   const [text, setText] = useState("");
-  const [note, setNote] = useState<string | null>(null);
   const [confirmRemove, setConfirmRemove] = useState(false);
   const { busy, run } = useAction();
   const since = useRef(Date.now());
@@ -261,7 +262,7 @@ function Review({ sessionId, task, st, events, onExit }: { sessionId: string; ta
     await ext("speak", { lines: ls.map((l) => l.text) }).catch(() => {});
     setLines([]);
   }));
-  const listen = () => ext("listen", { sessionId }).then(() => { setListening(true); setQuietSince(Date.now()); }, (e) => toast(e.message));
+  const listen = () => ext("listen", { sessionId }).then(() => { setListening(true); setQuietSince(Date.now()); }, (e) => { setListening(false); toast(e.message); });
   const ask = async (r: typeof rb) => {
     if (r?.questions.length) { setPhase("asking"); await say([r.questions[0]]); }
     else setPhase("listening");
@@ -295,6 +296,7 @@ function Review({ sessionId, task, st, events, onExit }: { sessionId: string; ta
   }, [task.learnStage]);
 
   const startPractice = () => run("practice", async () => {
+    if (practiceRun) return; // already trying it: "looks good" again mustn't restart it
     if (task.learnStage === "failed") throw new Error(`I couldn't update the task, so I can't try it: ${task.learnError ?? "it didn't build"}. Say what to change, or remove it.`);
     if (task.learnStage !== "ready") { practiceWhenReady.current = true; return; }
     const r = await api<{ id: string }>(`/specs/${specId}/practice`, "POST");
@@ -305,32 +307,46 @@ function Review({ sessionId, task, st, events, onExit }: { sessionId: string; ta
   useEffect(() => {
     if (!practiceRun || p?.runId !== practiceRun || p.status === "starting" || p.status === "running") return;
     setPracticeRun(null); setPracticed(true); ext("mode", { mode: "review" }).catch(() => {});
-    (async () => { await say([{ text: practiceSay(p) }, { text: "Say what to change, or say it looks good." }]); setPhase("listening"); setQuietSince(Date.now()); })();
-  }, [p?.runId, p?.status]);
+    const next = listening ? "Say what to change, or say it looks good." : "Type what to change, or tap Listen again.";
+    (async () => { await say([{ text: practiceSay(p) }, { text: next }]); setPhase("listening"); setQuietSince(Date.now()); })();
+  }, [p?.runId, p?.status, practiceRun]); // practiceRun too: a quick practice can finish before its start call returns
 
   const finish = () => { ext("unlisten").catch(() => {}); ext("hush").catch(() => {}); onExit(); };
   // "Remove the task": throw it away and go back to the dashboard. The mic and the voice stop first.
   const removeIt = () => run("remove", async () => { ext("unlisten").catch(() => {}); ext("hush").catch(() => {}); setListening(false); await removeTask(sessionId, practiceRun); toast("Okay, I threw that task away."); onExit(); });
-  const stopListening = () => { ext("unlisten").catch(() => {}); ext("hush").catch(() => {}); setListening(false); setPhase("paused"); setNote(null); };
+  const stopListening = () => { ext("unlisten").catch(() => {}); ext("hush").catch(() => {}); setListening(false); };
   const showAgain = () => { ext("unlisten").catch(() => {}); ext("hush").catch(() => {}); onExit(); ext("start").catch((e) => toast.error(e.message)); };
-  const approve = () => (practiced ? finish() : startPractice());
+  // The final "looks right": a schedule you asked for in the demo ("every hour") is set up now, unless you set one by voice.
+  const scheduled = useRef(false);
+  const done = () => run("done", async () => {
+    const s = (spec?.spec as { schedule?: { everyMinutes?: number; time?: string; days?: string } } | undefined)?.schedule;
+    if (!scheduled.current && (s?.everyMinutes || s?.time)) {
+      const ok = await api("/schedules", "POST", { specId, everyMinutes: s.everyMinutes, time: s.time, days: s.days }).then(() => true, (e) => { toast.error(`I couldn't set the schedule: ${e.message}`); return false; });
+      if (ok) await say([{ text: "Okay. I'll repeat it on that schedule, even with Chrome closed." }]);
+    }
+    finish();
+  });
+  const approve = () => (practiced ? done() : startPractice());
 
   // What you said, sorted by the Agent (a change, an answer, "looks good", a schedule, "show you again", or not for Remuse).
   const said = useApi<Heard | null>(listening ? `/sessions/${sessionId}/say` : null, listening ? 1000 : 0).data;
   const handled = useRef(0);
-  useEffect(() => {
-    if (!said || said.at < since.current || said.n <= handled.current || said.intent === "thinking") return;
-    handled.current = said.n; setQuietSince(Date.now());
-    const back = (said.speak ?? []).map((t) => ({ text: t }));
+  // Spoken (polled) or typed (answered at once): the same thing happens either way, once.
+  const onSaid = (h: Heard) => {
+    if (h.n <= handled.current || h.intent === "thinking") return;
+    handled.current = h.n; setQuietSince(Date.now());
+    const back = (h.speak ?? []).map((t) => ({ text: t }));
     (async () => {
-      if (said.intent === "change" || said.intent === "answer") { wantSpec.current = said.specId ?? (rbRef.current?.specId ?? specId) + 1; await say(back); maybeAsk(); }
-      else if (said.intent === "approve" || said.intent === "run") { if (practiced && said.intent === "approve") return finish(); await say(back); startPractice(); }
-      else if (said.intent === "schedule" && said.schedule) { await api("/schedules", "POST", { specId, ...said.schedule }).catch((e) => toast.error(e.message)); await say(back); }
-      else if (said.intent === "teach") showAgain();
-      else if (said.intent === "discard") { await say(back); removeIt(); }
-      else if (said.intent === "stop") { await say(back); stopListening(); }
+      if (h.intent === "change" || h.intent === "answer") { wantSpec.current = h.specId ?? (rbRef.current?.specId ?? specId) + 1; await say(back); maybeAsk(); }
+      else if (h.intent === "approve" || h.intent === "run") { if (practiced && h.intent === "approve") return done(); await say(back); startPractice(); }
+      else if (h.intent === "schedule" && h.schedule) { await api("/schedules", "POST", { specId, ...h.schedule }).then(() => { scheduled.current = true; }, (e) => toast.error(e.message)); await say(back); }
+      else if (h.intent === "teach") showAgain();
+      else if (h.intent === "discard") { await say(back); removeIt(); }
+      else if (h.intent === "stop") { await say(back); stopListening(); }
+      else if (h.error) toast.error(`I didn't catch that: ${h.error}`);
     })();
-  }, [said?.n, said?.intent]);
+  };
+  useEffect(() => { if (said && said.at >= since.current) onSaid(said); }, [said?.n, said?.intent]);
   const thinking = said?.intent === "thinking" && said.at >= since.current;
 
   // Two quiet minutes: stop listening, and say so.
@@ -344,25 +360,27 @@ function Review({ sessionId, task, st, events, onExit }: { sessionId: string; ta
   // Leaving the review: the mic and the voice go too.
   useEffect(() => () => { ext("unlisten").catch(() => {}); ext("hush").catch(() => {}); }, []);
 
+  // Typed words are sorted like spoken ones: "can you test it again?" tries it, an answer answers, the rest is a change.
   const send = () => run("send", async () => {
-    const q = phase === "asking" ? rb?.questions[0]?.question : undefined;
-    const r = await api<{ specId: number; changes: string[] }>(`/specs/${specId}/feedback`, "POST", { text, practice: false, answered: q });
-    setText(""); setTyping(false); wantSpec.current = r.specId;
-    await say((r.changes.length ? r.changes : ["I changed it."]).map((t) => ({ text: t })));
-    maybeAsk();
+    const h = await api<Heard>(`/sessions/${sessionId}/say-text`, "POST", { text });
+    setText(""); setTyping(false);
+    onSaid(h);
   });
 
   const speakingNow = st?.speaking ? lines[st.speaking.line] : undefined;
   const building = task.learnStage === "building" || thinking;
   const question = phase === "asking" ? rb?.questions[0] : undefined;
+  const asked = question ? <span className="text-[16px] leading-snug text-foreground">{question.text.replace(/^One thing: you said "[^"]*"\. /, "")}</span> : undefined;
   const view: { orb: OrbState; word: string; sub?: ReactNode; shimmer?: boolean } =
     task.learnStage === "failed" ? { orb: "idle", word: "I couldn't change it", sub: task.learnError ?? "Say what to change, or remove it." }
     : building ? { orb: "thinking", word: "Changing it", shimmer: true, sub: said?.text ? <q className="font-script [quotes:'“''”']">{said.text}</q> : undefined }
     : phase === "practicing" ? { orb: "working", word: "Practicing", sub: "Once, on your example. Nothing I'd send or pay goes out." }
     : st?.speaking && phase === "reading" ? { orb: "working", word: "Here's my plan" }
-    : question ? { orb: st?.speaking ? "working" : "watching", word: "One question", sub: <span className="text-[16px] leading-snug text-foreground">{question.text.replace(/^One thing: you said "[^"]*"\. /, "")}</span> }
-    : phase === "paused" ? { orb: "idle", word: "Not listening", sub: note ?? undefined }
+    // The mic is off: say so above everything else; an open question still shows, to answer by typing.
+    : listening === false ? { orb: st?.speaking ? "working" : "idle", word: "Not listening", sub: asked ?? "Tap Listen again, or type instead." }
+    : question ? { orb: st?.speaking ? "working" : "watching", word: "One question", sub: asked }
     : st?.speaking ? { orb: "working", word: "Speaking" }
+    : listening === null ? { orb: "idle", word: "Opening the mic" }
     : st?.hearing ? { orb: "watching", word: "Hearing you" }
     : { orb: "watching", word: "Listening", sub: "Tell me what to change, or say “looks good”." };
 
@@ -387,8 +405,8 @@ function Review({ sessionId, task, st, events, onExit }: { sessionId: string; ta
           </Button>
           <div className="mt-2 flex flex-wrap items-center justify-center gap-1 text-[13px]">
             <Button variant="ghost" size="sm" className="rounded-full text-muted-foreground" onClick={showAgain}>Show you again</Button>
-            {listening ? <Button variant="ghost" size="sm" className="rounded-full text-muted-foreground" onClick={() => { ext("unlisten").catch(() => {}); ext("hush").catch(() => {}); setListening(false); setPhase("paused"); setNote(null); }}>Stop listening</Button>
-              : <Button variant="ghost" size="sm" className="rounded-full text-muted-foreground" onClick={() => { setNote(null); setPhase(question ? "asking" : "listening"); listen(); }}>Listen again</Button>}
+            {listening === null ? null : listening ? <Button variant="ghost" size="sm" className="rounded-full text-muted-foreground" onClick={stopListening}>Stop listening</Button>
+              : <Button variant="ghost" size="sm" className="rounded-full text-muted-foreground" onClick={listen}>Listen again</Button>}
             <Button variant="ghost" size="sm" className="rounded-full text-muted-foreground" onClick={() => setTyping((x) => !x)}>Type instead</Button>
             {/* Two taps, so a stray click never throws a task away. Saying "remove the task" does it too. */}
             <Button variant="ghost" size="sm" className={cn("rounded-full text-muted-foreground", confirmRemove && "text-destructive")} disabled={busy === "remove"}
@@ -399,10 +417,10 @@ function Review({ sessionId, task, st, events, onExit }: { sessionId: string; ta
           {typing ? (
             <div className="mt-2">
               <Textarea autoFocus className="min-h-16 text-[14px]" value={text} onChange={(e) => setText(e.target.value)} disabled={busy === "send"}
-                placeholder={question ? "Your answer" : "What should change, like “take the views from the Reach tab”"}
+                placeholder={question ? "Your answer" : "What should change, or “try it again”"}
                 onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && text.trim()) { e.preventDefault(); send(); } }} />
               <Button size="sm" variant="outline" className="mt-2 w-full rounded-full" onClick={send} disabled={!text.trim() || !!busy}>
-                {busy === "send" ? <><LoaderCircle className="animate-spin" />Changing it…</> : question ? "Answer" : "Change it"}
+                {busy === "send" ? <><LoaderCircle className="animate-spin" />Thinking…</> : question ? "Answer" : "Send"}
               </Button>
             </div>
           ) : null}

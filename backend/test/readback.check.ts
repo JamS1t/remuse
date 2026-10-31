@@ -30,6 +30,10 @@ check("a do-it-every-time rule isn't read as an 'If'", !doIt.plan.some((l) => /^
 let odd: ReturnType<typeof readback> | null = null;
 try { odd = readback(spec(2, { rules: [{ then: "skip" }, { if: "late", then: undefined }] } as any)); } catch { /* the review would never start */ }
 check("a rule with no condition or outcome doesn't stop the readback", !!odd && odd.plan[0].text === "Here's my plan.", odd?.plan.map((l) => l.text));
+// A schedule heard in the demo ("every hour") is said back, with when it starts: the review sets it up on "looks right".
+const hourly = readback(spec(2, { schedule: { everyMinutes: 60, said: "every hour" } } as any));
+check("a schedule you asked for is read back", hourly.plan.at(-1)?.text === `You said "every hour". Once it looks right, I'll repeat it on that schedule, even with Chrome closed.`, hourly.plan.map((l) => l.text));
+check("no schedule asked: none read", !readback(spec(2)).plan.some((l) => /schedule/i.test(l.text)));
 
 // James's receipts plan: the spreadsheet keypresses (Name Box, Ctrl+End, Home, Down, Tab, Enter) are how a step is
 // done, not steps of their own. Read and shown as the steps a person would name.

@@ -17,5 +17,11 @@ check("a wrong value", practiceSay(bad) === "I read views as 2,600, but you saw 
 check("a value it couldn't read", practiceSay(none) === "I couldn't read avg view duration. You saw 3:04.", practiceSay(none));
 check("stopped before something it would send", practiceSay(stopped) === `That worked. I read views 2,607. I stopped before "send the reply"; real runs wait for your OK there.`, practiceSay(stopped));
 
+// A failed step is said in plain words, never as the browser library's error.
+const raw = p({ problem: "locator.fill: Error: Element is not an <input>, <textarea>, <select> or [contenteditable]\nCall log: waiting for getByRole('toolbar')" });
+check("a raw technical error is never read out", !/locator|Error:|<input>|Call log/.test(practiceSay(raw)), practiceSay(raw));
+const named = p({ problem: `at "Go to the next empty row", the page didn't let me do it` });
+check("a failed step is named", practiceSay(named) === `I got stuck at "Go to the next empty row": the page didn't let me do it.`, practiceSay(named));
+
 console.log(fails ? `\n${fails} failed` : "\nall passed");
 process.exit(fails ? 1 : 0);

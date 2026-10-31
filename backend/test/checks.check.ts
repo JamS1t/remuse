@@ -38,5 +38,10 @@ check("a check with {{variables}} is left alone", t("templated") === "{{order}} 
 check("numbers that aren't the demo's data are left alone", t("count") === "Step 2 of 3", t("count"));
 check("this item's own value from the list becomes {{column}}, so the next item's value is checked", t("order") === "Order {{order}} shipped", t("order"));
 
+// Google Sheets' Name Box has no label to find it by: learning gives it the page's fixed id.
+const nb = { ...spec, steps: [{ id: "n1", do: "fill", describe: "Go to A1", value: "A1", target: { role: "textbox", name: "Name Box" } }], outcomes: {} } as unknown as Spec;
+normalize(nb, { id: "t", events: [], turns: [] } as any);
+check("a Name Box step gets Sheets' fixed id", nb.steps[0].target?.selector === "#t-name-box", nb.steps[0].target);
+
 console.log(fails ? `\n${fails} failed` : "\nall passed");
 process.exit(fails ? 1 : 0);

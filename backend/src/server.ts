@@ -254,16 +254,20 @@ const asAnswer = (q: { text: string; step?: unknown }, said: string) => `Q: ${q.
 async function hearSaid(sessionId: string, wav: Uint8Array) {
   if (silent(wav)) return; // nothing said: a model would make words up
   const text = (await transcribe(wav)).transcript.trim();
-  if (!text) return;
+  if (text) await hearText(sessionId, text);
+}
+// What you said or typed in the review, sorted and acted on. Typed words are always for Remuse: "not for me" becomes a change.
+async function hearText(sessionId: string, text: string, typed = false): Promise<Heard> {
   const n = (heard.get(sessionId)?.n ?? 0) + 1;
   heard.set(sessionId, { n, at: Date.now(), text, intent: "thinking" });
   const latest = (db.prepare("SELECT id FROM specs WHERE session_id = ? ORDER BY version DESC LIMIT 1").get(sessionId) as any)?.id;
-  if (!latest) return heard.set(sessionId, { n, at: Date.now(), text, intent: "none" });
+  if (!latest) { heard.set(sessionId, { n, at: Date.now(), text, intent: "none" }); return heard.get(sessionId)!; }
   const row = specRow(latest);
   const set = (h: Omit<Heard, "n" | "at" | "text">) => heard.set(sessionId, { n, at: Date.now(), text, ...h });
   try {
     const open = row.spec.questions?.[0];
     const r = await sortSaid(row.spec, text, open?.text);
+    if (typed && r.intent === "none") r.intent = "change";
     if (r.intent === "answer" && open) {
       const { changes, specId } = await applyFeedback(row, asAnswer(open, text), { practice: false, answered: open.id });
       set({ intent: "answer", changes, specId, answered: open.id, speak: changes.length ? changes : ["Got it."] });
@@ -276,6 +280,7 @@ async function hearSaid(sessionId: string, wav: Uint8Array) {
     else if (r.intent === "schedule") set({ intent: r.intent, schedule: r.schedule, speak: ["Okay, it'll repeat on that schedule."] });
     else set({ intent: r.intent });
   } catch (e) { set({ intent: "none", error: (e as Error).message }); }
+  return heard.get(sessionId)!;
 }
 
 // What a list task has already handled, kept between runs: an hourly inbox task does each email once. Saved as
@@ -791,6 +796,12 @@ async function route(req: IncomingMessage, res: ServerResponse) {
       return send(res, 202, { ok: true });
     }
     if (m === "GET" && p[3] === "say") return send(res, 200, heard.get(id) ?? null);
+    // Typed in the review ("Type instead"): understood like speech, and answered right away.
+    if (m === "POST" && p[3] === "say-text") {
+      const text = String((await json(req)).text ?? "").trim().slice(0, 2000);
+      if (!text) throw new HttpError(400, "type something");
+      return send(res, 200, await hearText(id, text, true));
+    }
     if (m === "GET" && p[3] === "live") return send(res, 200, liveState(id) ?? { turns: [], cards: [], thinking: false, error: null, ending: null });
     if (m === "PUT" && p[3] === "audio") {
       const wav = await body(req);

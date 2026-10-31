@@ -8,7 +8,13 @@ const sentence = (s: string) => s.trim().replace(/[.\s]+$/, "");
 export function practiceSay(p: PracticeState): string {
   const r = p.result;
   if (!r) return p.status === "stopped" ? "The practice stopped before it finished." : "The practice didn't finish.";
-  if (r.problem) return `I got stuck: ${sentence(r.problem)}.`;
+  if (r.problem) {
+    // The step and what went wrong, in words: never the browser library's own error text.
+    const first = r.problem.split("\n")[0];
+    const at = /^at "([^"]+)",\s*(.*)$/.exec(first);
+    if (at) return `I got stuck at "${at[1]}": ${sentence(at[2])}.`;
+    return `I got stuck: ${/locator\.|page\.|Error:|<\w+>|Call log/.test(first) ? "a step didn't work on the page" : sentence(first)}.`;
+  }
   const bad = r.values.find((v) => !v.ok);
   let say =
     bad ? (bad.got == null ? `I couldn't read ${plain(bad.name)}. You saw ${bad.want}.` : `I read ${plain(bad.name)} as ${bad.got}, but you saw ${bad.want}.`)

@@ -78,6 +78,10 @@ try {
   await sleep(3000);
   t2 = (await get("/tasks")).find((x: any) => x.sessionId === s2.id);
   check("in the review, a change starts no practice by itself", t2?.learnStage === "ready" && !t2?.practice, JSON.stringify({ stage: t2?.learnStage, practice: t2?.practice }));
+  // Typed in the review, understood like speech: "can you test it again?" is "try it", not a change to the task.
+  const before = (await get(`/sessions/${s2.id}`)).specs.length;
+  const typed = await post(`/sessions/${s2.id}/say-text`, { text: "can you test it again?" });
+  check("a typed \"can you test it again?\" is taken as try it, not as a change", (typed.intent === "run" || typed.intent === "approve") && (await get(`/sessions/${s2.id}`)).specs.length === before, JSON.stringify(typed));
 } finally {
   agent.kill();
   const failed = results.filter(([, ok]) => !ok);
