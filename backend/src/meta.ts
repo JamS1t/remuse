@@ -121,10 +121,16 @@ export async function sam(image: Uint8Array, phrase: string): Promise<Box[]> {
 export type Turn = { startMs: number; endMs: number; text: string };
 
 // Muse Voice Transcribe takes WAV only: mono, 16-bit, 16 or 24 kHz. Timestamps are per turn.
+// languageBias tells it which languages to expect: English and Tagalog by default, so Taglish isn't heard as
+// Indonesian or Malay. VOICE_LANGUAGES="English, Spanish" changes it; empty leaves it to the model.
+export function transcribeRequest() {
+  const langs = (process.env.VOICE_LANGUAGES ?? "English,Tagalog").split(",").map((x) => x.trim()).filter(Boolean);
+  return { mode: "ENDPOINTING", model: "muse-voice-transcribe-1.0", audioEncoding: "WAV", ...(langs.length ? { languageBias: langs } : {}) };
+}
 export async function transcribe(wav: Uint8Array): Promise<{ transcript: string; turns: Turn[] }> {
   const t0 = Date.now();
   const form = new FormData();
-  form.append("request", new Blob([JSON.stringify({ mode: "ENDPOINTING", model: "muse-voice-transcribe-1.0", audioEncoding: "WAV" })], { type: "application/json" }));
+  form.append("request", new Blob([JSON.stringify(transcribeRequest())], { type: "application/json" }));
   form.append("audio", new Blob([wav], { type: "audio/wav" }), "narration.wav");
   const res = await fetch(`${BASE}/asr/transcribe`, { method: "POST", headers: { Authorization: `Bearer ${key()}` }, body: form });
   const body = await res.text();
