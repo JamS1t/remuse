@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import { askJson, checker, ground, respond, sam, text, png, type Box, type Part } from "./meta.ts";
 import { BUDGET, canRecover, diagnose, firstRung, matchOutcome, movePrompt, parseMove, repeated, unsafe, type Attempt, type Move, type Seen } from "./recover.ts";
 import { shownSteps } from "./readback.ts";
+import type { Fix, FixMove } from "./fixes.ts";
 import { load, same, type Rules } from "./build.ts";
 import type { Spec, Step, Target } from "./understand.ts";
 import { applyLogins } from "./logins.ts";
@@ -71,6 +72,8 @@ export type Run = {
   // the plan, and act only after your Go. `phase` says which pass it's in.
   plan?: boolean; phase?: "plan" | "act";
   checker?: string; // the second model that checks this run's work (Muse Spark Open with a partner key)
+  // Fixes this run worked out or used: proposed (proven on a step), or a learned one that worked, missed, or turned unsafe.
+  fixes?: { item: number; group: string; move: FixMove; outcome: "proposed" | "worked" | "failed" | "dropped"; id?: number }[];
 };
 export type Practice = {
   sameItem: boolean; // found the very item from the demo (else the first one, so values may differ)
@@ -235,6 +238,7 @@ export class Runner {
   files?: { folder: string; name: string }[]; // files that landed in a watched folder together: one item each
   private parked = new Map<number, { page: Page; tabs: Map<string, Page>; tabName: string }>();
   private resuming = false; // finishing a prepared item after your OK
+  fixes: Fix[] = []; // fixes learned on earlier runs of this task, tried first
   private get batch() { return (this.files?.length ?? 0) > 1 && !this.practicing; }
   private get practicing() { return this.run.mode === "practice"; }
   private phase: "all" | "plan" | "act" = "all"; // which pass the current item is in (see runItem)
@@ -811,6 +815,41 @@ export class Runner {
 
   private lastTried = ""; // what the last recovery that ran out of ideas tried, for the report
 
+  /** A fix learned on an earlier run for this step goes first. It passes the same safety rules every time (one that
+   *  now points at something irreversible is dropped, never pressed), and counts only when the page proves it. */
+  private async useLearned(raw: Step): Promise<boolean> {
+    if (!["click", "fill", "press"].includes(raw.do) || gatedStep(raw) || this.practicing || this.stopped) return false;
+    const group = this.groupOf(raw).text;
+    const fix = this.fixes.find((f) => f.group === group && f.state === "learned");
+    if (!fix) return false;
+    if (raw.tab) await this.useTab(raw.tab, true);
+    const step = this.renderStep(raw);
+    const m = fix.move;
+    const record = (outcome: "worked" | "failed" | "dropped") => (this.run.fixes ??= []).push({ item: this.run.current, group, move: m, outcome, id: fix.id });
+    const loc = m.selector ? this.page.locator(m.selector) : m.role && m.name ? this.page.getByRole(m.role as any, { name: m.name, exact: true }) : null;
+    if (!loc || (await loc.count().catch(() => 0)) !== 1 || !(await loc.isVisible().catch(() => false))) { record("failed"); return false; } // not here this time
+    const name = await loc.evaluate((el: any) => (el.getAttribute("aria-label") || el.innerText || "").replace(/\s+/g, " ").trim()).catch(() => "");
+    if (IRREVERSIBLE.test(name)) {
+      record("dropped"); this.fixes = this.fixes.filter((f) => f !== fix);
+      this.log(`Dropped what I learned for "${group}": it now points at “${name}”, which can't be undone.`, "warn");
+      return false;
+    }
+    const before = await this.page.innerText("body").catch(() => "");
+    try {
+      if (raw.do === "click") await loc.click({ timeout: 5000 });
+      else if (raw.do === "fill") await loc.fill(step.value ?? "", { timeout: 5000 });
+      else await loc.press(step.key ?? "Enter", { timeout: 5000 });
+    } catch { record("failed"); return false; }
+    await this.page.waitForLoadState("load").catch(() => {});
+    const v = await this.check(step, undefined, before, { look: true, quiet: true });
+    if (v.result !== "verified") { record("failed"); this.log(`What I learned for "${group}" didn't work this time; doing it the usual way.`, "warn"); return false; }
+    record("worked");
+    const pic = await this.outlined(loc);
+    const when = fix.provenAt ? ` on ${new Date(fix.provenAt).toLocaleDateString("en-PH", { month: "short", day: "numeric" })}` : "";
+    this.log(`✓ ${step.describe}`, "ok", pic.file, { why: `used what I learned${when} (${m.strategy} “${m.name ?? m.selector}”): ${v.why}`, how: v.proof === "none" ? undefined : v.proof, by: v.by });
+    return true;
+  }
+
   /** The proof picture for a fix: the control it used, outlined. The control is known (no model has to point), and
    *  SAM 3.1 gives its exact edges when it can; otherwise its own box is outlined, and the note says which. */
   private async outlined(loc: Locator | null): Promise<{ file: string; note: string }> {
@@ -874,12 +913,11 @@ export class Runner {
       return this.check(step, undefined, before, { look: true, quiet: true });
     };
     // A proven single swap (no earlier try changed the page) becomes the step's target, as a found button does.
-    const keep = (role?: string, name?: string) => {
+    // A proven single swap (no earlier try changed the page) is kept as a fix beside the task, never written into it.
+    const keep = (role?: string, name?: string, id?: string | null, strategy = "clicked") => {
       if (!role || !name || name === t?.name || tried.slice(0, -1).some((a) => a.changed)) return;
-      const from = raw.target?.name ?? "";
-      raw.target = { role, name }; raw.healed = `was "${from}"`;
-      this.heal({ step: step.describe, from, to: name });
-      this.log(`Updated the task: “${name}” does what “${from}” did, proven above. The next ${this.spec.inputs.itemName ?? "item"} uses it directly.`, "ok");
+      (this.run.fixes ??= []).push({ item: this.run.current, group: group.text, move: { strategy, role, name, selector: id && /^[\w-]+$/.test(id) ? `#${id}` : undefined }, outcome: "proposed" });
+      this.log(`I'll remember this: “${name}” does what “${raw.target?.name ?? ""}” did. Once this ${this.spec.inputs.itemName ?? "item"} is done, I'll try it first next time.`, "ok");
     };
     // One try: skipped if already tried; logged as an idea with what the page showed; true when proven.
     const attempt = async (rung: number, strategy: string, target: string | undefined, act: () => Promise<Verdict | null>, used?: Locator | null) => {
@@ -920,7 +958,7 @@ export class Runner {
         ["found it by its words", this.page.getByText(t.name, { exact: true })], ["found it by its label", this.page.getByLabel(t.name)]];
       for (const [how, l] of alts) {
         const loc = await one(l);
-        if (loc && (await isSafe(loc)) && (await attempt(3, how, await nameOf(loc) || t.name, () => finish(loc), loc))) { keep(t.role, await nameOf(loc)); return true; }
+        if (loc && (await isSafe(loc)) && (await attempt(3, how, await nameOf(loc) || t.name, () => finish(loc), loc))) { keep(t.role, await nameOf(loc), await loc.getAttribute("id").catch(() => null), step.do === "fill" ? "typed into" : "clicked"); return true; }
       }
     }
     // 4. A keyboard route the site's plug-in knows for this purpose (Sheets: Ctrl+J to the Name Box).
@@ -984,7 +1022,7 @@ export class Runner {
         }
         return this.check(step, undefined, before, { look: true, quiet: true });
       }, loc);
-      if (ok) { if (m.action === "click" || m.action === "fill") keep(el?.role, el?.name); return true; }
+      if (ok) { if (m.action === "click" || m.action === "fill") keep(el?.role, el?.name, el?.id, m.action === "fill" ? "typed into" : "clicked"); return true; }
     }
     // 6. Last: point at it on the screen (Muse Spark + SAM 3.1), only when nothing on the list fit.
     if (t?.name && tried.length < BUDGET.attempts && Date.now() - t0 < BUDGET.ms && !this.stopped) {
@@ -1016,6 +1054,7 @@ export class Runner {
   /** Run one step. If it gets stuck (sign-in wall, captcha, popup), hand the browser to the person:
    *  they fix it and press Try again, or skip the item. Returns false when the item was skipped. */
   private async step(s: Step, nextTab?: string): Promise<boolean> {
+    if (await this.useLearned(s)) return true;
     for (;;) {
       try { await this.exec(s, nextTab); return true; }
       catch (e) {

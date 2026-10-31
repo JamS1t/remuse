@@ -7,6 +7,7 @@ import { join, dirname, extname } from "node:path";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { silent, transcribe, calls, type Turn } from "./meta.ts";
+import { failed as fixMissed, promote, worked as fixWorked, type Fix } from "./fixes.ts";
 import { coverage } from "./evidence.ts";
 import type { Card } from "./notes.ts";
 import { readback } from "./readback.ts";
@@ -283,6 +284,30 @@ async function hearText(sessionId: string, text: string, typed = false): Promise
   return heard.get(sessionId)!;
 }
 
+// What Remuse worked out itself after a site changed, kept beside the task (never written into what you taught):
+// tried first next time, dropped after two misses in a row or once it points at something irreversible.
+db.exec(`CREATE TABLE IF NOT EXISTS fixes (
+  id INTEGER PRIMARY KEY, session_id TEXT NOT NULL, grp TEXT NOT NULL, move TEXT NOT NULL, state TEXT NOT NULL,
+  fails INTEGER NOT NULL DEFAULT 0, proven_at INTEGER, created_at INTEGER NOT NULL
+)`);
+const fixesFor = (sessionId: string): Fix[] => (db.prepare("SELECT * FROM fixes WHERE session_id = ? ORDER BY id").all(sessionId) as any[])
+  .map((r) => ({ id: r.id, task: r.session_id, group: r.grp, move: JSON.parse(r.move), state: r.state, fails: r.fails, provenAt: r.proven_at ?? undefined }));
+/** A run's fixes, after it ends: proven on an item that finished → learned; a learned one that worked again → kept,
+ *  that missed → counted (dropped at two), that turned unsafe → dropped. Practices learn nothing. */
+function saveFixes(sessionId: string, run: Run) {
+  for (const e of run.fixes ?? []) {
+    const cur = e.id ? fixesFor(sessionId).find((f) => f.id === e.id) : undefined;
+    if (e.outcome === "proposed") {
+      if (run.items[e.item]?.status !== "done") continue; // its step was proven, but the item didn't finish
+      const f = promote({ task: sessionId, group: e.group, move: e.move, state: "proposed", fails: 0 }, true);
+      db.prepare("DELETE FROM fixes WHERE session_id = ? AND grp = ?").run(sessionId, e.group);
+      db.prepare("INSERT INTO fixes (session_id, grp, move, state, fails, proven_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)").run(sessionId, e.group, JSON.stringify(f.move), f.state, f.fails, f.provenAt ?? null, Date.now());
+    } else if (cur && e.outcome === "worked") { const f = fixWorked(cur); db.prepare("UPDATE fixes SET fails = ?, proven_at = ? WHERE id = ?").run(f.fails, f.provenAt ?? null, cur.id!); }
+    else if (cur && e.outcome === "failed") { const f = fixMissed(cur); if (f) db.prepare("UPDATE fixes SET fails = ? WHERE id = ?").run(f.fails, cur.id!); else db.prepare("DELETE FROM fixes WHERE id = ?").run(cur.id!); }
+    else if (cur && e.outcome === "dropped") db.prepare("DELETE FROM fixes WHERE id = ?").run(cur.id!);
+  }
+}
+
 // What a list task has already handled, kept between runs: an hourly inbox task does each email once. Saved as
 // each item finishes (not at the end), so a crash halfway can't make the next run do the same items again.
 db.exec(`CREATE TABLE IF NOT EXISTS handled (
@@ -508,6 +533,7 @@ async function startRun(specId: number, opts: { limit?: number; autoApprove?: bo
   runner.taskKey = row.sessionId;
   runner.example = opts.example;
   runner.files = opts.files;
+  runner.fixes = fixesFor(row.sessionId).filter((f) => f.state === "learned");
   // List tasks leave alone what earlier runs handled, unless you asked to do them again.
   if (row.spec.inputs.source === "list" && !opts.practice && !opts.redo) runner.handled = handledKeys(row.sessionId);
   active = runner;
@@ -519,6 +545,7 @@ async function startRun(specId: number, opts: { limit?: number; autoApprove?: bo
     // A folder run that posted something checks for the next file right away (a batch drops in at once).
     if (opts.fromFolder !== undefined && run.status === "done" && !nothingNew && run.items.every((i) => i.status === "done")) setTimeout(() => folderTick(), 1000);
     if (opts.scheduled && !nothingNew) notify(`Remuse finished: ${row.spec.goal}`.slice(0, 120), `${run.items.filter((i) => i.status === "done").length} of ${run.items.length} done${run.error ? `. Problem: ${run.error}` : ""}`, link);
+    if (run.mode !== "practice") saveFixes(row.sessionId, run);
     if (run.mode === "practice") {
       // A practice that went wrong is worth a word; one that matched shows in the sidebar.
       // ponytail: a practice's heals aren't saved as a new version; the first real run re-finds them
@@ -673,6 +700,7 @@ async function route(req: IncomingMessage, res: ServerResponse) {
     watchFolders();
     return send(res, 200, schedules());
   }
+  if (p[1] === "fixes" && p[2] && m === "DELETE") { db.prepare("DELETE FROM fixes WHERE id = ?").run(Number(p[2])); return send(res, 200, { ok: true }); }
   if (p[1] === "schedules" && p[2] && m === "DELETE") { db.prepare("DELETE FROM schedules WHERE id = ?").run(Number(p[2])); watchFolders(); return send(res, 200, schedules()); }
   // Saved tasks for the sidebar: every recording with its latest Task Spec.
   // The extension writes down every mic drop and reconnect, with the mic's state then (see offscreen.js mend()).
@@ -746,6 +774,8 @@ async function route(req: IncomingMessage, res: ServerResponse) {
     const id = p[2];
     session(id);
     if (m === "GET" && p.length === 3) return send(res, 200, full(id));
+    // What Remuse worked out itself for this task (shown on the task page, each with Undo).
+    if (m === "GET" && p[3] === "fixes") return send(res, 200, fixesFor(id));
     // Start fresh: forget which items this task already handled (the next run does the whole list again).
     if (m === "POST" && p[3] === "forget") { db.prepare("DELETE FROM handled WHERE session_id = ?").run(id); return send(res, 200, { forgotten: true }); }
     // Delete a task: its recording, every spec version, runs and schedule. The UI asks first.

@@ -84,6 +84,7 @@ function TaskCard({ t, schedule, onChange }: { t: Task; schedule: ScheduleRow | 
 export function TaskPage({ id, tab = "overview" }: { id: string; tab?: string }) {
   const { data: tasks, reload } = useApi<Task[]>("/tasks", 3000, () => true);
   const { data: sched, reload: reloadSched } = useApi<ScheduleRow[]>("/schedules");
+  const { data: fixes, reload: reloadFixes } = useApi<{ id: number; group: string; move: { strategy: string; name?: string; selector?: string }; provenAt?: number }[]>(`/sessions/${id}/fixes`);
   const t = tasks?.find((x) => x.sessionId === id);
   const { data: spec } = useApi<SpecRow>(t?.specId ? `/specs/${t.specId}` : null);
   const [editing, setEditing] = useState<null | "schedule" | "delete">(null);
@@ -185,6 +186,19 @@ export function TaskPage({ id, tab = "overview" }: { id: string; tab?: string })
                 <p className="font-medium">Google accounts</p>
                 <p className="mt-1 text-muted-foreground">It acts as the same account you used in your demo, and stops rather than use another.</p>
                 <ul className="mt-2 space-y-1">{Object.entries(t.accounts).map(([site, who]) => <li key={site}><span className="text-muted-foreground">{site}</span> as <span className="font-medium">{who}</span></li>)}</ul>
+              </section>
+            ) : null}
+            {fixes?.length ? (
+              <section className="glass rounded-2xl px-5 py-4 text-[13px]">
+                <p className="font-medium">What Remuse learned</p>
+                <p className="mt-1 text-muted-foreground">Fixes it worked out itself after the site changed, each proven on the page. It tries them first; one that stops working is dropped.</p>
+                <ul className="mt-2 space-y-2">{fixes.map((f) => (
+                  <li key={f.id} className="flex items-start gap-2">
+                    <span className="min-w-0 flex-1"><span className="font-medium">{f.group}</span>: {f.move.strategy} “{f.move.name ?? f.move.selector}”{f.provenAt ? <span className="text-muted-foreground"> · proven {ago(f.provenAt)}</span> : null}</span>
+                    <button type="button" className="shrink-0 text-muted-foreground underline-offset-2 hover:text-foreground hover:underline" disabled={!!busy}
+                      onClick={() => run("unfix", async () => { await api(`/fixes/${f.id}`, "DELETE"); toast("Undone. It goes back to the way you showed it."); reloadFixes(); })}>Undo</button>
+                  </li>
+                ))}</ul>
               </section>
             ) : null}
             <Safety spec={spec} />

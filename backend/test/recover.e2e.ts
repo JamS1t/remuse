@@ -19,6 +19,7 @@ if (await fetch(`${API}/sessions`).then(() => true, () => false)) { console.erro
 
 // What the pages saw done: the test reads this, not the run's own word.
 const did = new Set<string>();
+let renamed = false; // the site later turns the "+" button (same element, #plus) into a delete button
 const page = (body: string) => `<!doctype html><meta charset="utf-8"><title>Lab Report 7</title><body style="font:16px sans-serif;padding:24px">${body}</body>`;
 const site = createServer((req, res) => {
   const u = new URL(req.url!, "http://x");
@@ -29,7 +30,7 @@ const site = createServer((req, res) => {
   if (u.pathname === "/assign") return res.end(page(`<style>#add{display:inline-block}#plus{display:none}@media (max-width:1500px){#add{display:none}#plus{display:inline-block}}</style>
     <h1>Lab Report 7</h1><h2>Your work</h2><div id="att"></div>
     <button id="add" aria-label="Add or create" onclick="m.hidden=!m.hidden">+ Add or create</button>
-    <button id="plus" aria-label="Add attachment" onclick="m.hidden=!m.hidden">+</button>
+    ${renamed ? `<button id="plus" aria-label="Delete attachment" onclick="fetch('/did?what=delete-plus')">−</button>` : `<button id="plus" aria-label="Add attachment" onclick="m.hidden=!m.hidden">+</button>`}
     <div id="m" role="menu" hidden style="border:1px solid #ccc;width:180px;padding:4px">
       <div role="menuitem" tabindex="0" onclick="pick()">File</div>
       <div role="menuitem" tabindex="0" onclick="fetch('/did?what=delete');att.textContent='Deleted'">Delete</div>
@@ -88,6 +89,35 @@ try {
   check("the fix's proof picture has what it used outlined by SAM 3.1", !!healed?.shot && /SAM 3\.1 (outlined it|unavailable|found no edges)/.test(healed?.why ?? ""), JSON.stringify(healed));
   const ideas = m1.filter((m: string) => /^Idea \d+: /.test(m)).map((m: string) => m.replace(/^Idea \d+: /, "").split(" → ")[0]);
   check("no idea is tried twice", new Set(ideas).size === ideas.length, JSON.stringify(ideas));
+
+  // Learning: the fix found above is kept beside the task (not written into it), tried first next time.
+  const task1 = (await get(`/specs/${id1}`)).sessionId;
+  const fixes = async () => (await get(`/sessions/${task1}/fixes`)) as any[];
+  const learnedNow = await fixes();
+  check("the proven fix is kept as learned, beside the task", Array.isArray(learnedNow) && learnedNow.length === 1 && learnedNow[0].state === "learned" && /Add attachment/.test(JSON.stringify(learnedNow[0].move)), JSON.stringify(learnedNow));
+  check("what you taught is unchanged", (await get(`/specs/${(await get(`/runs/${r1.id}`)).newSpecId ?? id1}`)).spec.steps[1].target.name === "Add or create");
+  writeFileSync(join(work, "Lab8.pdf"), "%PDF-1.4\n%remuse test\n");
+  const t2 = Date.now();
+  const r1b = await finished((await post(`/specs/${id1}/runs`, {})).id);
+  const used = (r1b.items?.[0]?.log ?? []).find((l: any) => /^✓ Open the attach menu/.test(l.msg));
+  const heals2 = ((await get("/calls")) as any[]).filter((c) => c.label === "heal" && c.at >= t2).length;
+  check("next time it uses what it learned first, without working it out again", r1b.items?.[0]?.status === "done" && /used what I learned/i.test(used?.why ?? "") && heals2 === 0, `${heals2} heal calls; ${JSON.stringify(used)}`);
+
+  // The site turns that same button into a delete button: what was learned is dropped, never pressed.
+  renamed = true;
+  writeFileSync(join(work, "Lab9.pdf"), "%PDF-1.4\n%remuse test\n");
+  const r1c = await finished((await post(`/specs/${id1}/runs`, {})).id);
+  await sleep(1500); // fixes are saved just after the run ends
+  check("a learned fix that now points at something irreversible is dropped, never pressed", !did.has("delete-plus") && msgs(r1c).some((m: string) => /^Dropped what I learned/.test(m)) && (await fixes()).length === 0, msgs(r1c).slice(0, 4).join(" / ").slice(0, 400));
+  renamed = false;
+
+  // Undo: learned again, then removed from the task page.
+  writeFileSync(join(work, "Lab10.pdf"), "%PDF-1.4\n%remuse test\n");
+  await finished((await post(`/specs/${id1}/runs`, {})).id);
+  await sleep(1500);
+  const again = await fixes();
+  if (again[0]) await fetch(`${API}/fixes/${again[0].id}`, { method: "DELETE" });
+  check("a learned fix can be undone", again.length === 1 && (await fixes()).length === 0, JSON.stringify(again));
 
   // 2. The only way forward would send: it doesn't, and says what it tried.
   const id2 = await addTask("Save the reply as a draft", [
