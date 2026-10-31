@@ -41,7 +41,7 @@ The root problem: features were added on top (more prompt rules, a box in the da
 
 - Word-by-word live captions. Muse Voice Transcribe gives back whole utterances, so captions appear per sentence, about 1 to 2 s after a pause.
 - Full-duplex talk, where he can talk over Remuse on laptop speakers and it stops at once. Turn-taking is half-duplex (see 5.6).
-- New run-time features. The runner, approval gate, step checks, practice, schedules and accounts stay as they are.
+- New run-time features. The runner, approval gate, step checks, schedules and accounts stay as they are. Practice runs as it does today, but **when** it starts moves (7.7).
 - The video script (it comes after the product is ready).
 - A settings screen for voices. One sensible default is used.
 
@@ -135,22 +135,24 @@ type Card = {
 **Checker** (runs in `normalize()`; the coverage part runs once after it):
 1. *Evidence (code).* An acting step whose cited events don't exist, or that cites none: if its `target` matches an event's target by role and name, cite that event. Otherwise drop the step and add a question: "I wasn't sure about '<describe>'. Did you do that?" Extract/report steps with neither events nor a quote: keep them only if a variable or a card asks for that value.
 2. *Coverage (one model call: Muse Spark Open, falling back to Muse Spark).* Input: the utterances, the cards and the spec's steps and rules. Output: things he asked for that the spec doesn't do, as at most 3 short questions, each with the quote.
-3. The questions are saved on the spec as `questions: { text: string; quote?: string }[]` (new optional field) for the review (7.7).
+3. The questions are saved on the spec as `questions: { id: string; text: string; quote?: string; step?: Step }[]` (new optional field) for the review (7.7). A step the evidence check removed is kept on its question as `step`, so a "yes, I did that" can put it back.
+4. A new version of the task (after a change or an answer) keeps only the questions not yet answered. Answered ones are dropped.
 
 ### 7.7 The spoken review loop
 
-When learning finishes, the sidebar stays in teaching mode and switches to **Review**:
+When learning finishes, the sidebar stays in teaching mode and switches to **Review**. **Practice no longer starts by itself** after learning or after a change: `learn()` and `applyFeedback` skip `autoPractice` while that task's review is open. It starts when he approves, so his Chrome is never driven while Remuse is talking. *(My call: one clear state at a time.)*
 
-1. **Readback.** Remuse speaks: "Here's my plan." Then one line per step: "Step 1: <describe>." Rules come next ("If <said>, I'll <then>."), then the checker's questions ("One thing: you said '<quote>'. <question>"). The line being spoken is highlighted. The lines come from code (step `describe`, rule `said`/`then`, `questions`), with no model call. Long plans: steps first, then "And N more steps, all on the next screen." when over 8.
-2. **Listening.** After the readback the mic opens (the existing `converse`), with a big visible "Listening, tell me what to change, or say 'looks good'".
-3. **His reply**, via `hearSaid` → `sortSaid`, with intents:
+1. **Readback.** Remuse speaks: "Here's my plan." Then one line per step: "Step 1: <describe>." Rules come next ("If <said>, I'll <then>."). The line being spoken is highlighted. The lines come from code (step `describe`, rule `said`/`then`), with no model call. Long plans: steps first, then "And N more steps, all on the screen." when over 8.
+2. **Questions, one at a time.** After the plan, Remuse asks the first open question ("One thing: you said '<quote>'. <question>") and waits for the answer. While a question is open, `sortSaid` gets it as context and has a new intent, **`answer`**. The answer goes through `applyFeedback` as "Q: <question> A: <what he said>". If the question carries a removed `step` and the answer is yes, the step is put back. Then the next question. A "yes" while a question is open is never sorted as `approve`.
+3. **Listening.** With no question open, the mic stays open (the existing `converse`), with a big visible "Listening: tell me what to change, or say 'looks good'".
+4. **His reply**, via `hearSaid` → `sortSaid`, with intents:
    - `change` (extended: it may name a step number). `applyFeedback` runs, then Remuse **speaks the `changes`** ("Got it. Step 2 now reads the views from Reach."), highlights the changed steps, and keeps listening.
-   - `approve`: "Great, I'll try it once on your example." Practice starts (the existing `autoPractice` already runs after learning; review shows its result). Then teaching mode exits to the normal sidebar.
-   - `run`, `schedule`: as today, plus a spoken confirmation.
+   - `approve`, or `run` ("try it"): "Okay, I'll try it once on your example." Practice starts, and the screen shows **Practicing**. When it ends, Remuse **says how it went**, using the practice result the sidebar already gets (`PracticeLines`): "That worked: views 2,607, CTR 5.1%." or "I got stuck at step 3: <why>." Then it listens again, so a failed practice can be corrected by voice. Teaching mode exits when he says "looks good" or presses **Looks right** after a practice, or after 2 quiet minutes.
+   - `schedule`: as today, plus a spoken confirmation.
    - `teach` ("let me show you again"): a new recording starts, as today.
    - `none`: ignored silently.
-4. Buttons stay for everything: **Looks right**, **Show you again**, **Stop listening**, and a collapsed "Type instead" box (the existing textarea).
-5. The mic closes after 2 quiet minutes, as today, and the screen says so.
+5. Buttons stay for everything: **Looks right**, **Show you again**, **Stop listening**, and a collapsed "Type instead" box (the existing textarea).
+6. The mic closes after 2 quiet minutes, as today, and the screen says so.
 
 **Speaking** uses `chrome.tts` in `background.js` (new `tts` permission). It works without a click in the page, which the shortcut path needs, and it gives an `end` event per line. Voice: "Google US English" if present, otherwise the first English voice. The sidebar asks the extension to speak with a new bridge message `speak { lines }` (add `speak`/`hush` to `ALLOWED` in `sidepanel.js`). The extension reports `speaking: { line }` in `status`.
 
@@ -167,7 +169,11 @@ When learning finishes, the sidebar stays in teaching mode and switches to **Rev
 
 ### 7.9 Shortcuts (`chrome.commands`)
 
-- `teach`, **Alt+Shift+R**: start teaching (opens the side panel, then starts the recording), or stop it if one is running.
+- `teach`, **Alt+Shift+R**, one key that does the obvious thing in each state:
+  - Nothing going on: open the side panel and start teaching.
+  - Recording: stop ("I'm done").
+  - Remuse speaking: stop talking and listen.
+  - Learning (Thinking), listening in review, or practicing: just open the side panel. It never starts a new recording over a review in progress. "Show you again" (button or voice) does that.
 - `pen`, **Alt+Shift+D**: toggle the pen (only while recording).
 - Both can be changed at `chrome://extensions/shortcuts`. The teaching screen shows the actual bound keys (`chrome.commands.getAll`).
 - `chrome.sidePanel.open()` is allowed from a command handler (it counts as a user gesture).
@@ -232,7 +238,8 @@ Automated (no model calls, run with `node`):
 - Evidence checker: an acting step with no evidence is dropped and becomes a question; one with a matching target is re-cited.
 - Readback lines from a spec (steps, rules, questions, the over-8 case).
 - A recorder test: a hover with no click produces no event.
-- The existing e2e suites still pass on the isolated port (3299).
+- The existing e2e suites still pass on the isolated port (3299). `sheets.e2e.ts` and `converse.e2e.ts` test pointing and the old live draft, so they get updated to marks and cards.
+- `sortSaid` with an open question: "yes, every video" is sorted as `answer`, not `approve`.
 
 Live (James's acceptance, the same YouTube Studio task that failed):
 - Hovering over things while talking adds no card and no step.
@@ -251,6 +258,9 @@ Live (James's acceptance, the same YouTube Studio task that failed):
 - Whole-recording transcription kept for the final learning; live utterances for cards and the end phrase.
 - Questions are shown silently during recording and spoken only in review, so Remuse never interrupts a demo.
 - Half-duplex turn-taking.
+- Practice waits for "looks good" or "try it" instead of starting by itself, and Remuse says how it went, then keeps listening.
+- Questions are asked one at a time after the plan, each waiting for its answer.
+- Alt+Shift+R does the obvious thing in each state and never throws away a review.
 
 ## 12. Left to the builder
 
