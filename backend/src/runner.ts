@@ -19,6 +19,8 @@ import { captionFor, chooseFile, findFolder, freeName, markUsed, pathIn, usedFor
 class Skip extends Error {}
 /** A practice run reached the point where a real run would need the person (an OK or a question): it ends there. */
 class PracticeEnd extends Error {}
+// A batch item reached an irreversible step: it waits, prepared, for the one OK at the end of the run.
+class Ready extends Error {}
 
 // why: the reason in plain words (what it checked and found, or what a decision rested on).
 // how: "page" = checked on the page itself; "screen" = Muse Spark (and SAM 3.1) looked at a screenshot.
@@ -27,21 +29,24 @@ export type LogLine = { at: number; msg: string; level: "info" | "ok" | "warn" |
 export type Candidate = { url: string; title: string; vars: Record<string, unknown>; score: number | null; shot?: string; best?: boolean };
 export type Item = {
   url: string; label: string; index?: number; // index: position in the list, for items that open by clicking
-  status: "waiting" | "running" | "approval" | "asking" | "planned" | "done" | "skipped" | "failed";
+  status: "waiting" | "running" | "approval" | "asking" | "planned" | "ready" | "done" | "skipped" | "failed";
   vars: Record<string, unknown>; outcome?: string; because?: string; expected?: string; decidedBy?: "rules" | "you" | "learned"; log: LogLine[];
   candidates?: Candidate[];
   report?: string; // the update a "report" step gave the person
   key?: string; // how it is remembered between runs (itemKey, numbered when two items read the same)
   byYou?: boolean; // skipped because the person said so (no to a step, or skip on a question): settled, not retried
   unproven?: string[]; // things it wrote here that the page couldn't confirm: nothing irreversible may follow them
+  ready?: { step: string; at: number }; // a batch item prepared up to this irreversible step (outcome step index)
 };
 export type Pending =
   | { kind: "approval"; item: number; step: string; target?: string; outcome?: string; because?: string; shot: string; healed?: string }
   | { kind: "ask"; item: number; question: string; options: string[]; shot: string; requestType?: string }
   | { kind: "handoff"; item: number; step: string; problem: string; shot: string }
   // Every item read and decided, nothing done yet: what it will do, for the person's Go.
-  | { kind: "plan"; item: number; counts: Record<string, number>; needsOk: number; skipped: number; failed: number; shot?: undefined };
-export type Answer = { decision?: "approve" | "reject" | "approve_all" | "retry" | "skip"; outcome?: string; note?: string; reply?: string; learn?: boolean };
+  | { kind: "plan"; item: number; counts: Record<string, number>; needsOk: number; skipped: number; failed: number; shot?: undefined }
+  // A batch, every item prepared up to its irreversible step: one OK (or one each) finishes them.
+  | { kind: "ready"; item: number; items: number[]; shot?: undefined };
+export type Answer = { decision?: "approve" | "reject" | "approve_all" | "retry" | "skip"; outcome?: string; note?: string; reply?: string; learn?: boolean; items?: number[] };
 export type Run = {
   id: string; specId: number; status: "starting" | "running" | "done" | "failed" | "stopped";
   items: Item[]; current: number; pending: Pending | null; autoApprove: boolean;
@@ -226,7 +231,10 @@ export class Runner {
   // List tasks: items handled in earlier runs (by itemKey), left alone unless the person asks to do them again.
   handled?: Set<string>;
   // Started because this file landed in a watched folder: the upload uses it.
-  file?: { folder: string; name: string };
+  files?: { folder: string; name: string }[]; // files that landed in a watched folder together: one item each
+  private parked = new Map<number, { page: Page; tabs: Map<string, Page>; tabName: string }>();
+  private resuming = false; // finishing a prepared item after your OK
+  private get batch() { return (this.files?.length ?? 0) > 1 && !this.practicing; }
   private get practicing() { return this.run.mode === "practice"; }
   private phase: "all" | "plan" | "act" = "all"; // which pass the current item is in (see runItem)
   // The judgement questions asked on each item (by index): the checker answers the same ones before an irreversible act.
@@ -369,7 +377,9 @@ export class Runner {
       const { source, listUrl, itemSelector } = this.spec.inputs;
       if (source === "once") {
         // Nothing to go through: a check or an update that runs as one item.
-        this.run.items = [{ url: "", label: (this.spec.title ?? this.spec.goal).slice(0, 90), status: "waiting", vars: {}, log: [] }];
+        this.run.items = this.files?.length
+          ? this.files.map((f) => ({ url: "", label: f.name, status: "waiting" as const, vars: { file_name: f.name }, log: [] }))
+          : [{ url: "", label: (this.spec.title ?? this.spec.goal).slice(0, 90), status: "waiting", vars: {}, log: [] }];
       } else if (source === "rows") {
         // One item per row the person gave; its columns become the item's variables. A practice uses the
         // row from the demo.
@@ -458,7 +468,7 @@ export class Runner {
           i.status = "skipped";
           i.log.push({ at: Date.now(), msg: cancelled ? "Not done: cancelled at the plan." : "Not done: the run was stopped.", level: "info" });
         }
-      } else await pass("all");
+      } else { await pass("all"); await this.finishReady(); }
       this.run.status = this.stopped ? "stopped" : "done";
       this.scoreRun();
     } catch (e) {
@@ -643,15 +653,66 @@ export class Runner {
   }
 
   /** Do what was decided for this item: its outcome's steps. */
-  private async act() {
+  private async act(from = 0) {
     this.phase = "all"; // the outcome's own steps (a compare, a read) run normally
     const it = this.item;
-    for (const step of this.spec.outcomes[it.outcome!].steps) {
-      if (!(await this.step(step))) return;
+    const steps = this.spec.outcomes[it.outcome!].steps;
+    for (let i = from; i < steps.length; i++) {
+      try { if (!(await this.step(steps[i]))) return; }
+      catch (e) {
+        if (!(e instanceof Ready)) throw e;
+        // Prepared up to an irreversible step: keep this item's tabs as they are, give the next item fresh ones.
+        const { file } = await this.shot();
+        it.ready = { step: e.message, at: i }; it.status = "ready";
+        this.log(`Prepared and checked. Waiting for your OK to ${e.message.charAt(0).toLowerCase()}${e.message.slice(1)}.`, "ok", file);
+        this.parked.set(this.run.current, { page: this.page, tabs: this.tabs, tabName: this.tabName });
+        this.page = await this.ctx.newPage(); this.tabs = new Map(); this.tabName = "";
+        this.changed(); return;
+      }
       if (it.status === "skipped") return;
     }
     it.status = "done"; this.changed();
     if (it.vars.file_name && this.taskKey && !this.practicing) markUsed(this.taskKey, [String(it.vars.file_name)]);
+  }
+
+  /** A batch: every item prepared up to its irreversible step waits here. One OK (Approve all, or the chosen ones)
+   *  finishes them in their own tabs; the rest stay prepared, undone. One failing doesn't stop the others. */
+  private async finishReady() {
+    const ready = this.run.items.flatMap((it, i) => (it.status === "ready" ? [i] : []));
+    if (!ready.length || this.stopped) return;
+    const leave = (i: number) => {
+      this.run.current = i;
+      const it = this.item;
+      it.status = "skipped"; it.byYou = !this.stopped;
+      this.log(`Left prepared, not done: ${it.ready!.step}${this.stopped ? " (the run was stopped)" : ", as you said"}.`, "info");
+    };
+    // Approve all, or some now and the rest after; "leave them" leaves every one still waiting.
+    let left = ready;
+    while (left.length && !this.stopped) {
+      this.run.current = this.run.items.length; // no item is "live" while the OK waits
+      const ask: Pending = { kind: "ready", item: left[0], items: left };
+      let a = await this.wait(ask);
+      while (!["approve", "approve_all", "reject", "skip"].includes(a.decision ?? "") && !this.stopped) a = await this.wait(ask);
+      if (this.stopped) break;
+      const yes = a.decision === "approve_all" ? left : a.decision === "approve" ? left.filter((i) => !a.items || a.items.includes(i)) : [];
+      if (!yes.length) { left.forEach(leave); left = []; break; }
+      for (const i of yes) {
+        this.run.current = i;
+        const it = this.item;
+        const parked = this.parked.get(i)!;
+        ({ page: this.page, tabs: this.tabs, tabName: this.tabName } = parked);
+        await this.page.bringToFront().catch(() => {});
+        it.status = "running"; this.changed();
+        this.resuming = true;
+        try { await this.act(it.ready!.at); }
+        catch (e) { it.status = "failed"; this.log(`Stopped this item: ${(e as Error).message}`, "error"); }
+        finally { this.resuming = false; }
+      }
+      left = left.filter((i) => !yes.includes(i));
+    }
+    left.forEach(leave);
+    this.run.current = this.run.items.length;
+    this.changed();
   }
 
   /** Pick a file from an allowed folder by the task's rule and hand it to the page's upload control. */
@@ -661,7 +722,9 @@ export class Runner {
     const folder = findFolder(rule.folder);
     if (!folder) throw new Error(rule.folder ? `the folder "${rule.folder}" isn't allowed any more; add it on the Folders page` : "choose which folder to upload from on the task page");
     // A run started by a file landing posts exactly that file; otherwise the task's own rule picks.
-    const name = this.file && folder.name === this.file.folder && !usedFor(this.taskKey).has(this.file.name) ? this.file.name : this.file ? null : chooseFile(folder, rule, usedFor(this.taskKey));
+    // A run started by files landing posts this item's own file; otherwise the task's own rule picks.
+    const mine = this.files ? String(it.vars.file_name ?? "") : "";
+    const name = this.files ? (mine && folder.name === this.files[0].folder && !usedFor(this.taskKey).has(mine) ? mine : null) : chooseFile(folder, rule, usedFor(this.taskKey));
     if (!name) throw new Skip(`Nothing new to upload in ${folder.name} right now (${rule.pick ?? "next"} file). Skipped.`);
     const path = pathIn(folder, name);
     it.vars.file_name = name;
@@ -689,7 +752,7 @@ export class Runner {
     if (name === this.tabName && !this.page.isClosed()) return;
     let p = this.tabs.get(name);
     if (!p || p.isClosed()) {
-      const claimed = new Set([...this.tabs.values()]);
+      const claimed = new Set([...this.tabs.values(), ...[...this.parked.values()].flatMap((x) => [x.page, ...x.tabs.values()])]);
       const unclaimed = () => this.ctx.pages().filter((x) => !x.isClosed() && !claimed.has(x));
       if (!this.tabs.size && !this.page.isClosed()) p = this.page;
       else {
@@ -716,7 +779,7 @@ export class Runner {
     for (;;) {
       try { await this.exec(s, nextTab); return true; }
       catch (e) {
-        if (e instanceof PracticeEnd) throw e;
+        if (e instanceof PracticeEnd || e instanceof Ready) throw e;
         if (e instanceof Skip) { this.item.status = "skipped"; this.log(e.message, "info"); return false; }
         // A practice never waits on the person: whatever is in the way is what it reports.
         if (this.practicing) {
@@ -969,6 +1032,8 @@ export class Runner {
       this.log(`Next I'd ${step.describe.replace(/^./, (c) => c.toLowerCase())}${healedName ? ` (“${healedName}”)` : ""}. ${asks ? "A real run waits for your OK here" : "That changes something on the site"}, so the practice stops.`, "ok", file);
       throw new PracticeEnd("");
     }
+    if (this.resuming) { this.log(`You approved: ${step.describe}`, "ok"); return true; }
+    if (this.batch && !this.run.autoApprove) throw new Ready(step.describe);
     if (this.run.autoApprove) { this.log(`Approved in advance: ${step.describe}`, "info"); return true; }
     const { file } = await this.shot(loc);
     it.status = "approval";

@@ -135,6 +135,7 @@ const STATUS: Record<ItemStatus | "starting" | "stopped", { icon: typeof Check; 
   approval: { icon: Hand, word: "Needs your OK", cls: "text-foreground" },
   asking: { icon: MessageCircleQuestion, word: "Has a question", cls: "text-foreground" },
   planned: { icon: ListChecks, word: "Planned", cls: "text-foreground" },
+  ready: { icon: Hand, word: "Ready for your OK", cls: "text-foreground" },
   done: { icon: Check, word: "Done", cls: "text-ok" },
   skipped: { icon: Minus, word: "Skipped", cls: "text-muted-foreground" },
   failed: { icon: X, word: "Failed", cls: "text-destructive" },

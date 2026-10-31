@@ -460,7 +460,7 @@ setInterval(async () => {
   }
 }, 30_000).unref();
 
-async function startRun(specId: number, opts: { limit?: number; autoApprove?: boolean; rows?: Record<string, string>[]; scheduled?: boolean; watch?: boolean; practice?: boolean; plan?: boolean; redo?: boolean; fromFolder?: number; file?: { folder: string; name: string }; example?: { url?: string; label?: string } }) {
+async function startRun(specId: number, opts: { limit?: number; autoApprove?: boolean; rows?: Record<string, string>[]; scheduled?: boolean; watch?: boolean; practice?: boolean; plan?: boolean; redo?: boolean; fromFolder?: number; files?: { folder: string; name: string }[]; example?: { url?: string; label?: string } }) {
   const row = specRow(specId);
   if (!row.code) throw new HttpError(400, "build the rules first");
   if (googleLook) await googleLook; // the Google sign-in check has the browser profile for a moment
@@ -498,6 +498,7 @@ async function startRun(specId: number, opts: { limit?: number; autoApprove?: bo
       const label = r.items[p.item]?.label ?? "";
       if (p.kind === "approval") notify("Remuse needs your OK", `${p.step}: ${label}`, link);
       else if (p.kind === "ask") notify("Remuse has a question", p.question, link);
+      else if (p.kind === "ready") notify(`${p.items.length} ready for your OK`, `${p.items.map((i) => r.items[i]?.label).join(", ")}: prepared and checked. Open Remuse to approve.`, link);
       else if (p.kind === "plan") notify("Remuse has a plan", `${Object.entries(p.counts).map(([o, n]) => `${n} ${o.replaceAll("_", " ")}`).join(", ")}. Open Remuse and press Go.`, link);
       else notify("Remuse needs you in the browser", `Stuck on "${p.step}". Sign in or clear the check, then press Try again.`, link);
     }
@@ -506,7 +507,7 @@ async function startRun(specId: number, opts: { limit?: number; autoApprove?: bo
   runner.prev = lastValues(row.sessionId);
   runner.taskKey = row.sessionId;
   runner.example = opts.example;
-  runner.file = opts.file;
+  runner.files = opts.files;
   // List tasks leave alone what earlier runs handled, unless you asked to do them again.
   if (row.spec.inputs.source === "list" && !opts.practice && !opts.redo) runner.handled = handledKeys(row.sessionId);
   active = runner;
@@ -940,14 +941,15 @@ const watchKey = (s: Schedule) => `${s.id}:${findFolder(s.watchFolder)?.path ?? 
 // Files a folder run was started for (schedule:file:modified time). Each is tried once; a failed or refused post
 // isn't retried until the file changes or the Agent restarts, so a broken page can't start runs over and over.
 const tried = new Set<string>();
-/** The file a folder schedule would post next: arrived after the schedule was set up (files already there aren't
- *  "new"), finished arriving (untouched for 10 s), never posted, and not already tried as it is now. */
-function nextFile(s: Schedule): { name: string; key: string } | null {
+/** The files a folder schedule would post now, in the task's order: arrived after the schedule was set up (files
+ *  already there aren't "new"), finished arriving (untouched for 10 s), never posted, and not already tried as they
+ *  are now. Files that land together are one run, one item each. */
+function nextFiles(s: Schedule): { name: string; key: string }[] {
   const folder = findFolder(s.watchFolder);
-  if (!folder) return null;
+  if (!folder) return [];
   const row = specRow(latestSpec(s.specId));
   const step = [...row.spec.steps, ...Object.values(row.spec.outcomes).flatMap((o) => o.steps)].find((x) => x.do === "upload" && findFolder(x.file?.folder)?.name === folder.name);
-  if (!step?.file) return null;
+  if (!step?.file) return [];
   try {
     const used = usedFor(row.sessionId);
     // Only files that arrived after the schedule are candidates. Arrival is the latest of: modified (new file),
@@ -960,24 +962,28 @@ function nextFile(s: Schedule): { name: string; key: string } | null {
     }
     // In the task's own order: "newest" is the last to arrive among them; "next" and "dated" follow chooseFile.
     const skip = new Set(filesIn(folder).map((f) => f.name).filter((n) => !arrived.has(n)));
-    const name = step.file.pick === "newest"
-      ? [...arrived].filter(([n]) => isPostable(n, step.file!.ext)).sort((x, y) => y[1] - x[1])[0]?.[0] ?? null
-      : chooseFile(folder, step.file, skip);
-    return name && arrived.has(name) ? { name, key: `${s.id}:${name}:${statSync(join(folder.path, name)).mtimeMs}` } : null;
-  } catch { return null; }
+    const key = (name: string) => ({ name, key: `${s.id}:${name}:${statSync(join(folder.path, name)).mtimeMs}` });
+    if (step.file.pick === "newest") {
+      const newest = [...arrived].filter(([n]) => isPostable(n, step.file!.ext)).sort((x, y) => y[1] - x[1])[0]?.[0];
+      return newest ? [key(newest)] : [];
+    }
+    const out: { name: string; key: string }[] = [];
+    for (let name = chooseFile(folder, step.file, skip); name && arrived.has(name) && !skip.has(name); name = chooseFile(folder, step.file, skip)) { out.push(key(name)); skip.add(name); }
+    return out;
+  } catch { return []; }
 }
 /** Run each folder schedule that has a new file waiting, one at a time; the rest go on the next tick. A caption,
  *  a deleted or hidden file never starts a run, since there's nothing to post. */
 function folderTick() {
   for (const s of schedules()) {
     if (!s.enabled || !s.watchFolder || busyRun()) continue;
-    let file: ReturnType<typeof nextFile> = null;
-    try { file = nextFile(s); } catch { continue; } // e.g. its task was deleted
-    if (!file) continue;
-    tried.add(file.key);
+    let files: ReturnType<typeof nextFiles> = [];
+    try { files = nextFiles(s); } catch { continue; } // e.g. its task was deleted
+    if (!files.length) continue;
+    for (const f of files) tried.add(f.key);
     db.prepare("UPDATE schedules SET last_at = ? WHERE id = ?").run(Date.now(), s.id);
-    startRun(latestSpec(s.specId), { scheduled: true, rows: s.rows ?? undefined, limit: s.limit ?? undefined, fromFolder: s.id, file: { folder: s.watchFolder, name: file.name } })
-      .catch((e) => { tried.delete(file!.key); notify("Remuse couldn't start a task", (e as Error).message, `http://127.0.0.1:${PORT}/#/spec/${s.specId}`); });
+    startRun(latestSpec(s.specId), { scheduled: true, rows: s.rows ?? undefined, limit: s.limit ?? undefined, fromFolder: s.id, files: files.map((f) => ({ folder: s.watchFolder!, name: f.name })) })
+      .catch((e) => { for (const f of files) tried.delete(f.key); notify("Remuse couldn't start a task", (e as Error).message, `http://127.0.0.1:${PORT}/#/spec/${s.specId}`); });
     return;
   }
 }

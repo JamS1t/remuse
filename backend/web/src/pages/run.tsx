@@ -284,6 +284,37 @@ export function PendingCard({ p, r, file, busy, answer }: { p: Pending; r: Run; 
     );
   }
 
+  // A batch: each item prepared and checked up to the step Remuse never does alone. One OK finishes them.
+  if (p.kind === "ready") {
+    const ready = p.items.map((n) => ({ n, it: r.items[n] })).filter(({ it }) => it);
+    return (
+      <section className="animate-in fade-in slide-in-from-top-2 glass overflow-hidden rounded-2xl duration-300 ease-out" aria-live="assertive">
+        <div className="flex items-center gap-2.5 border-b border-rule px-4 py-3">
+          <Orb state="waiting" size={20} /><h2 className="text-[14px] font-semibold">{ready.length} ready for your OK</h2>
+        </div>
+        <div className="grid gap-4 p-4">
+          <ol className="max-h-80 divide-y divide-rule overflow-y-auto rounded-xl bg-white/[0.03]">
+            {ready.map(({ n, it }) => {
+              const proof = [...it.log].reverse().find((l) => l.how === "page" && l.level === "ok");
+              return (
+                <li key={n} className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1 px-3 py-2.5 text-[13px]">
+                  <span className="truncate font-medium"><ItemLabel text={it.label} /></span>
+                  <Button size="sm" variant="outline" onClick={() => answer({ decision: "approve", items: [n] })} disabled={busy}>{it.ready?.step ?? "Approve"}</Button>
+                  {proof?.why ? <span className="col-span-2 line-clamp-1 text-[12px] text-muted-foreground">Checked: {proof.why}</span> : null}
+                </li>
+              );
+            })}
+          </ol>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button size="lg" onClick={() => answer({ decision: "approve_all" })} disabled={busy}>Approve all {ready.length}</Button>
+            <Button size="lg" variant="ghost" className="ml-auto" onClick={() => answer({ decision: "reject" })} disabled={busy}>Leave them prepared</Button>
+          </div>
+          <p className="text-[12.5px] text-muted-foreground">Each one is prepared and checked. Nothing that sends, submits or turns in has been done yet.</p>
+        </div>
+      </section>
+    );
+  }
+
   const head = (icon: React.ReactNode, title: string) => (
     <div className="flex items-center gap-2.5 border-b border-rule px-4 py-3">
       {icon}<h2 className="text-[14px] font-semibold">{title}</h2>
