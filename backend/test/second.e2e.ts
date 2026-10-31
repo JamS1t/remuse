@@ -96,7 +96,7 @@ try {
   const agreed = run.items[0].log.find((l: any) => /^Second opinion/.test(l.msg));
   check("before replacing, the checker answered the same question and agreed", /Muse Spark Open agrees/.test(agreed?.msg ?? "") && agreed.by === "Muse Spark Open", agreed?.msg);
   const screen = run.items[0].log.find((l: any) => /^✓ Send a replacement/.test(l.msg));
-  check("after the irreversible step, the checker looked at the screen", screen?.by === "Muse Spark Open" && screen.how === "screen", JSON.stringify(screen));
+  check("after the irreversible step, the checker looked at the screen", screen?.by === "Muse Spark Open" && /the screen agrees/.test(screen.why), JSON.stringify(screen));
   check("when the two models disagree it asks you, even in a run started without asking", run.pending?.kind === "ask" && /disagree/.test(run.pending.question) && /Muse Spark says "damaged"/.test(run.pending.question) && /Muse Spark Open says "fine"/.test(run.pending.question), run.pending?.question);
   check("nothing was done to that claim before you answered", JSON.stringify(done) === JSON.stringify(["replace 1"]), JSON.stringify(done));
   await post(`/runs/${r.id}/answer`, { outcome: "refund", note: "the parcel was only late" });
@@ -131,7 +131,7 @@ try {
   const run3 = await finished(r3.id, (x) => !!x.pending, 120);
   const log3 = run3.items[0]?.log ?? [];
   check("if the checker can't be reached, the run still finishes and says so", run3.status === "done" && run3.items[0].status === "done" && log3.some((l: any) => /No second opinion this time/.test(l.msg)), log3.map((l: any) => l.msg).join(" / "));
-  check("…and Muse Spark checks the screen instead", log3.some((l: any) => /^✓ Send a replacement/.test(l.msg) && l.how === "screen" && !l.by) && asked.some((a) => a.api === "responses" && a.label === "check"), JSON.stringify(log3.find((l: any) => /^✓ Send/.test(l.msg))));
+  check("…and Muse Spark checks the screen instead", log3.some((l: any) => /^✓ Send a replacement/.test(l.msg) && /the screen agrees/.test(l.why ?? "") && !l.by) && asked.some((a) => a.api === "responses" && a.label === "check"), JSON.stringify(log3.find((l: any) => /^✓ Send/.test(l.msg))));
 } finally {
   agent?.kill(); site.close(); model.close();
   const failed = results.filter(([, ok]) => !ok);

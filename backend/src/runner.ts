@@ -9,6 +9,7 @@ import { askJson, checker, ground, sam, text, png, type Box, type Part } from ".
 import { load, same, type Rules } from "./build.ts";
 import type { Spec, Step, Target } from "./understand.ts";
 import { applyLogins } from "./logins.ts";
+import { combine, newlyAppeared, writes, type Verdict } from "./proof.ts";
 import { notify } from "./notify.ts";
 import { chromeReady, relayUrl } from "./chrome.ts";
 import { captionFor, chooseFile, findFolder, freeName, markUsed, pathIn, usedFor } from "./folders.ts";
@@ -31,6 +32,7 @@ export type Item = {
   report?: string; // the update a "report" step gave the person
   key?: string; // how it is remembered between runs (itemKey, numbered when two items read the same)
   byYou?: boolean; // skipped because the person said so (no to a step, or skip on a question): settled, not retried
+  unproven?: string[]; // things it wrote here that the page couldn't confirm: nothing irreversible may follow them
 };
 export type Pending =
   | { kind: "approval"; item: number; step: string; target?: string; outcome?: string; because?: string; shot: string; healed?: string }
@@ -841,6 +843,8 @@ export class Runner {
       expect: raw.expect && { ...raw.expect, urlIncludes: render(raw.expect.urlIncludes, v), textIncludes: render(raw.expect.textIncludes, v) } };
     if (this.stopped) throw new Error("run stopped");
     let aim: string | undefined;
+    let before: string | undefined; // the page's text just before acting: words already there prove nothing
+    let found: Awaited<ReturnType<Runner["locate"]>> | null = null;
     // A new tab whose first step isn't a "goto" is one the site opened (the previous click did it).
     if (raw.tab) await this.useTab(raw.tab, raw.do !== "goto");
 
@@ -916,7 +920,8 @@ export class Runner {
     }
     else {
       await this.rightAccount("act", raw);
-      const found = step.target ? await this.locate(raw, step) : null;
+      before = await this.page.innerText("body").catch(() => "");
+      found = step.target ? await this.locate(raw, step) : null;
       // The picture kept with the step's check: what it pressed (taken before pressing), or the field after typing
       // (so it shows what the check says). A healed element already has its marked-up screenshot.
       aim = step.do === "fill" && found?.loc ? undefined : found?.shot ?? (found?.loc ? await this.shotNear(found.loc) : undefined);
@@ -935,11 +940,21 @@ export class Runner {
       }
     }
     await this.page.waitForLoadState("load").catch(() => {});
-    await this.check(step, aim);
+    const verdict = await this.check(step, aim, before);
+    // A replacement found by looking is saved into the task only now that its step is proven.
+    if (found?.proposed && verdict.result === "verified") {
+      const from = raw.target?.name ?? "";
+      raw.target = found.proposed;
+      raw.healed = `was "${from}"`;
+      this.heal({ step: step.describe, from, to: found.healedName ?? found.proposed.name ?? "" });
+      this.log(`Updated the task: “${found.healedName}” does what “${from}” did, proven above. The next ${this.spec.inputs.itemName ?? "item"} uses it directly.`, "ok");
+    }
   }
 
   private async approve(step: Step, loc?: Locator, healedName?: string): Promise<boolean> {
     const it = this.item;
+    // Something written earlier in this item wasn't proven: an irreversible step must not build on it.
+    if (it.unproven?.length) throw new Skip(`I couldn't prove "${it.unproven[0]}" worked, so I didn't ${step.describe.charAt(0).toLowerCase()}${step.describe.slice(1).replace(/[.\s]+$/, "")}.`);
     if (this.practicing) {
       // The thing it would do, outlined on the screen, and no further.
       const { file } = await this.shot(loc);
@@ -962,7 +977,7 @@ export class Runner {
   }
 
   // DOM first (role + name, then the recorded selector if it still points at the same thing), then vision.
-  private async locate(raw: Step, step: Step): Promise<{ loc?: Locator; point?: { x: number; y: number }; healedName?: string; shot?: string }> {
+  private async locate(raw: Step, step: Step): Promise<{ loc?: Locator; point?: { x: number; y: number }; healedName?: string; shot?: string; proposed?: Target }> {
     // Google Sheets' Name Box: no label to find it by, but always this id (tasks learned before it was added included).
     const t = !step.target!.selector && /^name box$/i.test(step.target!.name ?? "") ? { ...step.target!, selector: "#t-name-box" } : step.target!;
     if (t.role && t.name) {
@@ -1040,11 +1055,10 @@ export class Runner {
     const healedName = found.name;
     // Labels with per-item data ("Issue refund (₱570.00)") are kept as their stable prefix and matched loosely.
     const stable = healedName.split(/[(\d₱$]/)[0].trim();
-    raw.target = stable && stable !== healedName ? { role: found.role, name: stable, fuzzy: true } : { role: found.role, name: healedName };
-    raw.healed = `was "${t.name}"`;
-    this.heal({ step: step.describe, from: t.name ?? "", to: healedName });
-    this.log(`Found it: the ${found.role} “${healedName}” (was “${t.name}”). Updated the task so the next ${this.spec.inputs.itemName ?? "item"} uses it directly.`, "ok", seen.file, how);
-    return (await loc.count()) === 1 ? { loc, healedName, shot: seen.file } : { point, healedName, shot: seen.file };
+    const proposed: Target = stable && stable !== healedName ? { role: found.role, name: stable, fuzzy: true } : { role: found.role, name: healedName };
+    // Only a proposal: it's saved into the task after its step is proven (exec), never on a guess.
+    this.log(`This may do the same job: the ${found.role} “${healedName}” (was “${t.name}”). Trying it; it only counts if the page proves it.`, "info", seen.file, how);
+    return (await loc.count()) === 1 ? { loc, healedName, shot: seen.file, proposed } : { point, healedName, shot: seen.file, proposed };
   }
 
   /** Google apps (YouTube included) can be signed in as several accounts at once. If you did this part of the task as
@@ -1196,40 +1210,66 @@ export class Runner {
   }
 
   // Cheap DOM check first; Muse Spark looks at the screen for irreversible steps or when the DOM check fails.
-  private async check(step: Step, aim?: string) {
-    if (step.do === "extract") return;
+  /** Did the step work? Proof from the page first (text that appeared because of it, the field holding what was
+   *  typed, the address); a look at the screen can stop a pass but never make a failed page check pass, and a step
+   *  that writes needs the page's proof. Returns the verdict; a failed step throws. `before` is the page's text
+   *  from just before the step. */
+  private async check(step: Step, aim?: string, before?: string, opts: { look?: boolean } = {}): Promise<Verdict> {
+    if (step.do === "extract") return { result: "verified", proof: "page", why: "read from the page" };
     const e = step.expect ?? {};
-    let domOk = true, why = "", unchecked = false; // unchecked: nothing on the page could confirm it
-    if (step.do === "fill" && step.value) {
-      // Typed values don't show up in page text; read the field back instead.
-      const val = await this.page.evaluate(() => (document.activeElement as HTMLInputElement)?.value ?? null);
-      domOk = val === null || val === step.value;
-      why = val === null ? "typed it (this kind of field can't be read back)" : domOk ? `the field now holds “${short(step.value)}”` : "the field doesn't hold what I typed";
-      if (val === null) unchecked = true;
+    let page: Verdict | null = null;
+    if (step.do === "fill" && step.value != null) {
+      // Typed values don't show up in page text; read the field back instead (an editor in a frame can't be read).
+      const val = await this.page.evaluate(() => {
+        const a = document.activeElement as HTMLInputElement | null;
+        if (!a || a.tagName === "IFRAME") return null;
+        return a.isContentEditable ? (a.innerText ?? "").trim() : (a.value ?? null);
+      }).catch(() => null);
+      if (val !== null) page = val === step.value || val.trim() === step.value.trim()
+        ? { result: "verified", proof: "page", why: step.value ? `the field now holds “${short(step.value)}”` : "the field is empty, as it should be" }
+        : { result: "failed", proof: "page", why: "the field doesn't hold what I typed" };
     } else if (e.urlIncludes || e.textIncludes) {
-      const deadline = Date.now() + 5000;
-      for (;;) {
-        const bare = (x: string) => x.toLowerCase().replace(/\/u\/\d+(?=\/|$)/, "");
-        const urlOk = !e.urlIncludes || bare(this.page.url()).includes(bare(e.urlIncludes));
-        const textOk = !e.textIncludes || (await this.page.innerText("body").catch(() => "")).toLowerCase().includes(e.textIncludes.toLowerCase());
-        domOk = urlOk && textOk;
-        if (domOk) { why = [e.urlIncludes && `the address now has “${short(e.urlIncludes)}”`, e.textIncludes && `“${short(e.textIncludes)}” is on the page`].filter(Boolean).join(", and "); break; }
-        if (Date.now() > deadline) { why = urlOk ? `“${short(e.textIncludes)}” is not on the page` : `the address doesn't have “${short(e.urlIncludes)}”`; break; }
+      const bare = (x: string) => x.toLowerCase().replace(/\/u\/\d+(?=\/|$)/, "");
+      let urlOk = false, textNow = false, textNew = false;
+      for (const deadline = Date.now() + 5000; ;) {
+        urlOk = !e.urlIncludes || bare(this.page.url()).includes(bare(e.urlIncludes));
+        const now = e.textIncludes ? await this.page.innerText("body").catch(() => "") : "";
+        textNow = !e.textIncludes || now.toLowerCase().includes(e.textIncludes.toLowerCase());
+        textNew = !e.textIncludes || (before === undefined ? textNow : newlyAppeared(before, now, e.textIncludes));
+        if ((urlOk && textNew) || Date.now() > deadline) break;
         await this.page.waitForTimeout(250);
       }
-    }
-    else if (step.do === "goto" && step.url) {
+      if (!urlOk) page = { result: "failed", proof: "page", why: `the address doesn't have “${short(e.urlIncludes)}”` };
+      else if (textNew) page = { result: "verified", proof: "page", why: [e.urlIncludes && `the address now has “${short(e.urlIncludes)}”`, e.textIncludes && `“${short(e.textIncludes)}” appeared on the page`].filter(Boolean).join(", and ") };
+      else if (textNow) page = e.urlIncludes ? { result: "verified", proof: "page", why: `the address now has “${short(e.urlIncludes)}”` } : null; // the words were already there: they prove nothing
+      else page = { result: "failed", proof: "page", why: `“${short(e.textIncludes)}” is not on the page` };
+    } else if (step.do === "goto" && step.url) {
       const bare = (u: string) => u.split(/[?#]/)[0].replace(/\/$/, "").toLowerCase();
-      if (bare(this.page.url()) === bare(step.url)) why = "the address is the one it opened";
-      else { why = `it opened, and landed on ${short(this.page.url())}`; unchecked = true; }
+      if (bare(this.page.url()) === bare(step.url)) page = { result: "verified", proof: "page", why: "the address is the one it opened" };
     }
-    else if (step.do === "goto" || step.do === "open_item") { why = "the page opened"; unchecked = true; }
-    else { why = "no error came up; there was nothing specific to look for"; unchecked = true; }
     const gated = step.irreversible || (step.do === "click" && IRREVERSIBLE.test(step.target?.name ?? ""));
-    if (domOk && !gated) { this.log(`✓ ${step.describe}`, "ok", aim, { why, how: unchecked ? undefined : "page" }); return; }
+    const tell = (v: Verdict, shot?: string) => {
+      const more = { why: v.why, how: v.proof === "none" ? undefined : v.proof, by: v.by };
+      if (v.result === "verified") this.log(`✓ ${step.describe}`, "ok", shot, more);
+      else if (v.result === "unverified") {
+        this.log(`– ${step.describe} (not proven)`, "warn", shot, more);
+        if (writes(step)) (this.item.unproven ??= []).push(step.describe);
+      } else this.log(`✗ ${step.describe}`, "error", shot, more);
+      return v;
+    };
+    if (page?.result === "verified" && !gated && !opts.look) return tell(page, aim);
+    if (page?.result === "failed") { tell(page, aim); throw new Error(`step didn't work: ${step.describe}`); }
+    // Nothing on the page can tell, and nothing irreversible hangs on it: no model call (runs stay fast). Opening a
+    // page counts as done; anything else is honestly "not proven", and a write left unproven stops what depends on it.
+    if (!page && !gated && !opts.look) {
+      if (step.do === "goto" || step.do === "open_item") return tell({ result: "verified", proof: "none", why: "the page opened" }, aim);
+      const already = !!e.textIncludes && !!before && before.toLowerCase().includes(e.textIncludes.toLowerCase());
+      return tell({ result: "unverified", proof: "none", why: already ? `“${short(e.textIncludes)}” was already on the page, so it proves nothing` : "nothing specific to look for on the page" }, aim);
+    }
 
-    let r: { ok: boolean; why: string } = { ok: false, why: "" }, file = "", by: string | undefined, unseen = "", answered = false;
-    for (let look = 0; look < 2 && r.ok !== true; look++) {
+    // Nothing on the page settles it (or it's irreversible and worth a second look): the checker looks at the screen.
+    let r: { ok: boolean; why: string } | null = null, file = "", by: string | undefined;
+    for (let look = 0; look < 2 && r?.ok !== true; look++) {
       // Server actions re-render after the click returns; give the page a moment before judging it.
       await this.page.waitForLoadState("networkidle").catch(() => {});
       await this.page.waitForTimeout(look ? 1500 : 600);
@@ -1239,17 +1279,17 @@ export class Runner {
         text(`A browser robot just did this step: "${step.describe}". It expected: "${e.looks ?? "the step to have worked"}". Look at the screen now. Did the step work? Reply with only JSON: {"ok": true|false, "why": "one short sentence"}`),
         png(shot.buf),
       ];
-      // The checker looks; if it can't be reached, Muse Spark does; if neither can, the page check decides.
-      try { r = await askJson<{ ok: boolean; why: string }>(ask, "check", checker().model); by = checker().independent ? checker().name : undefined; answered = true; }
-      catch (e) {
-        try { r = await askJson<{ ok: boolean; why: string }>(ask, "check"); by = undefined; answered = true; }
-        catch (e2) { unseen = (e2 as Error).message.slice(0, 80); break; }
+      // The checker looks; if it can't be reached, Muse Spark does; if neither can, there's no look.
+      // `by` names an independent checker (Muse Spark Open); Muse Spark checking its own work isn't named as one.
+      try { r = await askJson<{ ok: boolean; why: string }>(ask, "check", checker().model); by = checker().independent ? checker().name : undefined; }
+      catch {
+        try { r = await askJson<{ ok: boolean; why: string }>(ask, "check"); by = undefined; }
+        catch { break; }
       }
     }
-    if (r.ok === true) { this.log(`✓ ${step.describe}`, "ok", file, { why: r.why || "the screen shows it worked", how: "screen", by }); return; }
-    // No model could look: the page check stands, and it says the screen wasn't checked.
-    if (unseen && !answered && domOk) { this.log(`✓ ${step.describe}`, "ok", file, { why: `${why}; the screen couldn't be checked this time (${unseen})`, how: unchecked ? undefined : "page" }); return; }
-    this.log(`✗ ${step.describe}`, "error", file, { why: domOk ? r.why || "the screen doesn't show that it worked" : why, how: domOk ? "screen" : "page", by: domOk ? by : undefined });
-    throw new Error(`step didn't work: ${step.describe}`);
+    const v = combine(page, r ? { ok: r.ok === true, why: r.why || (r.ok ? "the screen shows it worked" : "the screen doesn't show that it worked"), by } : null, writes(step));
+    tell(v, file || aim);
+    if (v.result === "failed") throw new Error(`step didn't work: ${step.describe}`);
+    return v;
   }
 }

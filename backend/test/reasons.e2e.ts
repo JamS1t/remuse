@@ -96,14 +96,14 @@ try {
   check("typing says what the field now holds, with a picture of the field", note?.why === "the field now holds “Refund 500”" && note.how === "page" && !!note.shot, JSON.stringify(note));
   const decided = line(first, /^Decision:/);
   check("the decision lists the values it went by", /What it read: amount 500/.test(decided?.why ?? ""), decided?.why);
-  const found = line(first, /^Found it:/);
+  const found = line(first, /^This may do the same job:/);
   check("finding the moved button says what it found and what it was", /“Issue refund” \(was “Refund”\)/.test(found?.msg ?? ""), found?.msg);
   check("…how (Muse Spark pointed, SAM 3.1 outlined the buttons), with the marked-up screenshot", found?.how === "screen" && /Muse Spark pointed/.test(found.why) && /SAM 3\.1 outlined 2 buttons/.test(found.why) && !!found.shot && existsSync(join(data, "runs", r.id, found.shot)), found?.why);
   const pressed = line(first, /^✓ Press Refund/);
-  check("an irreversible step is checked by looking at the screen, and says what it saw", pressed?.how === "screen" && pressed.why === "the page says Refunded" && !!pressed.shot, JSON.stringify(pressed));
-  check("the next order uses the button directly: no second look", !line(second, /^Found it:/) && calls.ground === 1 && calls.sam === 1, JSON.stringify(calls));
+  check("an irreversible step is checked by looking at the screen, and says what it saw", pressed?.how === "page" && /the screen agrees: the page says Refunded/.test(pressed.why) && !!pressed.shot, JSON.stringify(pressed));
+  check("the next order uses the button directly: no second look", !line(second, /^This may do the same job:/) && calls.ground === 1 && calls.sam === 1, JSON.stringify(calls));
   const pressed2 = line(second, /^✓ Press Refund/);
-  check("…and still shows its reason", pressed2?.how === "screen" && !!pressed2.why, JSON.stringify(pressed2));
+  check("…and still shows its reason", pressed2?.how === "page" && /the screen agrees/.test(pressed2.why ?? ""), JSON.stringify(pressed2));
   // Saying no to a step on one order: the next order's steps carry their own pictures, never the last one's.
   const r2 = await post(`/specs/${specId}/runs`, { redo: true });
   let w: any;
