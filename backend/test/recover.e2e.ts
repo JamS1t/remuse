@@ -19,11 +19,12 @@ if (await fetch(`${API}/sessions`).then(() => true, () => false)) { console.erro
 
 // What the pages saw done: the test reads this, not the run's own word.
 const did = new Set<string>();
+const typedLog: string[] = []; // every name:/note: value the form saw, in order
 let renamed = false; // the site later turns the "+" button (same element, #plus) into a delete button
 const page = (body: string) => `<!doctype html><meta charset="utf-8"><title>Lab Report 7</title><body style="font:16px sans-serif;padding:24px">${body}</body>`;
 const site = createServer((req, res) => {
   const u = new URL(req.url!, "http://x");
-  if (u.pathname === "/did") { did.add(u.searchParams.get("what")!); res.writeHead(200); return res.end("ok"); }
+  if (u.pathname === "/did") { const w = u.searchParams.get("what")!; did.add(w); if (/^(name|note):/.test(w)) typedLog.push(w); res.writeHead(200); return res.end("ok"); }
   res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
   // Like Classroom in a narrower window: "Add or create" folds into a "+" icon button (Remuse's window is 1440 wide,
   // so this page folds below 1500). Its menu has File, which brings the upload control, and Delete.
@@ -37,6 +38,11 @@ const site = createServer((req, res) => {
     </div>
     <script>function pick() { m.hidden = true; if (document.getElementById("up")) return; const i = document.createElement("input"); i.type = "file"; i.id = "up";
       i.onchange = () => setTimeout(() => { att.textContent = i.files[0].name; fetch("/did?what=attach"); }, 300); document.body.appendChild(i); }</script>`));
+  // A form whose Save is gone (only Send is left): what's typed into each field is recorded, in order.
+  if (u.pathname === "/form2") return res.end(page(`<h1>Request</h1>
+    <input aria-label="Name" oninput="fetch('/did?what=name:' + encodeURIComponent(this.value))">
+    <input aria-label="Note" oninput="fetch('/did?what=note:' + encodeURIComponent(this.value))">
+    <button onclick="fetch('/did?what=send')">Send</button>`));
   // No way to save a draft any more; the only button left sends.
   return res.end(page(`<h1>Reply</h1><textarea>Thanks!</textarea><br><button onclick="fetch('/did?what=send');out.textContent='Sent'">Send</button><p id="out"></p>`));
 }).listen(0);
@@ -131,6 +137,17 @@ try {
   const r2 = await finished((await post(`/specs/${id2}/runs`, {})).id);
   const m2 = msgs(r2);
   check("when the only way forward would send, it never sends", !did.has("send") && r2.items?.[0]?.status !== "done", `${r2.items?.[0]?.status}: ${m2.join(" / ").slice(0, 400)}`);
+  // 3. It typed two fields, then can't save (only Send is left): it clears what it typed and says so.
+  const id3 = await addTask("Fill in the request", [
+    { id: "s1", do: "goto", url: `${SITE}/form2`, describe: "Open the request" },
+    { id: "s2", do: "fill", target: { role: "textbox", name: "Name" }, value: "Ana", describe: "Type the name" },
+    { id: "s3", do: "fill", target: { role: "textbox", name: "Note" }, value: "Please call back", describe: "Type the note" },
+    { id: "s4", do: "click", target: { role: "button", name: "Save" }, describe: "Save the request", expect: { textIncludes: "Saved" } },
+  ]);
+  const r3 = await finished((await post(`/specs/${id3}/runs`, {})).id);
+  await sleep(500);
+  const last = (f: string) => [...typedLog].reverse().find((w) => w.startsWith(`${f}:`));
+  check("giving up halfway, it clears only what it typed and reads it back empty", r3.items?.[0]?.status === "failed" && typedLog.includes("name:Ana") && last("name") === "name:" && last("note") === "note:" && !did.has("send") && msgs(r3).some((m: string) => /^Cleared what I typed/.test(m)), `${JSON.stringify(typedLog)} / ${msgs(r3).slice(-2).join(" / ").slice(0, 300)}`);
   const sawSend = m2.some((m: string) => /the button “Send”/.test(m));
   check("if looking finds Send, it says it won't press it, and never claims a try", !m2.some((m: string) => /“Send” → ✓/.test(m)) && (!sawSend || m2.some((m: string) => /“Send” → not done: .*can't be undone/.test(m))), m2.filter((m: string) => /Send/.test(m)).join(" / ").slice(0, 400));
   check("and it says it ran out of ideas, with what it tried", m2.some((m: string) => /^Out of ideas/.test(m)) && m2.some((m: string) => /I tried: /.test(m)), m2.slice(-3).join(" / ").slice(0, 400));

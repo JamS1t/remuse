@@ -41,6 +41,7 @@ export type Item = {
   byYou?: boolean; // skipped because the person said so (no to a step, or skip on a question): settled, not retried
   unproven?: string[]; // things it wrote here that the page couldn't confirm: nothing irreversible may follow them
   ready?: { step: string; at: number }; // a batch item prepared up to this irreversible step (outcome step index)
+  typed?: { role?: string; name?: string; selector?: string; describe: string }[]; // fields typed into for it: cleared if it stops partway
 };
 export type Pending =
   | { kind: "approval"; item: number; step: string; target?: string; outcome?: string; because?: string; shot: string; healed?: string }
@@ -439,7 +440,7 @@ export class Runner {
           try { await this.runItem(phase); }
           catch (e) {
             if (e instanceof PracticeEnd) { it.status = this.run.practice?.asked ? "skipped" : "done"; if (e.message) this.log(e.message, "ok"); }
-            else { it.status = "failed"; this.log(`Stopped this item: ${(e as Error).message}`, "error"); }
+            else { it.status = "failed"; this.log(`Stopped this item: ${(e as Error).message}`, "error"); await this.cleanUp(it).catch(() => {}); }
           }
           await settle();
         }
@@ -712,7 +713,7 @@ export class Runner {
         it.status = "running"; this.changed();
         this.resuming = true;
         try { await this.act(it.ready!.at); }
-        catch (e) { it.status = "failed"; this.log(`Stopped this item: ${(e as Error).message}`, "error"); }
+        catch (e) { it.status = "failed"; this.log(`Stopped this item: ${(e as Error).message}`, "error"); await this.cleanUp(it).catch(() => {}); }
         finally { this.resuming = false; }
       }
       left = left.filter((i) => !yes.includes(i));
@@ -720,6 +721,28 @@ export class Runner {
     left.forEach(leave);
     this.run.current = this.run.items.length;
     this.changed();
+  }
+
+  /** An item that stopped partway: clear only the fields Remuse typed into for it (never anything else), read each
+   *  back empty, and say so; a field it can't clear is named so you can check it. No half-written items. */
+  private async cleanUp(it: Item) {
+    const typed = it.typed ?? [];
+    it.typed = [];
+    if (!typed.length || this.practicing) return;
+    const cleared: string[] = [], left: string[] = [];
+    for (const f of [...typed].reverse()) {
+      const loc = f.selector ? this.page.locator(f.selector) : f.role && f.name ? this.page.getByRole(f.role as any, { name: f.name, exact: true }) : null;
+      try {
+        if (!loc || (await loc.count()) !== 1) throw new Error("not on the page");
+        await loc.fill("", { timeout: 3000 });
+        const v = await loc.inputValue().catch(async () => (await loc.innerText()).trim());
+        (v === "" ? cleared : left).push(f.describe.replace(/[.\s]+$/, "").toLowerCase());
+      } catch { left.push(f.describe.replace(/[.\s]+$/, "").toLowerCase()); }
+    }
+    const thing = this.spec.inputs.itemName ?? "item";
+    if (cleared.length) this.log(`Cleared what I typed for this ${thing} (${cleared.reverse().join(", ")}) and read it back empty, so nothing is left half done.`, "info");
+    if (left.length) this.log(`Couldn't clear what I typed for ${left.join(", ")}; please check it.`, "warn");
+    this.decide(`Stopped partway, so I ${cleared.length ? `cleared what I'd typed (${cleared.join(", ")})` : "left it"}${left.length ? `; couldn't clear ${left.join(", ")}` : ""}.`);
   }
 
   /** Pick a file from an allowed folder by the task's rule and hand it to the page's upload control. */
@@ -1302,7 +1325,10 @@ export class Runner {
       // (so it shows what the check says). A healed element already has its marked-up screenshot.
       aim = step.do === "fill" && found?.loc ? undefined : found?.shot ?? (found?.loc ? await this.shotNear(found.loc) : undefined);
       if (step.do === "fill") {
-        if (found?.loc) { await found.loc.fill(step.value ?? ""); aim ??= await this.shotNear(found.loc); }
+        if (found?.loc) {
+          await found.loc.fill(step.value ?? ""); aim ??= await this.shotNear(found.loc);
+          (it.typed ??= []).push({ role: step.target?.role, name: step.target?.name, selector: step.target?.selector, describe: step.describe });
+        }
         else if (found?.point) { await this.page.mouse.click(found.point.x, found.point.y); await this.page.keyboard.press("Control+A"); await this.page.keyboard.type(step.value ?? ""); }
         else if (!step.target) await this.page.keyboard.type(step.value ?? ""); // no field: type where the focus is (a spreadsheet cell, an editor)
       } else if (step.do === "press") {
