@@ -232,7 +232,7 @@ type Phase = "reading" | "asking" | "listening" | "practicing" | "paused";
 function Review({ sessionId, task, st, events, onExit }: { sessionId: string; task: TeachTask; st: Status | null; events: Ev[]; onExit: () => void }) {
   const specId = task.specId!;
   const spec = useApi<SpecRow>(`/specs/${specId}`).data;
-  const rb = useApi<{ specId: number; plan: Line[]; questions: Line[] }>(`/specs/${specId}/readback`).data;
+  const rb = useApi<{ specId: number; plan: Line[]; questions: Line[]; steps: { text: string; ids: string[] }[] }>(`/specs/${specId}/readback`).data;
   const rbRef = useRef(rb);
   rbRef.current = rb;
   const [phase, setPhase] = useState<Phase>("reading");
@@ -366,12 +366,15 @@ function Review({ sessionId, task, st, events, onExit }: { sessionId: string; ta
     : st?.hearing ? { orb: "watching", word: "Hearing you" }
     : { orb: "watching", word: "Listening", sub: "Tell me what to change, or say “looks good”." };
 
-  const steps = spec?.spec ? [...spec.spec.steps, ...Object.values(spec.spec.outcomes).flatMap((o) => o.steps)] : [];
+  // The steps as a person would name them (from the readback: keypresses fold into the step they finish).
+  const all = spec?.spec ? [...spec.spec.steps, ...Object.values(spec.spec.outcomes).flatMap((o) => o.steps)] : [];
+  const steps = rb?.steps ?? all.map((s) => ({ text: s.describe, ids: [s.id] }));
   const rules = (rb?.plan ?? []).filter((l) => !l.step && l.text !== "Here's my plan." && !/^And \d+ more steps/.test(l.text));
-  const evidence = (s: (typeof steps)[number]) => {
-    const e = (s as { evidence?: { events: number[]; quote?: string } }).evidence;
-    const what = (e?.events ?? []).map((i) => did(events[i])).filter(Boolean);
-    return { quote: e?.quote, what };
+  // Where a shown step came from: the words and actions behind every task step it stands for.
+  const evidence = (g: { ids: string[] }) => {
+    const ev = g.ids.map((id) => (all.find((s) => s.id === id) as { evidence?: { events: number[]; quote?: string } } | undefined)?.evidence);
+    const what = [...new Set(ev.flatMap((e) => e?.events ?? []).map((i) => did(events[i])).filter(Boolean))];
+    return { quote: ev.find((e) => e?.quote)?.quote, what };
   };
 
   return (
@@ -411,13 +414,13 @@ function Review({ sessionId, task, st, events, onExit }: { sessionId: string; ta
         <p className="mt-0.5 mb-3 text-[13px] text-muted-foreground">What I'll do, step by step. Tap a step to see where it came from.</p>
         <ol className="space-y-1">
           {steps.map((s, i) => {
-            const on = speakingNow?.step === s.id, ev = openStep === s.id ? evidence(s) : null;
+            const key = s.ids[0], on = speakingNow?.step === key, ev = openStep === key ? evidence(s) : null;
             return (
-              <li key={s.id ?? i}>
-                <button type="button" onClick={() => setOpenStep(openStep === s.id ? null : s.id)} aria-expanded={openStep === s.id}
+              <li key={key ?? i}>
+                <button type="button" onClick={() => setOpenStep(openStep === key ? null : key)} aria-expanded={openStep === key}
                   className={cn("grid w-full grid-cols-[1.5rem_1fr] gap-x-2 rounded-xl px-1 py-1.5 text-left text-[15px] leading-snug transition-colors hover:bg-muted", on && "bg-muted")}>
                   <span className={cn("pt-px text-right font-mono text-[13px] leading-[1.6] tabular-nums text-muted-foreground", on && "text-foreground")}>{i + 1}</span>
-                  <span>{s.describe}{changed.has(s.id) ? <span className="ml-1.5 text-[13px] text-ok">changed</span> : null}</span>
+                  <span>{s.text}{s.ids.some((id) => changed.has(id)) ? <span className="ml-1.5 text-[13px] text-ok">changed</span> : null}</span>
                 </button>
                 {ev ? (
                   <p className="mt-0.5 mb-1.5 ml-[2.1rem] text-[13px] leading-snug text-muted-foreground">

@@ -15,6 +15,8 @@ check("an end phrase is not a cancel", !cancelPhrase("Okay, that's it.") && !end
 for (const s of ["so that will be my task I'm done", "I am done.", "Tapos na po.", "Okay, that's all."]) check(`"${s}" is a clear end`, endStrength(s) === "strong", endStrength(s));
 for (const s of ["proceed", "Okay, that's it.", "go ahead", "sige na"]) check(`"${s}" needs a quick check`, endStrength(s) === "weak", endStrength(s));
 check(`"then next one let's proceed to the reach" isn't an end at all`, endStrength("then next one let's proceed to the reach") === null);
+// A short "I'm done" heard slightly wrong still gets the quick check.
+for (const s of ["Am done.", "Done.", "okay done"]) check(`"${s}" gets the quick check`, endStrength(s) === "weak", endStrength(s));
 
 const known = new Set([12, 13]);
 const c = applyOps([], [

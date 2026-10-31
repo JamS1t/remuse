@@ -776,7 +776,12 @@ async function route(req: IncomingMessage, res: ServerResponse) {
     if (m === "POST" && p[3] === "heard") {
       const wav = await body(req);
       if (wav.subarray(0, 4).toString() !== "RIFF") throw new HttpError(400, "audio must be WAV");
-      return send(res, 200, await hearLive(id, wav, Number(url.searchParams.get("at") ?? 0), () => full(id)));
+      const atMs = Number(url.searchParams.get("at") ?? 0), t0 = Date.now();
+      const r = await hearLive(id, wav, atMs, () => full(id));
+      // What each sentence was heard as, and whether it ended the recording: a missed "I'm done" can be checked later.
+      if (r.text) appendFileSync(join(DATA, "voice.log"), `${JSON.stringify({ at: new Date().toISOString(), session: id, atS: +(atMs / 1000).toFixed(1), text: r.text, control: r.control, ms: Date.now() - t0 })}
+`);
+      return send(res, 200, r);
     }
     // Hands-free: something said about a learned task (sorted and acted on in the background), and the latest.
     if (m === "POST" && p[3] === "say") {

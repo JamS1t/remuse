@@ -84,16 +84,18 @@ try {
   }
   console.log("   live:", JSON.stringify(lv).slice(0, 700));
   check("while recording, each sentence is heard whole", !!lv?.turns?.some((t: any) => /report/i.test(t.text)), JSON.stringify(lv?.turns));
-  check("cards appear, each citing words or a click", lv?.cards?.length > 0 && lv.cards.every((c: any) => c.quote || c.events?.length), JSON.stringify(lv?.cards));
+  // (cards are checked once saved, below: with a quick "that's it" the recording can end before the first note is written)
   check("saying \"okay, that's it\" ends the recording by itself", stoppedByVoice);
   // "Okay, that's it." ends about 10.5 s into the clip. It must end the recording within a few seconds of that,
   // not after the note-taking queue (James waited half a minute).
   const endedAfter = (((await call("status")).last?.at ?? Date.now()) - startedAt) / 1000;
   check("and soon after it's said, not after the notes queue", endedAfter < 22, `ended ${endedAfter.toFixed(1)} s into the recording`);
+  const voiceLog = (() => { try { return readFileSync(join(data, "voice.log"), "utf8"); } catch { return ""; } })();
+  check("what each sentence was heard as is written down, with the one that ended it", /"control":"done"/.test(voiceLog) && /report/i.test(voiceLog), voiceLog.slice(0, 300));
 
   let saved: any = null;
   for (let i = 0; i < 20; i++) { saved = await get(`/sessions/${recId}`); if (saved.cards?.length) break; await sleep(1000); }
-  check("the cards are kept with the recording", saved?.cards?.length > 0, JSON.stringify(saved?.cards));
+  check("cards are taken and kept with the recording, each citing words or a click", saved?.cards?.length > 0 && saved.cards.every((c: any) => c.quote || c.events?.length), JSON.stringify(saved?.cards));
   check("the end phrase is not a card", !(saved?.cards ?? []).some((c: any) => /that'?s it/i.test(`${c.quote ?? ""} ${c.text}`)), JSON.stringify(saved?.cards));
 
   // Stop pressed and "I'm done" heard at once: the late one changes nothing and breaks nothing.

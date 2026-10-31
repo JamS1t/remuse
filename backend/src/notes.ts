@@ -9,7 +9,7 @@ export type CardOp = { op: "add"; card: Omit<Card, "id"> } | { op: "edit"; id: s
 // Said at the end of what they say: they're done showing. English and Tagalog. Clear ones end the recording at once;
 // loose ones ("proceed" is also "let's proceed to the reach") get a quick check first.
 export const CLEAR_END = ["i'm done", "im done", "i am done", "that's all", "thats all", "tapos na", "done showing"];
-export const LOOSE_END = ["that's it", "thats it", "proceed", "go ahead", "you can start", "ayan na", "sige na", "okay remuse", "ok remuse"];
+export const LOOSE_END = ["that's it", "thats it", "proceed", "go ahead", "you can start", "ayan na", "sige na", "okay remuse", "ok remuse", "done", "am done"]; // "done", "am done": a short "I'm done" heard slightly wrong
 export const END_PHRASES = [...CLEAR_END, ...LOOSE_END];
 const FILLER = new Set(["na", "now", "po", "please", "remuse", "okay", "ok"]);
 
