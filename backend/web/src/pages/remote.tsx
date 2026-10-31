@@ -135,6 +135,7 @@ export function Remote() {
         {live?.pending ? (
           <PendingCard key={`${live.pending.kind}-${live.pending.item}-${live.pending.shot}`} p={live.pending} r={live} file={(f) => `/api/runs/${live.id}/files/${f}`} busy={!!busy} answer={answer} />
         ) : null}
+        {live && !live.pending ? <NowSteps run={live} /> : null}
         {live && !live.pending ? (
           <div className="flex gap-2">
             <Button variant="outline" className="flex-1" onClick={() => open(`#/run/${live.id}`)}>{practicing ? "Watch the practice" : "See every item"}</Button>
@@ -287,6 +288,23 @@ function FollowAlong({ sessionId, t, recording, onDone, onRetry }: { sessionId: 
         </>
       ) : null}
     </section>
+  );
+}
+
+/** While it works: its last few steps on the current item, each with why it counts as done. */
+function NowSteps({ run }: { run: Run }) {
+  const it = run.items[run.current];
+  const recent = (it?.log ?? []).filter((l) => !l.msg.startsWith("In the ")).slice(-3);
+  if (!recent.length) return null;
+  return (
+    <ol className="glass space-y-2 rounded-2xl px-4 py-3 text-[12.5px]" aria-live="polite">
+      {recent.map((l, k) => (
+        <li key={`${l.at}-${k}`} className="flex gap-2 animate-in fade-in duration-300">
+          {l.level === "ok" ? <Check className="mt-0.5 size-3.5 shrink-0 text-ok" /> : l.level === "info" ? <span className="mt-1.5 ml-1 block size-1 shrink-0 rounded-full bg-muted-foreground/60" /> : <CircleAlert className={cn("mt-0.5 size-3.5 shrink-0", l.level === "error" ? "text-destructive" : "text-warn")} />}
+          <span className="min-w-0"><span className="block">{l.msg.replace(/^✓ /, "")}</span>{l.why ? <span className="block text-muted-foreground">{l.why}</span> : null}</span>
+        </li>
+      ))}
+    </ol>
   );
 }
 

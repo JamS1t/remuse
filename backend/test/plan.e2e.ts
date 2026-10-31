@@ -133,7 +133,7 @@ try {
   if (cr.pending?.kind === "ask") { await post(`/runs/${c.id}/answer`, { outcome: "decline", learn: false }); cr = await until(c.id, (x) => x.pending?.kind === "plan"); }
   await post(`/runs/${c.id}/answer`, { decision: "reject" });
   cr = await until(c.id, () => false);
-  check("Cancel at the plan does nothing, and says so on each", cr.status === "stopped" && sent() === 2 && cr.items.every((i: any) => i.status === "skipped" && /cancelled at the plan/.test(i.log.at(-1)?.msg)), `${cr.status}, ${sent()} sent`);
+  check("Cancel at the plan does nothing, and says so on each", cr.status === "stopped" && sent() === 2 && cr.items.every((i: any) => i.status === "skipped" && /cancelled at the plan/.test(i.log.at(-1)?.msg)), `${cr.status}, ${sent()} sent; ${cr.items.map((i: any) => `${i.status}: ${i.log.at(-1)?.msg}`).join(" | ")}`);
 
   // 5. "Approve all" at the plan: no more stops.
   const g = await post(`/specs/${specId}/runs`, { plan: true, limit: 2 });

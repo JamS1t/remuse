@@ -201,7 +201,7 @@ async function learn(id: string, offsetMs: number) {
 async function applyFeedback(row: ReturnType<typeof specRow>, said: string) {
   // The last real run is what the person is talking about; a practice only if there was no real run yet.
   const last = db.prepare("SELECT json FROM runs WHERE spec_id IN (SELECT id FROM specs WHERE session_id = ?) ORDER BY json_extract(json, '$.mode') IS NULL DESC, updated_at DESC LIMIT 1").get(row.sessionId) as any;
-  const lastRun = last ? (JSON.parse(last.json) as Run).items.slice(0, 3).map((it) => `${it.label}: ${it.log.map((l) => l.msg).join(" / ")}`).join("\n").slice(0, 4000) : "";
+  const lastRun = last ? (JSON.parse(last.json) as Run).items.slice(0, 3).map((it) => `${it.label}: ${it.log.map((l) => (l.why ? `${l.msg} (${l.why})` : l.msg)).join(" / ")}`).join("\n").slice(0, 4000) : "";
   const { spec, changes } = await revise(full(row.sessionId), row.spec, said, lastRun);
   const specId = saveSpec(row.sessionId, spec, `You said: "${said.slice(0, 140)}"`);
   stage(row.sessionId, "building");

@@ -151,7 +151,6 @@ export function RunPage({ id }: { id: string }) {
 /** One item: its update, its decision (when there was one), what it compared, its steps and screens. */
 function ItemDetail({ it, file, choices, live, latest }: { it: Item; file: (f: string) => string; choices: number; live: boolean; latest?: string }) {
   const showDecision = !!it.because && (choices > 1 || it.decidedBy !== "rules");
-  const shots = it.log.filter((l) => l.shot);
   return (
     <div className="space-y-6">
       {it.report ? (
@@ -175,14 +174,20 @@ function ItemDetail({ it, file, choices, live, latest }: { it: Item; file: (f: s
             const read = /^(\w+) = (.+?)( \(computed\))?(: .*)?$/.exec(msg);
             const label = msg.replace(/ \(checked on screen: .*\)$/, "");
             return (
-              <li key={k} className="grid grid-cols-[20px_minmax(0,1fr)_48px] items-start gap-3 px-5 py-2.5 text-[13.5px]">
+              <li key={k} className="grid grid-cols-[20px_minmax(0,1fr)_auto_48px] items-start gap-3 px-5 py-2.5 text-[13.5px]">
                 <span className="pt-0.5">
                   {l.level === "warn" || l.level === "error" ? <CircleAlert className={cn("size-3.5", l.level === "error" ? "text-destructive" : "text-warn")} />
                     : l.level === "ok" ? <Check className="size-3.5 text-ok" /> : <span className="mt-1.5 ml-1 block size-1 rounded-full bg-muted-foreground/60" />}
                 </span>
                 {read ? (
                   <span className="min-w-0"><span className="text-muted-foreground">{nice(read[1])}</span> <span className="ml-1 font-mono text-[13px]">{JSON.parse(JSON.stringify(read[2])).replace(/^"|"$/g, "")}</span></span>
-                ) : <span className={cn("min-w-0", l.level === "error" && "text-destructive", l.level === "warn" && "text-warn")}>{label}</span>}
+                ) : (
+                  <span className="min-w-0">
+                    <span className={cn(l.level === "error" && "text-destructive", l.level === "warn" && "text-warn")}>{label}</span>
+                    {l.why ? <span className="mt-0.5 block text-[12.5px] leading-snug text-muted-foreground">{l.how === "screen" ? "Looked at the screen: " : l.how === "page" ? "Checked on the page: " : ""}{l.why}</span> : null}
+                  </span>
+                )}
+                {l.shot ? <Shot src={file(l.shot)} alt={label} className="w-20 sm:w-24" /> : <span />}
                 <span className="pt-0.5 text-right font-mono text-[11.5px] text-muted-foreground">{timecode(l.at - it.log[0].at)}</span>
               </li>
             );
@@ -190,14 +195,6 @@ function ItemDetail({ it, file, choices, live, latest }: { it: Item; file: (f: s
         </ol>
       </section>
 
-      {shots.length ? (
-        <section>
-          <h3 className="mb-2 text-[13px] font-medium text-muted-foreground">Screens it checked</h3>
-          <div className="grid grid-cols-2 gap-3 lg:grid-cols-3">
-            {shots.map((l, k) => <Shot key={k} src={file(l.shot!)} alt={clean(l.msg)} caption={clean(l.msg).replace(/ \(checked on screen: .*\)$/, "")} />)}
-          </div>
-        </section>
-      ) : null}
     </div>
   );
 }
