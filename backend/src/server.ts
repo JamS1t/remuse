@@ -6,7 +6,8 @@ import { mkdirSync, readFileSync, writeFileSync, existsSync, rmSync, statSync, r
 import { join, dirname, extname } from "node:path";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
-import { transcribe, calls } from "./meta.ts";
+import { transcribe, calls, type Turn } from "./meta.ts";
+import { coverage } from "./evidence.ts";
 import { revise, sortSaid, understand, type Spec } from "./understand.ts";
 import { endLive, heard as hearLive, liveCards, liveState } from "./live.ts";
 import { build } from "./build.ts";
@@ -181,7 +182,11 @@ async function learn(id: string, offsetMs: number) {
     if (cards.length) db.prepare("UPDATE sessions SET cards = ? WHERE id = ?").run(JSON.stringify(cards), id);
     await transcribeSession(id, offsetMs);
     stage(id, "understanding");
-    const spec = await understand(full(id), sessionDir(id), folderHints());
+    const s = full(id);
+    const spec = await understand(s, sessionDir(id), folderHints());
+    // What they asked for that the task doesn't do yet: asked out loud in the review, with the steps it wasn't sure of.
+    const missing = await coverage(spec, s.turns as Turn[], s.cards);
+    if (missing.length) spec.questions = [...(spec.questions ?? []), ...missing];
     if (spec.title && !session(id).title) db.prepare("UPDATE sessions SET title = ? WHERE id = ?").run(spec.title, id);
     const specId = saveSpec(id, spec, "Learned by Muse Spark from your recording");
     stage(id, "building");
@@ -190,8 +195,8 @@ async function learn(id: string, offsetMs: number) {
     stage(id, "ready");
     endLive(id);
     notify(`Remuse learned: ${session(id).title ?? spec.goal}`, r.ok ? "Ready to do it again. Open Remuse to run or schedule it." : "Some checks failed. Open Remuse to review it.", `http://127.0.0.1:${PORT}/#/spec/${specId}`);
-    // Then, by itself, it tries the task once on your example to show it understood.
-    autoPractice(specId);
+    // ponytail: no practice by itself any more. Learning always follows teaching, and the review that follows reads the
+    // plan aloud first: practice starts when you say it looks right ("Practice once" is one tap if the sidebar was closed).
   } catch (e) {
     stage(id, "failed", (e as Error).message);
     endLive(id);

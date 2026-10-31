@@ -82,6 +82,14 @@ try {
   const after = await call("status");
   check("a saidDone after Stop is ignored", !after.recording && JSON.stringify(after.last) === JSON.stringify(before.last), `${late}; ${JSON.stringify(after.last)}`);
 
+  // Learning (real Muse Spark): every step it learned says what it came from, and nothing practices by itself.
+  let task: any = null;
+  for (let i = 0; i < 90; i++) { task = ((await get("/tasks")) as any[]).find((t) => t.sessionId === recId); if (task?.learnStage === "ready" || task?.learnStage === "failed") break; await sleep(2000); }
+  const learned = task?.specId ? (await get(`/specs/${task.specId}`)).spec : null;
+  const acting = learned ? [...learned.steps, ...Object.values(learned.outcomes as Record<string, any>).filter((o) => o.demonstrated !== false).flatMap((o) => o.steps)].filter((s: any) => ["click", "fill", "press", "goto", "upload", "open_item", "compare"].includes(s.do)) : [];
+  check("every learned step that acts cites what it came from", task?.learnStage === "ready" && acting.length > 0 && acting.every((s: any) => s.evidence?.events?.length), JSON.stringify({ stage: task?.learnStage, error: task?.learnError, steps: learned?.steps?.map((s: any) => [s.describe, s.evidence]) }).slice(0, 600));
+  check("learning doesn't start a practice by itself", !task?.practice, JSON.stringify(task?.practice));
+
   // A cough or a click on its own: nothing is heard, nothing changes.
   const s2 = await post("/sessions", { title: "", startedAt: Date.now() });
   const lv0 = await get(`/sessions/${s2.id}/live`);

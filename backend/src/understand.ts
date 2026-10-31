@@ -3,6 +3,8 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { askJson, text, png, type Part } from "./meta.ts";
 import { IGNORED, moments } from "./moments.ts";
+import { checkEvidence, type Question } from "./evidence.ts";
+import type { Card } from "./notes.ts";
 
 export type Target = { role?: string; name?: string; selector?: string; fuzzy?: boolean };
 export type Step = {
@@ -15,6 +17,8 @@ export type Step = {
   tab?: string;
   describe: string; expect?: { urlIncludes?: string; textIncludes?: string; looks?: string };
   irreversible?: boolean; fromEvent?: number | null; healed?: string;
+  // What this step came from: the events it repeats (indexes into the recording) and the person's words.
+  evidence?: { events: number[]; quote?: string };
   account?: string; // the Google/YouTube account this step was done as in the demo (from its event)
   // The page's own WebMCP tool for this action: used when the page offers it, else the robot clicks.
   tool?: { name: string; args: Record<string, string> };
@@ -46,6 +50,8 @@ export type Spec = {
   accounts?: Record<string, string>; accountSets?: Record<string, string[]>;
   scopeTypes: string[]; variables: Variable[]; steps: Step[]; rules: Rule[];
   outcomes: Record<string, { describe: string; steps: Step[]; reply?: string; demonstrated: boolean }>;
+  // What Remuse wasn't sure about after learning, asked out loud one at a time in the review.
+  questions?: Question[];
 };
 
 const SCHEMA = `{
@@ -88,7 +94,7 @@ const SCHEMA = `{
       "expect": { "urlIncludes": "optional, may use {{var}}", "textIncludes": "optional: words that are always there after this step (a heading, label or tab name), may use {{var}}; never a number or value that changes between runs (a count, %, duration, date, price, this item's own data)", "looks": "what the screen should show after this step" },
       "irreversible": false,
       "tool": { "name": "optional: a WebMCP tool the page offered that does this same action", "args": { "<param>": "value or {{var}}" } },
-      "fromEvent": <event # this step came from, or null> }
+      "evidence": { "events": [<the event #s this step repeats>], "quote": "<the person's words it came from, if they said it>" } }
   ],
   "rules": [ { "if": "condition in plain words using variable names", "then": "<outcome key>", "said": "the user's own words" } ],
   "outcomes": {
@@ -117,6 +123,7 @@ Rules for the spec:
 - Mark "irreversible": true on any step that pays, buys, checks out, places an order, sends a message, submits, refunds, books, transfers or deletes. Adding to a cart is not irreversible; checking out is.
 - Built-in variables: {{item_url}} (list items), {{today}} (YYYY-MM-DD), {{reply}}.
 - Every step gets an "expect" so the robot can check its own work.
+- Evidence: every step says what it came from. "evidence.events" lists the event #s of what the person did that the step repeats; goto, click, fill, press, upload, open_item and compare steps must cite at least one (a goto cites the start or page event that showed that page). "evidence.quote" is their words, when they said it. Never add a step the person didn't do or ask for, and never take one from a frame alone. Outcomes that weren't demonstrated are the only exception.
 - Reports: when the person wants to be told something (an update, a summary, an alert), the outcome ends with a "report" step. Its "message" is short and readable, with {{variables}}, e.g. "Views {{views}} ({{views_change}} since last time), CTR {{ctr}}%". Reports are not irreversible. Read every number they mentioned with extract steps.
 - Changes since last time: {{prev_<name>}} holds a variable's value from the previous run of this task (null on the first run). For "how much did X change", add a computed variable like ctr_change from ctr and prev_ctr: a string with a sign, e.g. "+0.6" or "-1.2", and null when prev_ctr is null. In the report message put changes in parentheses, e.g. "CTR {{ctr}} ({{ctr_change}} since last time)"; that part is left out automatically when there is no previous value.
 - Uploading: an "upload" line means the person chose a file to upload. Keep the click that opened the file picker if there was one, then add {"do": "upload", "target": <the file input from the upload line>, "file": {...}}. "folder" is the allowed folder (listed below) whose files look like the one chosen; null if none fits (the person will pick one). "pick": "next" = the oldest file not uploaded yet, for a posting queue (the default); "newest" = whatever arrived most recently ("the latest file"); "dated" = the file whose name carries today's date and a time not later than now ("the one labelled for today"). After an upload step, {{file_name}} is the file's name and {{file_caption}} the text of a .txt file with the same name (null if none): use it for a caption or description box. Posting, sharing or publishing is irreversible.
@@ -129,7 +136,7 @@ Rules for the spec:
 Reply with ONLY the JSON object, in this shape:
 ${SCHEMA}`;
 
-type Session = { id: string; title?: string; events: any[]; turns: { startMs: number; endMs: number; text: string }[] };
+type Session = { id: string; title?: string; events: any[]; turns: { startMs: number; endMs: number; text: string }[]; cards?: Card[] };
 
 export function eventLine(e: any, i: number, tabs: Map<unknown, string>) {
   const tab = tabs.size > 1 && tabs.has(e.tab) ? ` tab=${tabs.get(e.tab)}` : "";
@@ -144,6 +151,11 @@ export function eventLine(e: any, i: number, tabs: Map<unknown, string>) {
 export type FolderHint = { name: string; files: string[] };
 export function buildPrompt(s: Session, dir: string, folders: FolderHint[] = []): Part[] {
   const parts: Part[] = [text(INSTRUCTIONS), text(`Allowed folders (name: newest files): ${folders.length ? folders.map((f) => `\n- ${f.name}: ${f.files.join(", ") || "(empty)"}`).join("") : "none yet"}`), text(`Task name given by the person: ${s.title ?? "(none)"}\n\nThe recording, moment by moment, in time order. A moment is one thing the person said ("said") with what they did around it; a "silent" moment is what they did without talking. Event lines start with their event #; frames are screenshots.`)];
+  // The notes taken live while they taught: what they said they want, in their words.
+  if (s.cards?.length) {
+    const at = new Map(s.events.map((e, i) => [e.id, i]));
+    parts.push(text(`What the person said they want while teaching (notes taken live, each from their words or actions; follow these):\n${s.cards.map((c) => `- [${c.kind}] ${c.text}${c.quote ? ` (said "${c.quote}")` : ""}${c.events?.some((e) => at.has(e)) ? ` (events ${c.events.filter((e) => at.has(e)).map((e) => `#${at.get(e)}`).join(" ")})` : ""}`).join("\n")}`));
+  }
   // Browser tabs as T1, T2... in the order the person first used them (clicked, typed or drew in).
   const tabs = new Map<unknown, string>();
   for (const e of s.events) if (e.tab != null && e.kind !== "page" && !IGNORED.has(e.kind) && !tabs.has(e.tab)) tabs.set(e.tab, `T${tabs.size + 1}`);
@@ -175,6 +187,8 @@ export function buildPrompt(s: Session, dir: string, folders: FolderHint[] = [])
 
 export async function understand(s: Session, dir: string, folders: FolderHint[] = []): Promise<Spec> {
   const spec = await askJson<Spec>(buildPrompt(s, dir, folders), "understand");
+  // Before normalize, which reads each step's event (fromEvent) for the account it was done as.
+  checkEvidence(spec, s.events);
   return normalize(spec, s);
 }
 
