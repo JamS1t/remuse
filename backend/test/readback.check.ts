@@ -25,6 +25,8 @@ check("a question without a quote is just the question", r.questions[1].text ===
 const long = readback(spec(11));
 check("over 8 steps: 8, then how many more", long.plan.filter((l) => l.step).length === 8 && long.plan.some((l) => l.text === "And 3 more steps, all on the screen."), long.plan.map((l) => l.text));
 check("no questions: none", readback(spec(2)).questions.length === 0);
+const doIt = readback(spec(2, { rules: [{ if: "otherwise", then: "skip", said: "Open the report page and read the total." }] } as any));
+check("a do-it-every-time rule isn't read as an 'If'", !doIt.plan.some((l) => /^If /.test(l.text)), doIt.plan.map((l) => l.text));
 
 console.log(fails ? `\n${fails} failed` : "\nall passed");
 process.exit(fails ? 1 : 0);

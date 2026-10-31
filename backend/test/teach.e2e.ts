@@ -102,6 +102,11 @@ try {
   const acting = learned ? [...learned.steps, ...Object.values(learned.outcomes as Record<string, any>).filter((o) => o.demonstrated !== false).flatMap((o) => o.steps)].filter((s: any) => ["click", "fill", "press", "goto", "upload", "open_item", "compare"].includes(s.do)) : [];
   check("every learned step that acts cites what it came from", task?.learnStage === "ready" && acting.length > 0 && acting.every((s: any) => s.evidence?.events?.length), JSON.stringify({ stage: task?.learnStage, error: task?.learnError, steps: learned?.steps?.map((s: any) => [s.describe, s.evidence]) }).slice(0, 600));
   check("learning doesn't start a practice by itself", !task?.practice, JSON.stringify(task?.practice));
+  // Then the review: the plan on screen (read aloud in a real Chrome), and Remuse waiting for "looks good" or a change.
+  await ui.getByRole("button", { name: /Looks right, try it once/ }).waitFor({ timeout: 20000 }).catch(() => {});
+  check("after learning, the review shows the plan and waits for you", await ui.getByRole("button", { name: /Looks right, try it once/ }).isVisible().catch(() => false) && await ui.getByText(/what I'll do/i).isVisible().catch(() => false) && await ui.getByRole("button", { name: /Type instead/ }).isVisible().catch(() => false));
+  const shot2 = join(process.env.SHOTS ?? data, "teach-review.png");
+  await side.screenshot({ path: shot2 }); console.log("   screenshot:", shot2);
 
   // A cough or a click on its own: nothing is heard, nothing changes.
   const s2 = await post("/sessions", { title: "", startedAt: Date.now() });

@@ -1,16 +1,23 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 import { CircleHelp, Eye, LoaderCircle, RotateCcw, Split, Square } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Kbd } from "@/components/ui/kbd";
+import { Textarea } from "@/components/ui/textarea";
 import { Lockup, Orb, useAction, type OrbState } from "@/components/bits";
-import { api, useApi, type Card, type LiveState, type SessionFull, type SpecRow } from "@/lib/api";
+import { api, useApi, type Card, type LiveState, type PracticeState, type SessionFull, type SpecRow } from "@/lib/api";
 import { ext } from "@/lib/bridge";
+import { practiceSay } from "@/lib/say";
 import { cn } from "@/lib/utils";
 
-type Status = { recording: boolean; rec?: { id?: string; t0?: number; audioError?: string | null }; hearing?: boolean; last?: { id: string; byVoice?: boolean; discarded?: boolean; at?: number } | null };
-export type TeachTask = { sessionId: string; specId?: number; title?: string; learnStage?: string | null; learnError?: string | null };
+type Status = {
+  recording: boolean; rec?: { id?: string; t0?: number; audioError?: string | null }; hearing?: boolean;
+  speaking?: { line: number; total: number } | null; last?: { id: string; byVoice?: boolean; discarded?: boolean; at?: number } | null;
+};
+export type TeachTask = { sessionId: string; specId?: number; title?: string; learnStage?: string | null; learnError?: string | null; practice?: PracticeState | null };
 type Ev = SessionFull["events"][number] & { targets?: { label?: string; text?: string }[] };
+type Line = { text: string; step?: string; question?: string };
+type Heard = { n: number; at: number; text: string; intent: string; changes?: string[]; schedule?: object; speak?: string[]; answered?: string };
 
 const LEARNING = ["listening", "understanding", "building"];
 const STAGE: Record<string, string> = {
@@ -19,8 +26,9 @@ const STAGE: Record<string, string> = {
   building: "Writing your rules as code and checking them",
 };
 const clock = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+const QUIET_MS = 120_000; // the review stops listening after 2 quiet minutes
 
-// What you did, in a few words, for a note's "where this came from" line.
+// What you did, in a few words, for a "where this came from" line.
 function did(e?: Ev): string | null {
   if (!e) return null;
   const name = e.target?.label ?? e.target?.text ?? e.targets?.[0]?.label ?? e.targets?.[0]?.text;
@@ -33,14 +41,9 @@ function did(e?: Ev): string | null {
   return null;
 }
 
-/** Teaching, full sidebar: Remuse on top, what it heard, and the notes it's taking, each with where it came from.
- *  Nothing else on screen. Stays through learning; the review takes over when the task is learned. */
-export function TeachMode({ sessionId, task, onExit }: { sessionId: string; task?: TeachTask; onExit: () => void }) {
+/** The status from the extension, twice a second: recording, whether you're talking, whether Remuse is. */
+function useStatus() {
   const [st, setSt] = useState<Status | null>(null);
-  const [keys, setKeys] = useState<{ teach?: string; pen?: string }>({});
-  const { busy, run } = useAction();
-  useEffect(() => { ext("keys").then(setKeys, () => {}); }, []);
-  // The extension knows first: recording, and whether you're talking right now.
   useEffect(() => {
     let on = true;
     const tick = () => ext<Status>("status").then((s) => { if (on) setSt(s); }, () => {});
@@ -48,108 +51,104 @@ export function TeachMode({ sessionId, task, onExit }: { sessionId: string; task
     const t = setInterval(tick, 500);
     return () => { on = false; clearInterval(t); };
   }, []);
+  return st;
+}
+
+/** One screen, three parts: Remuse (orb and one word), what it's working on, and the controls at the bottom. */
+function Frame({ orb, word, sub, shimmer, right, children, footer }: { orb: OrbState; word: string; sub?: ReactNode; shimmer?: boolean; right?: ReactNode; children: ReactNode; footer: ReactNode }) {
+  return (
+    <div className="flex h-screen flex-col">
+      <header className="flex h-11 shrink-0 items-center gap-2 px-4"><Lockup className="h-[21px]" />{right}</header>
+      <main className="flex-1 overflow-y-auto px-5 pb-6">
+        <section className="flex flex-col items-center pt-8 text-center" aria-live="polite">
+          <Orb state={orb} size={104} />
+          <h1 className={cn("mt-7 text-[28px] leading-[1.1] font-medium tracking-[-0.025em] text-balance", shimmer && "shimmer")}>{word}</h1>
+          {sub ? <div className="mt-2.5 max-w-[32ch] text-[14px] leading-snug text-muted-foreground text-pretty">{sub}</div> : null}
+        </section>
+        {children}
+      </main>
+      <footer className="shrink-0 border-t border-rule bg-background/85 px-4 pt-3 pb-4 backdrop-blur-md">{footer}</footer>
+    </div>
+  );
+}
+
+/** Your own words, large, as Remuse heard them. */
+const Heard = ({ text, k }: { text: string; k?: number }) => (
+  <q key={k} className="block font-script text-[19px] leading-[1.4] text-foreground/90 [quotes:'“''”'] animate-in fade-in duration-500 line-clamp-4">{text}</q>
+);
+
+/** Teaching, full sidebar: Remuse on top, what it heard, and the notes it's taking, each with where it came from.
+ *  Nothing else on screen. Stays through learning, then the review reads the plan aloud and takes your changes. */
+export function TeachMode({ sessionId, task, onExit }: { sessionId: string; task?: TeachTask; onExit: () => void }) {
+  const st = useStatus();
+  const [keys, setKeys] = useState<{ teach?: string; pen?: string }>({});
+  const { busy, run } = useAction();
+  useEffect(() => { ext("keys").then(setKeys, () => {}); }, []);
 
   const recording = !!st?.recording && st.rec?.id === sessionId;
   const stage = task?.learnStage ?? null;
-  const learning = !!st && !recording && (stage == null || LEARNING.includes(stage));
+  // Once learned, the review stays on screen, also while a change you asked for is being built.
+  const [reviewing, setReviewing] = useState(false);
+  useEffect(() => { if (stage === "ready" && task?.specId) setReviewing(true); }, [stage, task?.specId]);
+  const learning = !!st && !recording && !reviewing && (stage == null || LEARNING.includes(stage));
   // Polls only while there's something new to see (useApi keeps its first keepPolling, so this goes by the interval).
   const busyNow = recording || learning;
   const live = useApi<LiveState>(`/sessions/${sessionId}/live`, busyNow ? 1500 : 0).data;
   const session = useApi<SessionFull>(`/sessions/${sessionId}`, busyNow ? 3000 : 0).data;
-  const spec = useApi<SpecRow>(stage === "ready" && task?.specId ? `/specs/${task.specId}` : null).data;
 
   // Nothing was done: the Agent didn't keep it, so there's nothing to learn.
   const last = st?.last?.id === sessionId ? st.last : null;
   useEffect(() => { if (last?.discarded) { toast("Nothing was recorded, so I didn't keep it."); onExit(); } }, [last?.discarded]);
   // The shortcut follows what's on screen: it never starts a new recording over this one's review.
-  useEffect(() => { ext("mode", { mode: recording ? "idle" : stage === "ready" ? "review" : stage === "failed" ? "idle" : "learning" }).catch(() => {}); }, [recording, stage]);
+  useEffect(() => { ext("mode", { mode: recording ? "idle" : reviewing ? "review" : stage === "failed" ? "idle" : "learning" }).catch(() => {}); }, [recording, reviewing, stage]);
   useEffect(() => () => { ext("mode", { mode: "idle" }).catch(() => {}); }, []);
 
-  const cards = live?.cards?.length ? live.cards : session?.cards ?? [];
   const events = (session?.events ?? []) as Ev[];
+  if (reviewing && task?.specId) return <Review sessionId={sessionId} task={task} st={st} events={events} onExit={onExit} />;
+
+  const cards = live?.cards?.length ? live.cards : session?.cards ?? [];
   const lastSaid = live?.turns?.at(-1)?.text;
   const secs = recording && st?.rec?.t0 ? Math.max(0, Math.floor((Date.now() - st.rec.t0) / 1000)) : 0;
   const justDone = !!last?.at && Date.now() - last.at < 1800 && !recording;
-
   const view: { orb: OrbState; word: string; sub?: string } =
     recording ? (st?.hearing ? { orb: "watching", word: "Hearing you" } : { orb: "watching", word: "Listening", sub: "Do the task once. Say why as you go." })
     : justDone ? { orb: "thinking", word: last?.byVoice ? "Got it, you're done" : "Got it" }
     : stage === "failed" ? { orb: "idle", word: "I couldn't learn that one", sub: task?.learnError ?? undefined }
-    : stage === "ready" ? { orb: "done", word: "Learned", sub: task?.title }
     : { orb: "thinking", word: "Thinking", sub: (stage && STAGE[stage]) || "Getting ready" };
 
-  const stop = () => run("stop", () => ext("stop"));
-  const steps = spec?.spec ? [...spec.spec.steps, ...Object.values(spec.spec.outcomes).flatMap((o) => o.steps)] : [];
-
   return (
-    <div className="flex h-screen flex-col">
-      <header className="flex h-11 shrink-0 items-center gap-2 px-4">
-        <Lockup className="h-[21px]" />
-        {recording ? (
-          <span className="ml-auto inline-flex items-center gap-2 font-mono text-[13px] tabular-nums text-muted-foreground">
-            <span className="size-2 rounded-full bg-tally" aria-hidden />{clock(secs)}<span className="sr-only">recording</span>
-          </span>
-        ) : null}
-      </header>
-
-      <main className="flex-1 overflow-y-auto px-5 pb-6">
-        <section className="flex flex-col items-center pt-8 text-center" aria-live="polite">
-          <Orb state={view.orb} size={104} />
-          <h1 className={cn("mt-7 text-[28px] leading-[1.1] font-medium tracking-[-0.025em] text-balance", view.word === "Thinking" && "shimmer")}>{view.word}</h1>
-          {view.sub ? <p className="mt-2.5 max-w-[32ch] text-[14px] leading-snug text-muted-foreground text-pretty">{view.sub}</p> : null}
-          {recording && st?.rec?.audioError ? <p className="mt-3 text-[13px] text-warn">No voice: {st.rec.audioError}</p> : null}
-        </section>
-
-        {/* What it heard last, in your words, large enough to read from across the desk. */}
-        {(recording || learning) && (st?.hearing || lastSaid) ? (
-          <div className="mx-auto mt-7 max-w-[34ch] text-center">
-            {recording && st?.hearing && !lastSaid ? <p className="shimmer text-[15px]">Hearing you…</p> : (
-              <q key={live?.turns?.length} className="block font-script text-[19px] leading-[1.4] text-foreground/90 [quotes:'“''”'] animate-in fade-in duration-500 line-clamp-4">{lastSaid}</q>
-            )}
-          </div>
-        ) : null}
-
-        {stage === "ready" && steps.length ? (
-          <section className="mt-10">
-            <h2 className="mb-3 text-[13px] font-medium text-muted-foreground">What I'll do</h2>
-            <ol className="space-y-3">
-              {steps.map((s, i) => (
-                <li key={s.id ?? i} className="grid grid-cols-[1.5rem_1fr] gap-x-2 text-[15px] leading-snug">
-                  <span className="pt-px text-right font-mono text-[12px] leading-[1.6] tabular-nums text-muted-foreground">{i + 1}</span>
-                  <span>{s.describe}</span>
-                </li>
-              ))}
-            </ol>
-          </section>
-        ) : (
-          <Notes cards={cards} events={events} recording={recording} />
-        )}
-      </main>
-
-      <footer className="shrink-0 border-t border-rule bg-background/85 px-4 pt-3 pb-4 backdrop-blur-md">
-        {recording ? (
-          <>
-            <Button size="lg" variant="outline" onClick={stop} disabled={busy === "stop"} className="h-11 w-full rounded-full border-tally/40 bg-tally/10 text-[15px] hover:bg-tally/20">
-              {busy === "stop" ? <LoaderCircle className="animate-spin" /> : <Square className="size-3 fill-tally text-tally" />}Stop, I've shown you
-            </Button>
-            <p className="mt-2.5 flex flex-wrap items-center justify-center gap-x-3 gap-y-1 text-[13px] text-muted-foreground">
-              <span>or say “I'm done”</span>
-              {keys.teach ? <span className="inline-flex items-center gap-1.5"><Kbd>{keys.teach}</Kbd>stop</span> : null}
-              {keys.pen ? <span className="inline-flex items-center gap-1.5"><Kbd>{keys.pen}</Kbd>draw</span> : null}
-            </p>
-          </>
-        ) : stage === "failed" ? (
-          <div className="flex gap-2">
-            <Button className="flex-1 rounded-full" onClick={() => run("relearn", () => api(`/sessions/${sessionId}/learn`, "POST"))} disabled={!!busy}><RotateCcw />Try again</Button>
-            <Button variant="ghost" className="rounded-full" onClick={onExit}>Close</Button>
-          </div>
-        ) : stage === "ready" ? (
-          <Button className="h-11 w-full rounded-full text-[15px]" onClick={onExit}>Looks right</Button>
-        ) : (
-          <p className="py-1.5 text-center text-[13px] text-muted-foreground">Learning from your demo. This takes about a minute.</p>
-        )}
-      </footer>
-    </div>
+    <Frame orb={view.orb} word={view.word} sub={<>{view.sub}{recording && st?.rec?.audioError ? <p className="mt-2 text-[13px] text-warn">No voice: {st.rec.audioError}</p> : null}</>} shimmer={view.word === "Thinking"}
+      right={recording ? (
+        <span className="ml-auto inline-flex items-center gap-2 font-mono text-[13px] tabular-nums text-muted-foreground">
+          <span className="size-2 rounded-full bg-tally" aria-hidden />{clock(secs)}<span className="sr-only">recording</span>
+        </span>
+      ) : null}
+      footer={recording ? (
+        <>
+          <Button size="lg" variant="outline" onClick={() => run("stop", () => ext("stop"))} disabled={busy === "stop"} className="h-11 w-full rounded-full border-tally/40 bg-tally/10 text-[15px] hover:bg-tally/20">
+            {busy === "stop" ? <LoaderCircle className="animate-spin" /> : <Square className="size-3 fill-tally text-tally" />}Stop, I've shown you
+          </Button>
+          <p className="mt-2.5 flex flex-wrap items-center justify-center gap-x-3 gap-y-1 text-[13px] text-muted-foreground">
+            <span>or say “I'm done”</span>
+            {keys.teach ? <span className="inline-flex items-center gap-1.5"><Kbd>{keys.teach}</Kbd>stop</span> : null}
+            {keys.pen ? <span className="inline-flex items-center gap-1.5"><Kbd>{keys.pen}</Kbd>draw</span> : null}
+          </p>
+        </>
+      ) : stage === "failed" ? (
+        <div className="flex gap-2">
+          <Button className="flex-1 rounded-full" onClick={() => run("relearn", () => api(`/sessions/${sessionId}/learn`, "POST"))} disabled={!!busy}><RotateCcw />Try again</Button>
+          <Button variant="ghost" className="rounded-full" onClick={onExit}>Close</Button>
+        </div>
+      ) : (
+        <p className="py-1.5 text-center text-[13px] text-muted-foreground">Learning from your demo. This takes about a minute.</p>
+      )}>
+      {(recording || learning) && (st?.hearing || lastSaid) ? (
+        <div className="mx-auto mt-7 max-w-[34ch] text-center">
+          {recording && st?.hearing && !lastSaid ? <p className="shimmer text-[15px]">Hearing you…</p> : <Heard text={lastSaid!} k={live?.turns?.length} />}
+        </div>
+      ) : null}
+      <Notes cards={cards} events={events} recording={recording} />
+    </Frame>
   );
 }
 
@@ -190,5 +189,200 @@ function Notes({ cards, events, recording }: { cards: Card[]; events: Ev[]; reco
         </ol>
       )}
     </section>
+  );
+}
+
+type Phase = "reading" | "asking" | "listening" | "practicing" | "paused";
+
+/** The review: Remuse reads its plan aloud, asks what it wasn't sure of one question at a time, and listens. You
+ *  answer or say what to change, and it says what it changed. "Looks good" tries it once on your example, then it
+ *  says how that went and keeps listening; "looks good" again (or Looks right) and you're done. */
+function Review({ sessionId, task, st, events, onExit }: { sessionId: string; task: TeachTask; st: Status | null; events: Ev[]; onExit: () => void }) {
+  const specId = task.specId!;
+  const spec = useApi<SpecRow>(`/specs/${specId}`).data;
+  const rb = useApi<{ plan: Line[]; questions: Line[] }>(`/specs/${specId}/readback`).data;
+  const [phase, setPhase] = useState<Phase>("reading");
+  const [lines, setLines] = useState<Line[]>([]); // what Remuse is saying now, to light up the step it's on
+  const [listening, setListening] = useState(false);
+  const [quietSince, setQuietSince] = useState(Date.now());
+  const [practiceRun, setPracticeRun] = useState<string | null>(null);
+  const [practiced, setPracticed] = useState(false);
+  const [changed, setChanged] = useState<Set<string>>(new Set());
+  const [openStep, setOpenStep] = useState<string | null>(null);
+  const [typing, setTyping] = useState(false);
+  const [text, setText] = useState("");
+  const [note, setNote] = useState<string | null>(null);
+  const { busy, run } = useAction();
+  const since = useRef(Date.now());
+  const askWhenUpdated = useRef(false);
+  const practiceWhenReady = useRef(false);
+  const before = useRef<Map<string, string> | null>(null);
+
+  // One thing said at a time, in order: the next question waits until "Got it, I changed…" is finished.
+  const chain = useRef<Promise<unknown>>(Promise.resolve());
+  const say = (ls: Line[]) => (chain.current = chain.current.then(async () => {
+    if (!ls.length) return;
+    setLines(ls);
+    await ext("speak", { lines: ls.map((l) => l.text) }).catch(() => {});
+    setLines([]);
+  }));
+  const listen = () => ext("listen", { sessionId }).then(() => { setListening(true); setQuietSince(Date.now()); }, (e) => toast(e.message));
+  const ask = async (r: typeof rb) => {
+    if (r?.questions.length) { setPhase("asking"); await say([r.questions[0]]); }
+    else setPhase("listening");
+    setQuietSince(Date.now());
+  };
+
+  // Start: open the mic (it waits while Remuse talks), read the plan, then ask the first question.
+  const started = useRef(false);
+  useEffect(() => {
+    if (!rb || started.current) return;
+    started.current = true;
+    (async () => { await listen(); await say(rb.plan); await ask(rb); })();
+  }, [rb]);
+  // A change or an answer makes a new version: light up what changed, then ask the next question, if any.
+  useEffect(() => {
+    if (!spec?.spec) return;
+    const now = new Map([...spec.spec.steps, ...Object.values(spec.spec.outcomes).flatMap((o) => o.steps)].map((s) => [s.id, s.describe]));
+    if (before.current) setChanged(new Set([...now].filter(([id, d]) => before.current!.get(id) !== d).map(([id]) => id)));
+    before.current = now;
+  }, [spec?.id]);
+  useEffect(() => { if (rb && askWhenUpdated.current && started.current) { askWhenUpdated.current = false; ask(rb); } }, [rb]);
+  // The practice waits for the rebuilt rules after a change.
+  useEffect(() => { if (practiceWhenReady.current && task.learnStage === "ready") { practiceWhenReady.current = false; startPractice(); } }, [task.learnStage]);
+
+  const startPractice = () => run("practice", async () => {
+    if (task.learnStage !== "ready") { practiceWhenReady.current = true; return; }
+    const r = await api<{ id: string }>(`/specs/${specId}/practice`, "POST");
+    setPracticeRun(r.id); setPhase("practicing"); ext("mode", { mode: "practice" }).catch(() => {});
+  });
+  // The practice is over: say how it went, then listen again.
+  const p = task.practice;
+  useEffect(() => {
+    if (!practiceRun || p?.runId !== practiceRun || p.status === "starting" || p.status === "running") return;
+    setPracticeRun(null); setPracticed(true); ext("mode", { mode: "review" }).catch(() => {});
+    (async () => { await say([{ text: practiceSay(p) }, { text: "Say what to change, or say it looks good." }]); setPhase("listening"); setQuietSince(Date.now()); })();
+  }, [p?.runId, p?.status]);
+
+  const finish = () => { ext("unlisten").catch(() => {}); ext("hush").catch(() => {}); onExit(); };
+  const showAgain = () => { ext("unlisten").catch(() => {}); ext("hush").catch(() => {}); onExit(); ext("start").catch((e) => toast.error(e.message)); };
+  const approve = () => (practiced ? finish() : startPractice());
+
+  // What you said, sorted by the Agent (a change, an answer, "looks good", a schedule, "show you again", or not for Remuse).
+  const said = useApi<Heard | null>(listening ? `/sessions/${sessionId}/say` : null, listening ? 1000 : 0).data;
+  const handled = useRef(0);
+  useEffect(() => {
+    if (!said || said.at < since.current || said.n <= handled.current || said.intent === "thinking") return;
+    handled.current = said.n; setQuietSince(Date.now());
+    const back = (said.speak ?? []).map((t) => ({ text: t }));
+    (async () => {
+      if (said.intent === "change" || said.intent === "answer") { askWhenUpdated.current = true; await say(back); }
+      else if (said.intent === "approve" || said.intent === "run") { if (practiced && said.intent === "approve") return finish(); await say(back); startPractice(); }
+      else if (said.intent === "schedule" && said.schedule) { await api("/schedules", "POST", { specId, ...said.schedule }).catch((e) => toast.error(e.message)); await say(back); }
+      else if (said.intent === "teach") showAgain();
+    })();
+  }, [said?.n, said?.intent]);
+  const thinking = said?.intent === "thinking" && said.at >= since.current;
+
+  // Two quiet minutes: stop listening, and say so.
+  useEffect(() => {
+    if (!listening) return;
+    const t = setInterval(() => {
+      if (phase !== "practicing" && !st?.speaking && Date.now() - quietSince > QUIET_MS) { ext("unlisten").catch(() => {}); setListening(false); setPhase("paused"); setNote("I stopped listening after 2 quiet minutes."); }
+    }, 5000);
+    return () => clearInterval(t);
+  }, [listening, quietSince, phase, st?.speaking]);
+  // Leaving the review: the mic and the voice go too.
+  useEffect(() => () => { ext("unlisten").catch(() => {}); ext("hush").catch(() => {}); }, []);
+
+  const send = () => run("send", async () => {
+    const q = phase === "asking" ? rb?.questions[0]?.question : undefined;
+    const r = await api<{ changes: string[] }>(`/specs/${specId}/feedback`, "POST", { text, practice: false, answered: q });
+    setText(""); setTyping(false); askWhenUpdated.current = true;
+    await say((r.changes.length ? r.changes : ["I changed it."]).map((t) => ({ text: t })));
+  });
+
+  const speakingNow = st?.speaking ? lines[st.speaking.line] : undefined;
+  const building = task.learnStage === "building" || thinking;
+  const question = phase === "asking" ? rb?.questions[0] : undefined;
+  const view: { orb: OrbState; word: string; sub?: ReactNode; shimmer?: boolean } =
+    building ? { orb: "thinking", word: "Changing it", shimmer: true, sub: said?.text ? <q className="font-script [quotes:'“''”']">{said.text}</q> : undefined }
+    : phase === "practicing" ? { orb: "working", word: "Practicing", sub: "Once, on your example. Nothing I'd send or pay goes out." }
+    : st?.speaking && phase === "reading" ? { orb: "working", word: "Here's my plan" }
+    : question ? { orb: st?.speaking ? "working" : "watching", word: "One question", sub: <span className="text-[16px] leading-snug text-foreground">{question.text.replace(/^One thing: you said "[^"]*"\. /, "")}</span> }
+    : phase === "paused" ? { orb: "idle", word: "Not listening", sub: note ?? undefined }
+    : st?.speaking ? { orb: "working", word: "Speaking" }
+    : st?.hearing ? { orb: "watching", word: "Hearing you" }
+    : { orb: "watching", word: "Listening", sub: "Tell me what to change, or say “looks good”." };
+
+  const steps = spec?.spec ? [...spec.spec.steps, ...Object.values(spec.spec.outcomes).flatMap((o) => o.steps)] : [];
+  const rules = (rb?.plan ?? []).filter((l) => !l.step && l.text !== "Here's my plan." && !/^And \d+ more steps/.test(l.text));
+  const evidence = (s: (typeof steps)[number]) => {
+    const e = (s as { evidence?: { events: number[]; quote?: string } }).evidence;
+    const what = (e?.events ?? []).map((i) => did(events[i])).filter(Boolean);
+    return { quote: e?.quote, what };
+  };
+
+  return (
+    <Frame orb={view.orb} word={view.word} sub={view.sub} shimmer={view.shimmer}
+      footer={
+        <>
+          <Button className="h-11 w-full rounded-full text-[15px]" onClick={approve} disabled={phase === "practicing" || building || busy === "practice"}>
+            {busy === "practice" ? <LoaderCircle className="animate-spin" /> : null}{practiced ? "Looks right" : "Looks right, try it once"}
+          </Button>
+          <div className="mt-2 flex items-center justify-center gap-1 text-[13px]">
+            <Button variant="ghost" size="sm" className="rounded-full text-muted-foreground" onClick={showAgain}>Show you again</Button>
+            {listening ? <Button variant="ghost" size="sm" className="rounded-full text-muted-foreground" onClick={() => { ext("unlisten").catch(() => {}); ext("hush").catch(() => {}); setListening(false); setPhase("paused"); setNote(null); }}>Stop listening</Button>
+              : <Button variant="ghost" size="sm" className="rounded-full text-muted-foreground" onClick={() => { setNote(null); setPhase(question ? "asking" : "listening"); listen(); }}>Listen again</Button>}
+            <Button variant="ghost" size="sm" className="rounded-full text-muted-foreground" onClick={() => setTyping((x) => !x)}>Type instead</Button>
+          </div>
+          {typing ? (
+            <div className="mt-2">
+              <Textarea autoFocus className="min-h-16 text-[14px]" value={text} onChange={(e) => setText(e.target.value)} disabled={busy === "send"}
+                placeholder={question ? "Your answer" : "What should change, like “take the views from the Reach tab”"}
+                onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && text.trim()) { e.preventDefault(); send(); } }} />
+              <Button size="sm" variant="outline" className="mt-2 w-full rounded-full" onClick={send} disabled={!text.trim() || !!busy}>
+                {busy === "send" ? <><LoaderCircle className="animate-spin" />Changing it…</> : question ? "Answer" : "Change it"}
+              </Button>
+            </div>
+          ) : null}
+        </>
+      }>
+      {said?.text && said.at >= since.current && !building ? <div className="mx-auto mt-6 max-w-[34ch] text-center"><Heard text={said.text} k={said.n} /></div> : null}
+      <section className="mt-10">
+        <h2 className="text-[15px] font-medium">{task.title || "What I'll do"}</h2>
+        <p className="mt-0.5 mb-3 text-[13px] text-muted-foreground">What I'll do, step by step. Tap a step to see where it came from.</p>
+        <ol className="space-y-1">
+          {steps.map((s, i) => {
+            const on = speakingNow?.step === s.id, ev = openStep === s.id ? evidence(s) : null;
+            return (
+              <li key={s.id ?? i}>
+                <button type="button" onClick={() => setOpenStep(openStep === s.id ? null : s.id)} aria-expanded={openStep === s.id}
+                  className={cn("grid w-full grid-cols-[1.5rem_1fr] gap-x-2 rounded-xl px-1 py-1.5 text-left text-[15px] leading-snug transition-colors hover:bg-muted", on && "bg-muted")}>
+                  <span className={cn("pt-px text-right font-mono text-[12px] leading-[1.6] tabular-nums text-muted-foreground", on && "text-foreground")}>{i + 1}</span>
+                  <span>{s.describe}{changed.has(s.id) ? <span className="ml-1.5 text-[12px] text-ok">changed</span> : null}</span>
+                </button>
+                {ev ? (
+                  <p className="mt-0.5 mb-1.5 ml-[2.1rem] text-[13px] leading-snug text-muted-foreground">
+                    {ev.quote ? <>you said <q className="font-script text-[13.5px] text-foreground/80 [quotes:'“''”']">{ev.quote}</q>{ev.what.length ? "; " : ""}</> : null}
+                    {ev.what.join("; ") || (ev.quote ? "" : "I worked this one out; you didn't show it")}
+                  </p>
+                ) : null}
+              </li>
+            );
+          })}
+        </ol>
+        {rules.length ? <ul className="mt-5 space-y-2 border-t border-rule pt-4 text-[14px] leading-snug">{rules.map((r) => <li key={r.text}>{r.text}</li>)}</ul> : null}
+        {rb?.questions.length ? (
+          <ul className="mt-5 space-y-2 border-t border-rule pt-4">
+            {rb.questions.map((q, i) => (
+              <li key={q.question} className={cn("grid grid-cols-[1.5rem_1fr] gap-x-2 text-[14px] leading-snug", i === 0 && question ? "text-foreground" : "text-muted-foreground")}>
+                <span className="flex justify-end pt-[2px]"><CircleHelp className="size-4" /></span><span>{q.text}</span>
+              </li>
+            ))}
+          </ul>
+        ) : null}
+      </section>
+    </Frame>
   );
 }
