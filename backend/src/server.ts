@@ -12,7 +12,7 @@ import { coverage } from "./evidence.ts";
 import type { Card } from "./notes.ts";
 import { readback } from "./readback.ts";
 import { resolveMarks } from "./marks.ts";
-import { revise, sortSaid, understand, type Spec } from "./understand.ts";
+import { readSpec, revise, sortSaid, understand, type Spec } from "./understand.ts";
 import { endLive, heard as hearLive, liveCards, liveState } from "./live.ts";
 import { build } from "./build.ts";
 import { Runner, itemKey, openBrowser, openPlainChrome, plainChromeOpen, type Run } from "./runner.ts";
@@ -128,7 +128,7 @@ const pagesOf = (sessionId: string) => (db.prepare("SELECT url, data FROM events
 function specRow(id: number) {
   const r = db.prepare("SELECT * FROM specs WHERE id = ?").get(id) as any;
   if (!r) throw new HttpError(404, "no such spec");
-  return { id: r.id, sessionId: r.session_id, version: r.version, note: r.note, spec: JSON.parse(r.json) as Spec, code: r.code as string | null, tests: r.tests ? JSON.parse(r.tests) : null, createdAt: r.created_at };
+  return { id: r.id, sessionId: r.session_id, version: r.version, note: r.note, spec: readSpec(r.json), code: r.code as string | null, tests: r.tests ? JSON.parse(r.tests) : null, createdAt: r.created_at };
 }
 
 function saveSpec(sessionId: string, spec: Spec, note: string, code: string | null = null, tests: unknown = null): number {
@@ -714,7 +714,7 @@ async function route(req: IncomingMessage, res: ServerResponse) {
       x.id AS specId, x.version, x.json, x.tests, x.code IS NOT NULL AS built
       FROM sessions s LEFT JOIN specs x ON x.id = (SELECT MAX(id) FROM specs WHERE session_id = s.id) WHERE EXISTS (SELECT 1 FROM events e WHERE e.session_id = s.id AND e.kind NOT IN ('start', 'tools')) OR EXISTS (SELECT 1 FROM specs y WHERE y.session_id = s.id) OR (s.transcript IS NOT NULL AND s.transcript != '') OR s.learn_stage IS NOT NULL ORDER BY s.started_at DESC`).all() as any[])
       .map(({ json: j, tests: tj, built, ...t }) => {
-        const spec = j ? (JSON.parse(j) as Spec) : null;
+        const spec = j ? readSpec(j) : null;
         const tests = tj ? (JSON.parse(tj) as { ok: boolean }[]) : [];
         return { ...t, title: t.title ?? spec?.title ?? null, built: !!built, goal: spec?.goal ?? null, itemName: spec?.inputs.itemName ?? null,
           source: spec?.inputs.source ?? (spec ? "list" : null), columns: spec?.inputs.columns ?? [],

@@ -243,6 +243,18 @@ ${SCHEMA}`),
 }
 
 // Fill in what code can know for sure instead of trusting the model.
+/** A model's answer can leave an outcome without steps, an empty step, or something that isn't an outcome at all
+ *  (the questions list, once): "nothing to do" or gone, never a crash for whoever reads the task later. */
+function tidy(spec: Spec): Spec {
+  const isObj = (x: unknown): x is Record<string, any> => !!x && typeof x === "object" && !Array.isArray(x);
+  spec.steps = (Array.isArray(spec.steps) ? spec.steps : []).filter(isObj) as Spec["steps"];
+  spec.outcomes = Object.fromEntries(Object.entries(isObj(spec.outcomes) ? spec.outcomes : {}).filter(([, o]) => isObj(o))) as Spec["outcomes"];
+  for (const o of Object.values(spec.outcomes)) o.steps = (Array.isArray(o.steps) ? o.steps : []).filter(isObj) as Spec["steps"];
+  return spec;
+}
+/** A saved version, read back whole even if it was saved before tidy() caught its shape. */
+export const readSpec = (json: string): Spec => tidy(JSON.parse(json));
+
 export function normalize(spec: Spec, s: Session): Spec {
   // The recorded selector of one clicked item, minus its position, matches all its siblings.
   const generic = (sel?: string) => sel?.replace(/:nth-of-type\(\d+\)/g, "").replace(/:nth-child\(\d+\)/g, "");
@@ -255,9 +267,7 @@ export function normalize(spec: Spec, s: Session): Spec {
     if (t?.selector) spec.inputs.itemSelector = !t.href && t.role && !["button", "link", "none", "presentation", "generic"].includes(t.role) ? `[role="${t.role}"]` : generic(t.selector);
     if (ev?.url && !spec.inputs.listUrl) spec.inputs.listUrl = ev.url;
   }
-  // A model's answer can leave an outcome without steps, or an empty step: those mean "nothing to do", not a crash.
-  spec.steps = (spec.steps ?? []).filter(Boolean);
-  for (const o of Object.values(spec.outcomes ?? {})) o.steps = (o.steps ?? []).filter(Boolean);
+  tidy(spec);
   const all = [...spec.steps, ...Object.values(spec.outcomes ?? {}).flatMap((o) => o.steps)];
   all.forEach((st, i) => {
     st.id ||= `s${i + 1}`;

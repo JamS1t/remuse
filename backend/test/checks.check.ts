@@ -1,6 +1,6 @@
 // Step checks learned from a demo must not rest on the demo's own numbers (they change on the next run).
 // No model calls. Run: node test/checks.check.ts
-import { normalize, type Spec } from "../src/understand.ts";
+import { normalize, readSpec, type Spec } from "../src/understand.ts";
 
 let fails = 0;
 const check = (name: string, ok: boolean, detail?: unknown) => { console.log(`${ok ? "PASS" : "FAIL"}  ${name}${ok ? "" : `  (${JSON.stringify(detail)})`}`); if (!ok) fails++; };
@@ -48,6 +48,16 @@ const loose = { ...spec, steps: [{ id: "a", do: "click", describe: "Open" }, nul
 let crashed = "";
 try { normalize(loose, { id: "t", events: [], turns: [] } as any); } catch (e) { crashed = (e as Error).message; }
 check("an outcome with no steps, or an empty step, doesn't break it", !crashed && loose.steps.length === 1 && Array.isArray(loose.outcomes.report.steps) && loose.outcomes.skip.steps.length === 0, crashed || loose);
+
+// Seen from Muse Spark on an answer: the questions list put under outcomes. Saved as it was, it had no steps and
+// broke the whole task list for every task. It isn't an outcome, so it goes; and a version saved like that before is
+// read back whole.
+const listed = { ...spec, outcomes: { report: { describe: "Report", steps: [] }, questions: [{ id: "q-1", text: "Every video?" }] } } as unknown as Spec;
+normalize(listed, { id: "t", events: [], turns: [] } as any);
+const saved = JSON.parse(JSON.stringify(listed)) as Spec;
+check("a list where an outcome should be isn't kept as an outcome", Object.keys(saved.outcomes).join() === "report" && Object.values(saved.outcomes).every((o) => Array.isArray(o.steps)), saved.outcomes);
+const old = readSpec(JSON.stringify({ ...spec, outcomes: { report: { describe: "Report", steps: [null] }, questions: [{ id: "q-1", text: "Every video?" }], none: null } }));
+check("a version saved like that before is read back with steps everywhere", Object.keys(old.outcomes).join() === "report" && old.outcomes.report.steps.length === 0 && old.steps.every(Boolean), old.outcomes);
 
 console.log(fails ? `\n${fails} failed` : "\nall passed");
 process.exit(fails ? 1 : 0);
