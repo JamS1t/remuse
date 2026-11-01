@@ -89,6 +89,9 @@ try {
   check("a failed page check isn't overruled by the screen", r2.items?.[0]?.status === "failed", `${r2.items?.[0]?.status}: ${lines(r2).slice(-2).map((l) => l.msg).join(" / ")}`);
   // Working it out after the click already happened: the same button is never pressed again (it could do it twice).
   check("a button already pressed is never pressed again while working it out", count.export === 1, `${count.export} presses: ${lines(r2).map((l) => l.msg).filter((m) => /^Idea/.test(m)).join(" / ").slice(0, 300)}`);
+  // Muse Spark suggesting the same thing again is no new idea: it isn't tried, counted or listed twice.
+  const ideas = lines(r2).map((l) => l.msg).filter((m) => /^Idea \d+:/.test(m)).map((m) => m.replace(/^Idea \d+: /, "").replace(/ → .*/s, ""));
+  check("an idea Muse Spark repeats isn't counted as a new one", ideas.length > 0 && new Set(ideas).size === ideas.length, ideas.join(" / "));
 
   // 3. Typing into a box that can't be read back isn't proof; the irreversible Submit after it must not happen.
   const r3 = await run(await addTask("Send the request", [

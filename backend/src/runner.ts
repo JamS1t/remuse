@@ -1080,7 +1080,8 @@ export class Runner {
           this.log(`Idea ${tried.length}: ${label} → ✗ ${m.why}`, "warn");
           continue;
         }
-        const refused = unsafe(m, el, raw, group.keys, here(), el?.href) ?? (repeated(tried, label, el?.name) ? "already tried that" : null)
+        if (repeated(tried, label, el?.name)) { none++; continue; } // the same idea again is no new idea: not tried, counted or listed twice
+        const refused = unsafe(m, el, raw, group.keys, here(), el?.href)
           ?? (m.action === "click" && same(el?.name) ? "it was pressed once already; pressing it again could do it twice" : null)
           ?? (m.action === "press" && ran && (m.key ?? "").toLowerCase() === (step.key ?? "").toLowerCase() ? "it was pressed once already; pressing it again could do it twice" : null);
         if (refused) { refuse(5, label, el?.name, refused); continue; }
