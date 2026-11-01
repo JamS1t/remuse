@@ -23,15 +23,16 @@ export type SessionFull = {
 // Notes taken while you teach: each from your words (quote) or what you did (event ids). See backend/src/notes.ts.
 export type Card = { id: string; kind: "step" | "rule" | "read" | "question"; text: string; quote?: string; events?: number[] };
 export type LiveState = { turns: { startMs: number; endMs: number; text: string }[]; cards: Card[]; thinking: boolean; error: string | null; ending?: string | null };
-export type LogLine = { at: number; msg: string; level: "info" | "ok" | "warn" | "error"; shot?: string; why?: string; how?: "page" | "screen"; by?: string };
-export type ItemStatus = "waiting" | "running" | "approval" | "asking" | "planned" | "done" | "skipped" | "failed";
+export type LogLine = { at: number; msg: string; level: "info" | "ok" | "warn" | "error"; shot?: string; why?: string; how?: "page" | "screen"; by?: string; kind?: "heal" };
+export type ItemStatus = "waiting" | "running" | "approval" | "asking" | "planned" | "ready" | "done" | "skipped" | "failed";
 export type Candidate = { url: string; title: string; vars: Record<string, unknown>; score: number | null; shot?: string; best?: boolean };
-export type Item = { url: string; label: string; status: ItemStatus; outcome?: string; because?: string; expected?: string; decidedBy?: "rules" | "you" | "learned"; log: LogLine[]; candidates?: Candidate[]; report?: string };
+export type Item = { url: string; label: string; status: ItemStatus; ready?: { step: string; at: number }; outcome?: string; because?: string; expected?: string; decidedBy?: "rules" | "you" | "learned"; log: LogLine[]; candidates?: Candidate[]; report?: string };
 export type Pending =
   | { kind: "approval"; item: number; step: string; target?: string; outcome?: string; because?: string; shot: string; healed?: string }
   | { kind: "ask"; item: number; question: string; options: string[]; shot: string }
   | { kind: "handoff"; item: number; step: string; problem: string; shot: string }
-  | { kind: "plan"; item: number; counts: Record<string, number>; needsOk: number; skipped: number; failed: number; shot?: undefined };
+  | { kind: "plan"; item: number; counts: Record<string, number>; needsOk: number; skipped: number; failed: number; shot?: undefined }
+  | { kind: "ready"; item: number; items: number[]; shot?: undefined };
 export type Run = {
   id: string; specId: number; status: "starting" | "running" | "done" | "failed" | "stopped"; browser?: "chrome" | "own";
   items: Item[]; current: number; pending: Pending | null; autoApprove: boolean;
@@ -43,6 +44,7 @@ export type Run = {
   plan?: boolean; phase?: "plan" | "act";
   alreadyDone?: number; // list items handled in earlier runs, left alone this time
   checker?: string; // the second model that checks its work
+  decisions?: string[]; // what it decided on its own, and why
 };
 /** A practice: the task tried once on the demo item, stopping before anything irreversible, compared with the demo. */
 export type Practice = {

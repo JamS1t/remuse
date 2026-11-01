@@ -168,7 +168,7 @@ try {
   const full = await Promise.all(runs.map((x: any) => get(`/runs/${x.id}`)));
   check("each was started by its schedule", runs.length === 2 && full.every((x: any) => x.status === "done" && x.trigger === "schedule"), full.map((x: any) => `${x.status}/${x.trigger}`).join(","));
 
-  // A batch dropped at once: every file gets posted, one after another, without another file having to arrive.
+  // A batch dropped at once: one run, every file posted in it (one item each), without another file having to arrive.
   for (let i = 0; i < 40 && (await get(`/runs?task=${poster.sessionId}`)).some((x: any) => ["starting", "running"].includes(x.status)); i++) await sleep(500);
   writeFileSync(join(drop, "clip3.png"), Buffer.from("89504e470d0a1a0a", "hex"));
   writeFileSync(join(drop, "clip4.png"), Buffer.from("89504e470d0a1a0a", "hex"));
@@ -176,25 +176,25 @@ try {
   for (let i = 0; i < 120 && drafts.length < 4; i++) await sleep(500);
   check("a batch dropped at once is all posted, each once", JSON.stringify(drafts) === JSON.stringify(["clip1.png", "clip2.png", "clip3.png", "clip4.png"]), JSON.stringify(drafts));
   await sleep(15_000);
-  check("a caption file alone doesn't start a run", (await get(`/runs?task=${poster.sessionId}`)).length === 4 && drafts.length === 4, `${(await get(`/runs?task=${poster.sessionId}`)).length} runs`);
+  check("a caption file alone doesn't start a run", (await get(`/runs?task=${poster.sessionId}`)).length === 3 && drafts.length === 4, `${(await get(`/runs?task=${poster.sessionId}`)).length} runs`);
 
   check("a file that was already there when you set it up isn't posted", !drafts.includes("old.png"), JSON.stringify(drafts));
 
   // A post that fails isn't retried over and over; the next new file still goes.
   broken = true;
   writeFileSync(join(drop, "clip9.png"), Buffer.from("89504e470d0a1a0a", "hex"));
-  for (let i = 0; i < 60 && (await get(`/runs?task=${poster.sessionId}`)).length < 5; i++) await sleep(500);
+  for (let i = 0; i < 60 && (await get(`/runs?task=${poster.sessionId}`)).length < 4; i++) await sleep(500);
   for (let i = 0; i < 60 && (await get(`/runs?task=${poster.sessionId}`)).some((x: any) => ["starting", "running"].includes(x.status)); i++) await sleep(500);
   await sleep(20_000);
   const afterFail = await get(`/runs?task=${poster.sessionId}`);
-  check("a post that failed is tried once, not over and over", afterFail.length === 5 && drafts.length === 4, `${afterFail.length} runs, ${drafts.length} drafts`);
+  check("a post that failed is tried once, not over and over", afterFail.length === 4 && drafts.length === 4, `${afterFail.length} runs, ${drafts.length} drafts`);
   broken = false;
 
   // Stop the schedule: a new file then does nothing.
   await fetch(`${API}/schedules/${sched.id}`, { method: "DELETE" });
   writeFileSync(join(drop, "clip5.png"), Buffer.from("89504e470d0a1a0a", "hex"));
   await sleep(16_000);
-  check("after you stop the schedule, a new file does nothing", drafts.length === 4 && (await get(`/runs?task=${poster.sessionId}`)).length === 5, JSON.stringify(drafts));
+  check("after you stop the schedule, a new file does nothing", drafts.length === 4 && (await get(`/runs?task=${poster.sessionId}`)).length === 4, JSON.stringify(drafts));
   db.close();
 } finally {
   agent.kill(); site.close();

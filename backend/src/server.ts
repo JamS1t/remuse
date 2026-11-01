@@ -7,11 +7,12 @@ import { join, dirname, extname } from "node:path";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { silent, transcribe, calls, type Turn } from "./meta.ts";
+import { failed as fixMissed, promote, worked as fixWorked, type Fix } from "./fixes.ts";
 import { coverage } from "./evidence.ts";
 import type { Card } from "./notes.ts";
 import { readback } from "./readback.ts";
 import { resolveMarks } from "./marks.ts";
-import { revise, sortSaid, understand, type Spec } from "./understand.ts";
+import { readSpec, revise, sortSaid, understand, type Spec } from "./understand.ts";
 import { endLive, heard as hearLive, liveCards, liveState } from "./live.ts";
 import { build } from "./build.ts";
 import { Runner, itemKey, openBrowser, openPlainChrome, plainChromeOpen, type Run } from "./runner.ts";
@@ -127,7 +128,7 @@ const pagesOf = (sessionId: string) => (db.prepare("SELECT url, data FROM events
 function specRow(id: number) {
   const r = db.prepare("SELECT * FROM specs WHERE id = ?").get(id) as any;
   if (!r) throw new HttpError(404, "no such spec");
-  return { id: r.id, sessionId: r.session_id, version: r.version, note: r.note, spec: JSON.parse(r.json) as Spec, code: r.code as string | null, tests: r.tests ? JSON.parse(r.tests) : null, createdAt: r.created_at };
+  return { id: r.id, sessionId: r.session_id, version: r.version, note: r.note, spec: readSpec(r.json), code: r.code as string | null, tests: r.tests ? JSON.parse(r.tests) : null, createdAt: r.created_at };
 }
 
 function saveSpec(sessionId: string, spec: Spec, note: string, code: string | null = null, tests: unknown = null): number {
@@ -281,6 +282,30 @@ async function hearText(sessionId: string, text: string, typed = false): Promise
     else set({ intent: r.intent });
   } catch (e) { set({ intent: "none", error: (e as Error).message }); }
   return heard.get(sessionId)!;
+}
+
+// What Remuse worked out itself after a site changed, kept beside the task (never written into what you taught):
+// tried first next time, dropped after two misses in a row or once it points at something irreversible.
+db.exec(`CREATE TABLE IF NOT EXISTS fixes (
+  id INTEGER PRIMARY KEY, session_id TEXT NOT NULL, grp TEXT NOT NULL, move TEXT NOT NULL, state TEXT NOT NULL,
+  fails INTEGER NOT NULL DEFAULT 0, proven_at INTEGER, created_at INTEGER NOT NULL
+)`);
+const fixesFor = (sessionId: string): Fix[] => (db.prepare("SELECT * FROM fixes WHERE session_id = ? ORDER BY id").all(sessionId) as any[])
+  .map((r) => ({ id: r.id, task: r.session_id, group: r.grp, move: JSON.parse(r.move), state: r.state, fails: r.fails, provenAt: r.proven_at ?? undefined }));
+/** A run's fixes, after it ends: proven on an item that finished → learned; a learned one that worked again → kept,
+ *  that missed → counted (dropped at two), that turned unsafe → dropped. Practices learn nothing. */
+function saveFixes(sessionId: string, run: Run) {
+  for (const e of run.fixes ?? []) {
+    const cur = e.id ? fixesFor(sessionId).find((f) => f.id === e.id) : undefined;
+    if (e.outcome === "proposed") {
+      if (run.items[e.item]?.status !== "done") continue; // its step was proven, but the item didn't finish
+      const f = promote({ task: sessionId, group: e.group, move: e.move, state: "proposed", fails: 0 }, true);
+      db.prepare("DELETE FROM fixes WHERE session_id = ? AND grp = ?").run(sessionId, e.group);
+      db.prepare("INSERT INTO fixes (session_id, grp, move, state, fails, proven_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)").run(sessionId, e.group, JSON.stringify(f.move), f.state, f.fails, f.provenAt ?? null, Date.now());
+    } else if (cur && e.outcome === "worked") { const f = fixWorked(cur); db.prepare("UPDATE fixes SET fails = ?, proven_at = ? WHERE id = ?").run(f.fails, f.provenAt ?? null, cur.id!); }
+    else if (cur && e.outcome === "failed") { const f = fixMissed(cur); if (f) db.prepare("UPDATE fixes SET fails = ? WHERE id = ?").run(f.fails, cur.id!); else db.prepare("DELETE FROM fixes WHERE id = ?").run(cur.id!); }
+    else if (cur && e.outcome === "dropped") db.prepare("DELETE FROM fixes WHERE id = ?").run(cur.id!);
+  }
 }
 
 // What a list task has already handled, kept between runs: an hourly inbox task does each email once. Saved as
@@ -460,7 +485,7 @@ setInterval(async () => {
   }
 }, 30_000).unref();
 
-async function startRun(specId: number, opts: { limit?: number; autoApprove?: boolean; rows?: Record<string, string>[]; scheduled?: boolean; watch?: boolean; practice?: boolean; plan?: boolean; redo?: boolean; fromFolder?: number; file?: { folder: string; name: string }; example?: { url?: string; label?: string } }) {
+async function startRun(specId: number, opts: { limit?: number; autoApprove?: boolean; rows?: Record<string, string>[]; scheduled?: boolean; watch?: boolean; practice?: boolean; plan?: boolean; redo?: boolean; fromFolder?: number; files?: { folder: string; name: string }[]; example?: { url?: string; label?: string } }) {
   const row = specRow(specId);
   if (!row.code) throw new HttpError(400, "build the rules first");
   if (googleLook) await googleLook; // the Google sign-in check has the browser profile for a moment
@@ -498,6 +523,7 @@ async function startRun(specId: number, opts: { limit?: number; autoApprove?: bo
       const label = r.items[p.item]?.label ?? "";
       if (p.kind === "approval") notify("Remuse needs your OK", `${p.step}: ${label}`, link);
       else if (p.kind === "ask") notify("Remuse has a question", p.question, link);
+      else if (p.kind === "ready") notify(`${p.items.length} ready for your OK`, `${p.items.map((i) => r.items[i]?.label).join(", ")}: prepared and checked. Open Remuse to approve.`, link);
       else if (p.kind === "plan") notify("Remuse has a plan", `${Object.entries(p.counts).map(([o, n]) => `${n} ${o.replaceAll("_", " ")}`).join(", ")}. Open Remuse and press Go.`, link);
       else notify("Remuse needs you in the browser", `Stuck on "${p.step}". Sign in or clear the check, then press Try again.`, link);
     }
@@ -506,7 +532,8 @@ async function startRun(specId: number, opts: { limit?: number; autoApprove?: bo
   runner.prev = lastValues(row.sessionId);
   runner.taskKey = row.sessionId;
   runner.example = opts.example;
-  runner.file = opts.file;
+  runner.files = opts.files;
+  runner.fixes = fixesFor(row.sessionId).filter((f) => f.state === "learned");
   // List tasks leave alone what earlier runs handled, unless you asked to do them again.
   if (row.spec.inputs.source === "list" && !opts.practice && !opts.redo) runner.handled = handledKeys(row.sessionId);
   active = runner;
@@ -517,7 +544,8 @@ async function startRun(specId: number, opts: { limit?: number; autoApprove?: bo
     const nothingNew = !run.error && ((run.items.length === 0 && (run.alreadyDone ?? 0) > 0) || (run.items.length > 0 && run.items.every((i) => i.status === "skipped" && /^Nothing new to upload/.test(i.log.at(-1)?.msg ?? ""))));
     // A folder run that posted something checks for the next file right away (a batch drops in at once).
     if (opts.fromFolder !== undefined && run.status === "done" && !nothingNew && run.items.every((i) => i.status === "done")) setTimeout(() => folderTick(), 1000);
-    if (opts.scheduled && !nothingNew) notify(`Remuse finished: ${row.spec.goal}`.slice(0, 120), `${run.items.filter((i) => i.status === "done").length} of ${run.items.length} done${run.error ? `. Problem: ${run.error}` : ""}`, link);
+    if (opts.scheduled && !nothingNew) notify(`Remuse finished: ${row.spec.goal}`.slice(0, 120), `${run.decisions?.length ? `${run.decisions.slice(0, 2).join(" ")} ` : ""}${run.items.filter((i) => i.status === "done").length} of ${run.items.length} done${run.error ? `. Problem: ${run.error}` : ""}`, link);
+    if (run.mode !== "practice") saveFixes(row.sessionId, run);
     if (run.mode === "practice") {
       // A practice that went wrong is worth a word; one that matched shows in the sidebar.
       // ponytail: a practice's heals aren't saved as a new version; the first real run re-finds them
@@ -672,6 +700,7 @@ async function route(req: IncomingMessage, res: ServerResponse) {
     watchFolders();
     return send(res, 200, schedules());
   }
+  if (p[1] === "fixes" && p[2] && m === "DELETE") { db.prepare("DELETE FROM fixes WHERE id = ?").run(Number(p[2])); return send(res, 200, { ok: true }); }
   if (p[1] === "schedules" && p[2] && m === "DELETE") { db.prepare("DELETE FROM schedules WHERE id = ?").run(Number(p[2])); watchFolders(); return send(res, 200, schedules()); }
   // Saved tasks for the sidebar: every recording with its latest Task Spec.
   // The extension writes down every mic drop and reconnect, with the mic's state then (see offscreen.js mend()).
@@ -685,7 +714,7 @@ async function route(req: IncomingMessage, res: ServerResponse) {
       x.id AS specId, x.version, x.json, x.tests, x.code IS NOT NULL AS built
       FROM sessions s LEFT JOIN specs x ON x.id = (SELECT MAX(id) FROM specs WHERE session_id = s.id) WHERE EXISTS (SELECT 1 FROM events e WHERE e.session_id = s.id AND e.kind NOT IN ('start', 'tools')) OR EXISTS (SELECT 1 FROM specs y WHERE y.session_id = s.id) OR (s.transcript IS NOT NULL AND s.transcript != '') OR s.learn_stage IS NOT NULL ORDER BY s.started_at DESC`).all() as any[])
       .map(({ json: j, tests: tj, built, ...t }) => {
-        const spec = j ? (JSON.parse(j) as Spec) : null;
+        const spec = j ? readSpec(j) : null;
         const tests = tj ? (JSON.parse(tj) as { ok: boolean }[]) : [];
         return { ...t, title: t.title ?? spec?.title ?? null, built: !!built, goal: spec?.goal ?? null, itemName: spec?.inputs.itemName ?? null,
           source: spec?.inputs.source ?? (spec ? "list" : null), columns: spec?.inputs.columns ?? [],
@@ -745,6 +774,8 @@ async function route(req: IncomingMessage, res: ServerResponse) {
     const id = p[2];
     session(id);
     if (m === "GET" && p.length === 3) return send(res, 200, full(id));
+    // What Remuse worked out itself for this task (shown on the task page, each with Undo).
+    if (m === "GET" && p[3] === "fixes") return send(res, 200, fixesFor(id));
     // Start fresh: forget which items this task already handled (the next run does the whole list again).
     if (m === "POST" && p[3] === "forget") { db.prepare("DELETE FROM handled WHERE session_id = ?").run(id); return send(res, 200, { forgotten: true }); }
     // Delete a task: its recording, every spec version, runs and schedule. The UI asks first.
@@ -940,14 +971,15 @@ const watchKey = (s: Schedule) => `${s.id}:${findFolder(s.watchFolder)?.path ?? 
 // Files a folder run was started for (schedule:file:modified time). Each is tried once; a failed or refused post
 // isn't retried until the file changes or the Agent restarts, so a broken page can't start runs over and over.
 const tried = new Set<string>();
-/** The file a folder schedule would post next: arrived after the schedule was set up (files already there aren't
- *  "new"), finished arriving (untouched for 10 s), never posted, and not already tried as it is now. */
-function nextFile(s: Schedule): { name: string; key: string } | null {
+/** The files a folder schedule would post now, in the task's order: arrived after the schedule was set up (files
+ *  already there aren't "new"), finished arriving (untouched for 10 s), never posted, and not already tried as they
+ *  are now. Files that land together are one run, one item each. */
+function nextFiles(s: Schedule): { name: string; key: string }[] {
   const folder = findFolder(s.watchFolder);
-  if (!folder) return null;
+  if (!folder) return [];
   const row = specRow(latestSpec(s.specId));
   const step = [...row.spec.steps, ...Object.values(row.spec.outcomes).flatMap((o) => o.steps)].find((x) => x.do === "upload" && findFolder(x.file?.folder)?.name === folder.name);
-  if (!step?.file) return null;
+  if (!step?.file) return [];
   try {
     const used = usedFor(row.sessionId);
     // Only files that arrived after the schedule are candidates. Arrival is the latest of: modified (new file),
@@ -960,24 +992,28 @@ function nextFile(s: Schedule): { name: string; key: string } | null {
     }
     // In the task's own order: "newest" is the last to arrive among them; "next" and "dated" follow chooseFile.
     const skip = new Set(filesIn(folder).map((f) => f.name).filter((n) => !arrived.has(n)));
-    const name = step.file.pick === "newest"
-      ? [...arrived].filter(([n]) => isPostable(n, step.file!.ext)).sort((x, y) => y[1] - x[1])[0]?.[0] ?? null
-      : chooseFile(folder, step.file, skip);
-    return name && arrived.has(name) ? { name, key: `${s.id}:${name}:${statSync(join(folder.path, name)).mtimeMs}` } : null;
-  } catch { return null; }
+    const key = (name: string) => ({ name, key: `${s.id}:${name}:${statSync(join(folder.path, name)).mtimeMs}` });
+    if (step.file.pick === "newest") {
+      const newest = [...arrived].filter(([n]) => isPostable(n, step.file!.ext)).sort((x, y) => y[1] - x[1])[0]?.[0];
+      return newest ? [key(newest)] : [];
+    }
+    const out: { name: string; key: string }[] = [];
+    for (let name = chooseFile(folder, step.file, skip); name && arrived.has(name) && !skip.has(name); name = chooseFile(folder, step.file, skip)) { out.push(key(name)); skip.add(name); }
+    return out;
+  } catch { return []; }
 }
 /** Run each folder schedule that has a new file waiting, one at a time; the rest go on the next tick. A caption,
  *  a deleted or hidden file never starts a run, since there's nothing to post. */
 function folderTick() {
   for (const s of schedules()) {
     if (!s.enabled || !s.watchFolder || busyRun()) continue;
-    let file: ReturnType<typeof nextFile> = null;
-    try { file = nextFile(s); } catch { continue; } // e.g. its task was deleted
-    if (!file) continue;
-    tried.add(file.key);
+    let files: ReturnType<typeof nextFiles> = [];
+    try { files = nextFiles(s); } catch { continue; } // e.g. its task was deleted
+    if (!files.length) continue;
+    for (const f of files) tried.add(f.key);
     db.prepare("UPDATE schedules SET last_at = ? WHERE id = ?").run(Date.now(), s.id);
-    startRun(latestSpec(s.specId), { scheduled: true, rows: s.rows ?? undefined, limit: s.limit ?? undefined, fromFolder: s.id, file: { folder: s.watchFolder, name: file.name } })
-      .catch((e) => { tried.delete(file!.key); notify("Remuse couldn't start a task", (e as Error).message, `http://127.0.0.1:${PORT}/#/spec/${s.specId}`); });
+    startRun(latestSpec(s.specId), { scheduled: true, rows: s.rows ?? undefined, limit: s.limit ?? undefined, fromFolder: s.id, files: files.map((f) => ({ folder: s.watchFolder!, name: f.name })) })
+      .catch((e) => { for (const f of files) tried.delete(f.key); notify("Remuse couldn't start a task", (e as Error).message, `http://127.0.0.1:${PORT}/#/spec/${s.specId}`); });
     return;
   }
 }

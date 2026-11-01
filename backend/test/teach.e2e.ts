@@ -108,6 +108,8 @@ try {
   await sleep(1000);
   const after = await call("status");
   check("a saidDone after Stop is ignored", !after.recording && JSON.stringify(after.last) === JSON.stringify(before.last), `${late}; ${JSON.stringify(after.last)}`);
+  // That extra sidebar goes blank now: left showing, it would run a second review and act on what's typed there too.
+  await panel.goto("about:blank");
 
   // Learning (real Muse Spark): every step it learned says what it came from, and nothing practices by itself.
   let task: any = null;
@@ -130,19 +132,25 @@ try {
   await Promise.race([stopBtn.waitFor({ timeout: 30000 }), ui.getByRole("button", { name: "Listen again" }).waitFor({ timeout: 30000 })]).catch(() => {});
   if (await stopBtn.isVisible().catch(() => false)) await stopBtn.click();
   await ui.getByText("Not listening").waitFor({ timeout: 5000 }).catch(() => {});
-  check("after Stop listening, it says it isn't listening", await ui.getByText("Not listening").isVisible().catch(() => false));
+  check("after Stop listening, it says it isn't listening", await ui.getByText("Not listening").isVisible().catch(() => false), `heading: ${await ui.locator("h1").first().textContent().catch(() => null)}; heard: ${JSON.stringify(await get(`/sessions/${recId}/say`))?.slice(0, 160)}`);
   const versions = (await get(`/sessions/${recId}`)).specs.length;
   await ui.getByRole("button", { name: /Type instead/ }).click();
   await ui.getByRole("textbox").fill("can you test it again?");
   await ui.getByRole("textbox").press("Enter");
+  const practiceNow = async () => ((await get("/tasks")) as any[]).find((t) => t.sessionId === recId)?.practice;
+  let first: any = null;
+  for (let i = 0; i < 60; i++) { first = await practiceNow(); if (first) break; await sleep(500); }
+  check("a typed \"can you test it again?\" practices and makes no new version", !!first && (await get(`/sessions/${recId}`)).specs.length === versions, JSON.stringify(first)?.slice(0, 300));
+  // While it practices, a newer practice replaces it ("Practice again" on the Tasks page, or a second sidebar): the
+  // review follows the newer one and still reports back, instead of waiting on the stopped one forever.
+  const newer = await post(`/specs/${task.specId}/practice`);
   let pr: any = null;
-  for (let i = 0; i < 90; i++) { pr = ((await get("/tasks")) as any[]).find((t) => t.sessionId === recId)?.practice; if (pr && pr.status !== "starting" && pr.status !== "running") break; await sleep(2000); }
-  check("a typed \"can you test it again?\" practices and makes no new version", !!pr && (await get(`/sessions/${recId}`)).specs.length === versions, JSON.stringify(pr)?.slice(0, 300));
+  for (let i = 0; i < 90; i++) { pr = await practiceNow(); if (pr?.runId === newer.id && pr.status !== "starting" && pr.status !== "running") break; await sleep(2000); }
   await ui.getByText("Not listening").waitFor({ timeout: 30000 }).catch(() => {});
   const heading = await ui.locator("h1").first().textContent().catch(() => null);
   const shot3 = join(process.env.SHOTS ?? data, "teach-after-practice.png");
   await side.screenshot({ path: shot3 }); console.log("   screenshot:", shot3);
-  check("after the practice reports back, the mic is still off and the screen says so", heading === "Not listening", `heading: ${heading}; mic: ${JSON.stringify((await call("status")).listening ?? null)}`);
+  check("after a practice replaced by a newer one reports back, the mic is still off and the screen says so", !!newer.id && first?.runId !== newer.id && pr?.runId === newer.id && heading === "Not listening", `heading: ${heading}; practice: ${JSON.stringify(pr)?.slice(0, 120)}`);
 
   // A cough or a click on its own: nothing is heard, nothing changes.
   const s2 = await post("/sessions", { title: "", startedAt: Date.now() });

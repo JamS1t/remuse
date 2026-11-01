@@ -121,7 +121,9 @@ try {
   db.close();
   const r = await post(`/specs/${specId}/runs`, { autoApprove: true });
   let run: any;
-  for (let i = 0; i < 40; i++) { run = await get(`/runs/${r.id}`); if (["done", "failed", "stopped"].includes(run.status)) break; await sleep(1000); }
+  // The recording above is still being learned, and learning holds the one browser profile for a while: the run
+  // waits its turn (about 13 s alone, over 40 s while learning).
+  for (let i = 0; i < 120; i++) { run = await get(`/runs/${r.id}`); if (["done", "failed", "stopped"].includes(run.status)) break; await sleep(1000); }
   await sleep(500);
   check("the runner writes a cell through the Name Box", cells.C4 === "2,001", `${run.status}: ${JSON.stringify(cells)} ${run.items[0]?.log.at(-1)?.msg ?? ""}`);
 } finally {
