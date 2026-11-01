@@ -305,7 +305,12 @@ function Review({ sessionId, task, st, events, onExit }: { sessionId: string; ta
   // The practice is over: say how it went, then listen again.
   const p = task.practice;
   useEffect(() => {
-    if (!practiceRun || p?.runId !== practiceRun || p.status === "starting" || p.status === "running") return;
+    if (!practiceRun || !p) return;
+    const going = p.status === "starting" || p.status === "running";
+    // A newer practice took over ("Practice again" on the Tasks page, or another sidebar): follow that one, or the
+    // screen would wait on the stopped one forever.
+    if (p.runId !== practiceRun) { if (going) setPracticeRun(p.runId); return; }
+    if (going) return;
     setPracticeRun(null); setPracticed(true); ext("mode", { mode: "review" }).catch(() => {});
     const next = listening ? "Say what to change, or say it looks good." : "Type what to change, or tap Listen again.";
     (async () => { await say([{ text: practiceSay(p) }, { text: next }]); setPhase("listening"); setQuietSince(Date.now()); })();
