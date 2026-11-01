@@ -29,7 +29,7 @@ Tailwind web UI (`backend/web`, `npm run build` type-checks and writes `backend/
   |---|---|
   | Muse Voice Transcribe | hears |
   | Muse Spark | understands the demo, writes rules and procedure, reasons when a step breaks |
-  | Muse Spark Open (`meta-models/muse-spark-open-1026`) | checks step results, reads values a second time |
+  | Muse Spark Open (`meta-models/muse-spark-open`, Baseten; was `-1026`, see Task 16) | checks step results, reads values a second time |
   | SAM 3.1 | outlines pen marks and proof |
 
   Every check records `by` (who checked). The Open label shows only when Open really checked.
@@ -54,6 +54,10 @@ Tailwind web UI (`backend/web`, `npm run build` type-checks and writes `backend/
 - Every commit stays inside the hackathon window. No code copied from other projects. No Facebook or Instagram
   automation.
 - Open PRs, never merge, unless James asks. Commits end with the session's attribution lines.
+- Every model called at runtime is a Meta model, even offline: Muse Spark, Muse Voice Transcribe, SAM 3.1, Muse Spark
+  Open. No Whisper, Llama, MediaPipe, third-party speech or embeddings, not even as a fallback (Task 17 guards it).
+- Judges need no outside account: a recorded run and a local practice portal (Task 19). Real Classroom data is never
+  committed.
 
 ## Review Focus
 
@@ -613,3 +617,135 @@ Tailwind web UI (`backend/web`, `npm run build` type-checks and writes `backend/
   script and README.
 - [ ] **Step 3:** Update the README. Commit, and push to the PR.
 - [ ] **Step 4:** Freeze. From here, only fixes for bugs found while recording, each test-first.
+
+---
+
+## Nov 1 update: hackathon rulings from Discord
+
+Source: James's other agent read the Discord channels (`#general`, `#questions`, `#build-for-your-world`,
+`#push-the-frontier`), including rulings by Meta staff and the Cerebral Valley organizers, and pasted the summary on
+2026-11-01. They aren't checked against an official page, so each change below must still be safe if a ruling is wrong.
+
+| Ruling | What changes here |
+|---|---|
+| Baseten serves Muse Spark Open as `meta-models/muse-spark-open`; `-1026` returns 404. A hybrid where Open does one load-bearing stage (our independent check) counts for the open-weight bonus. | Task 16 |
+| Every model the project calls at runtime must be a Meta model, even offline. | Task 17 (audit passes) |
+| The video opens with one line: what existed before, what was built. No slides, no unbuilt mockups. Judges stop at 3:00. | Task 18 |
+| Judges shouldn't need outside accounts. They may test with their own Meta key, or a recorded run. | Task 19 |
+| Strong entries show hard numbers on screen. | Task 16, Task 15 |
+
+**Audit (Task 17's first half, done 2026-11-01):**
+- **Runtime models:**
+  - `muse-spark-1.3`, `muse-voice-transcribe-1.0` and `sam-3.1`, through `api.meta.ai` or the Remuse proxy;
+  - Muse Spark Open, through Baseten or `OPEN_MODEL_URL`.
+  - Nothing else.
+- **Speech:** detection (`extension/vad.js`) uses loudness only, no model. There is no speech output.
+- **Dependencies:** `playwright` only. There's no `requirements.txt`.
+- **Repo:** `JamS1t/remuse` is public and was created 2026-10-28. Its first commit is from 2026-10-29.
+
+### Task 16: Muse Spark Open's ID, and each run's numbers on screen
+
+**Files:**
+- Modify: `backend/src/meta.ts`: `OPEN_MODEL` defaults to `meta-models/muse-spark-open`. `OPEN_MODEL` in `.env` still
+  overrides it.
+- Create: `backend/src/numbers.ts`, `runNumbers(run, calls)` → `{ seconds, perItem: {label, seconds, calls}[], models:
+  {model, calls}[], steps: {proven, total} }`. `scripts/measure.ts` prints it instead of its own math.
+- Modify: `backend/src/server.ts`: when a run ends, `run.numbers = runNumbers(...)` is saved with it. Model calls live
+  only in memory, so it must be saved then.
+- Modify: `backend/web/src/run.tsx`: one line under a finished run's title. It shows time per item, model calls by
+  exact model ID (provenance), and how many steps the page proved. Cost is shown only from Meta's published prices,
+  never from Discord estimates.
+- Test: `backend/test/numbers.check.ts` (model-free); `backend/test/second.e2e.ts:110` expects the new ID.
+- Docs: the ID in the README, `docs/video-script.md` and the spec.
+
+- [ ] **Step 1:** Write `numbers.check.ts`: a fixture run with 2 items and 7 calls gives the right seconds, calls per
+  item, calls by model ID, and proven/total. Change `second.e2e.ts`'s expected ID.
+- [ ] **Step 2:** Run both. Expected: FAIL (no `numbers.ts`; old ID).
+- [ ] **Step 3:** Implement. Point `measure.ts` at `runNumbers`.
+- [ ] **Step 4:** Run `node test/numbers.check.ts` and `node test/second.e2e.ts`. Expected: PASS.
+- [ ] **Step 5:** Commit: "Muse Spark Open's Baseten ID; each run keeps its numbers and shows them".
+
+### Task 17: Meta models only, guarded
+
+**Files:**
+- Create: `backend/test/meta-only.check.ts`. It fails if:
+  - any file in `backend/src`, `backend/web/src` or `extension` names a non-Meta model or model host (whisper,
+    openai.com, elevenlabs, llama, mediapipe, silero, onnx, xenova, tensorflow, gemini, anthropic, deepgram,
+    assemblyai, vosk);
+  - a model ID in `meta.ts` falls outside `muse-spark-*`, `muse-voice-transcribe-*`, `sam-3.1` and
+    `meta-models/muse-spark-open*`;
+  - `backend/package.json` gains a dependency besides `playwright`.
+- Modify: `README.md`, a "Meta models only" line that names the four models and what each does.
+
+- [ ] **Step 1:** Write the check. Watch it fail on a planted `whisper` string in a temp copy, then pass on the repo.
+- [ ] **Step 2:** Commit: "Guard: every runtime model is a Meta model".
+
+### Task 18: Video script: first line, no slides, stop at 3:00
+
+**Files:**
+- Modify: `docs/video-script.md`:
+  - Rules gain three lines:
+    1. The first line says what existed before and what was built.
+    2. Live footage only. Text over live footage is fine; a title card or slide isn't, and neither is a mockup of
+       anything unbuilt.
+    3. The video ends by 2:55; judges stop at 3:00.
+  - Scene 1's voice starts with: *"Everything you're about to see in Remuse, the Chrome sidebar, the Agent that runs
+    with Chrome closed, the self-healing engine and the Meta model pipeline, was built from scratch this week."*
+    (True: the repo's first commit is 2026-10-29.) Scene 1's other lines get shorter to fit.
+  - Scene 5 ends at 2:55.
+  - The ID becomes `meta-models/muse-spark-open`.
+
+- [ ] **Step 1:** Edit. Read the voice lines aloud against a timer: each scene fits its window.
+- [ ] **Step 2:** Commit: "Video script: the first line, live footage only, done by 2:55".
+
+### Task 19: Judge mode: a practice portal and a recorded run
+
+**Rulings:**
+- Real Classroom runs are never committed. They carry a real teacher's and classmates' names, and the rules forbid
+  data we don't have rights to. The recorded run is made on the practice portal.
+- The portal is our own design: no Google name, look or logo.
+- The video still uses real Classroom (James's call, "real life example instead of mocking"). The portal is only for
+  judges.
+
+**Files:**
+- Create: `backend/demo/portal/`, static pages the Agent serves at `/demo/portal`:
+  - a class with three assignments (Lab 4, Lab 5, Lab 6);
+  - an "Add or create" button that shrinks to a "+" icon button below 800 px wide;
+  - a file picker, an attachment list, and Turn in.
+  `recover.e2e.ts` moves its own fixture to these pages, so it's one fixture with two uses.
+- Create: `backend/demo/files/`: `CS101_Lab4.pdf`, `CS101_Lab5.pdf`, `Notes.pdf` (fits nothing). These are tiny PDFs we
+  make ourselves.
+- Create: `backend/scripts/export-run.ts <runId>` writes `backend/demo/replay/` (run JSON with `numbers`, its
+  screenshots and SAM outlines).
+- Modify: `backend/package.json`, `"replay"`: starts the Agent on a throwaway data folder with that run imported and
+  opens its page. No key, no account.
+- Modify: `README.md`, "Try it as a judge":
+  1. `npm run replay` (nothing needed).
+  2. The portal live, with your own `MODEL_API_KEY` or the built-in proxy: teach it once at full width, drop the three
+     files, narrow the window, and watch it heal.
+  3. Real Classroom, with your own account.
+- Test:
+  - `backend/test/portal.e2e.ts` runs a written task on `/demo/portal`. At 1440 px it doesn't heal. At 700 px it heals
+    to "+", attaches, and stops at Turn in.
+  - `backend/test/replay.check.ts` imports the bundle into a temp folder and reads back the run, its decisions and its
+    pictures.
+
+- [ ] **Step 1:** Write `portal.e2e.ts` and `replay.check.ts`. Run them. Expected: FAIL (no portal, no bundle).
+- [ ] **Step 2:** Build the portal. Point `recover.e2e.ts` at it, and run it (still 20/20).
+- [ ] **Step 3:** `portal.e2e.ts`. Expected: PASS.
+- [ ] **Step 4:** Record a batch run on the portal (the three files, at half width), export it, and add `replay`.
+  `replay.check.ts`. Expected: PASS.
+- [ ] **Step 5:** README section. Commit: "Judge mode: practice portal and a recorded run".
+
+## Schedule to submission (Manila time; hard deadline Thu Nov 5, 10:00)
+
+Tasks 16–19 go on `feat/judge-ready`, branched from `feat/self-healing`. Its PR opens once the self-healing PR is merged.
+Task 11 (stores) needs James's two stores by Nov 2, 12:00. If they don't come, scene 5 drops the stores and keeps
+"the Meta stack" part.
+
+| Day | Claude | James |
+|---|---|---|
+| **Sun Nov 1** | Finish the suite: 13 e2e tests are left; run them in the foreground in short batches (memory). Push, and open the self-healing PR (not merged). Then Tasks 16, 17, 18. | Merge the self-healing PR when happy. Classroom probe (rehearsal step 2). Baseten key: check that `meta-models/muse-spark-open` answers. Name 2 stores, or cut them. |
+| **Mon Nov 2** | Task 19 (portal, replay, README). Task 11 if the stores came. Fix whatever the probe showed. Open the judge-ready PR. | Teach real Classroom once; rehearsal steps 3–6 (batch, half-width heal, second run). |
+| **Tue Nov 3** | Freeze. Task 15: measure the rehearsal runs; only those numbers go in the README and the script. Fixes only, test-first. | Record: the first line, live footage only, done by 2:55. |
+| **Wed Nov 4** | Last README pass. Repo check: public, Meta models only (`meta-only.check`), commits in the window. Submission text. | Edit, upload, submit by Wed evening, leaving Thu morning as buffer. |
